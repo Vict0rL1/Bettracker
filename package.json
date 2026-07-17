@@ -1,0 +1,43 @@
+{
+  "name": "bettracker",
+  "productName": "BetTracker",
+  "version": "1.0.0",
+  "description": "Local-first desktop tracker for daily sports betting wins and losses",
+  "main": "out/main/index.js",
+  "author": "Victor Li",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
+    "build": "npm run typecheck && electron-vite build && electron-builder",
+    "build:win": "npm run typecheck && electron-vite build && electron-builder --win",
+    "build:mac": "npm run typecheck && electron-vite build && electron-builder --mac",
+    "build:linux": "npm run typecheck && electron-vite build && electron-builder --linux",
+    "build:dir": "electron-vite build && electron-builder --dir",
+    "rebuild": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "recharts": "^3.9.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6"
+  }
+}

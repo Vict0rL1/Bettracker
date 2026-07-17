@@ -1,0 +1,26 @@
+appId: com.bettracker.app
+productName: BetTracker
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - "**/*.node"
+npmRebuild: true
+publish: null
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: true
+  deleteAppDataOnUninstall: false
+mac:
+  target:
+    - dmg
+  category: public.app-category.utilities
+linux:
+  target:
+    - AppImage
+  category: Utility
