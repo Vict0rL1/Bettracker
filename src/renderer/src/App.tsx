@@ -7,34 +7,63 @@ import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
 import Toast, { type ToastMsg } from './components/Toast'
+import Login from './auth/Login'
+import { useAuth } from './auth/AuthProvider'
+import { deleteEntry, getEntries, subscribeToEntries, upsertEntry } from './data/entries'
+import { downloadCsv } from './lib/csv'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
 
-const cleanIpcError = (msg: string): string =>
-  msg.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '')
+function Boot() {
+  return (
+    <div className="boot">
+      <span>
+        Bet<span className="boot-accent">Tracker</span>
+      </span>
+    </div>
+  )
+}
 
 export default function App() {
+  const { loading, session, userId, email, signOut } = useAuth()
+
   const [entries, setEntries] = useState<BetEntry[] | null>(null)
   const [ym, setYm] = useState<MonthKey>(currentMonth)
   const [modalDate, setModalDate] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
   const showError = useCallback((err: unknown) => {
-    const text = err instanceof Error ? cleanIpcError(err.message) : 'Something went wrong'
+    const text = err instanceof Error ? err.message : 'Something went wrong'
     setToast({ kind: 'error', text })
   }, [])
 
   const reload = useCallback(async () => {
-    setEntries(await window.api.getEntries())
+    setEntries(await getEntries())
   }, [])
 
+  // Initial load once signed in.
   useEffect(() => {
+    if (!userId) {
+      setEntries(null)
+      return
+    }
     reload().catch(showError)
-  }, [reload, showError])
+  }, [userId, reload, showError])
 
-  // Lets the smoke test (and packagers sanity-checking a build) detect a live UI.
+  // Live sync: refetch whenever this account's rows change on any device.
   useEffect(() => {
-    if (entries) document.documentElement.dataset.ready = '1'
-  }, [entries])
+    if (!userId) return
+    const unsubscribe = subscribeToEntries(userId, () => {
+      reload().catch(showError)
+    })
+    return unsubscribe
+  }, [userId, reload, showError])
+
+  // Signals a stable state to the smoke/UI harness.
+  useEffect(() => {
+    if (!loading && (!session || entries !== null)) {
+      document.documentElement.dataset.ready = '1'
+    }
+  }, [loading, session, entries])
 
   const entryMap = useMemo(() => new Map((entries ?? []).map((e) => [e.date, e])), [entries])
 
@@ -53,7 +82,7 @@ export default function App() {
   const handleSave = useCallback(
     async (input: EntryInput) => {
       try {
-        await window.api.upsertEntry(input)
+        await upsertEntry(input)
         setModalDate(null)
         await reload()
         setToast({ kind: 'ok', text: `Saved ${humanDate(input.date)}` })
@@ -67,7 +96,7 @@ export default function App() {
   const handleDelete = useCallback(
     async (date: string) => {
       try {
-        await window.api.deleteEntry(date)
+        await deleteEntry(date)
         setModalDate(null)
         await reload()
         setToast({ kind: 'ok', text: `Deleted ${humanDate(date)}` })
@@ -78,36 +107,24 @@ export default function App() {
     [reload, showError]
   )
 
-  const handleExport = useCallback(async () => {
-    try {
-      const result = await window.api.exportCsv()
-      if (result.ok) {
-        setToast({
-          kind: 'ok',
-          text: `Exported ${result.count} ${result.count === 1 ? 'entry' : 'entries'} to ${result.path}`
-        })
-      }
-    } catch (err) {
-      showError(err)
-    }
-  }, [showError])
+  const handleExport = useCallback(() => {
+    if (!entries || entries.length === 0) return
+    const count = downloadCsv(entries)
+    setToast({ kind: 'ok', text: `Exported ${count} ${count === 1 ? 'entry' : 'entries'} to your downloads` })
+  }, [entries])
 
-  if (entries === null) {
-    return (
-      <div className="boot">
-        <span>
-          Bet<span className="boot-accent">Tracker</span>
-        </span>
-      </div>
-    )
-  }
+  if (loading) return <Boot />
+  if (!session) return <Login />
+  if (entries === null) return <Boot />
 
   return (
     <div className="app">
       <Header
+        email={email}
         canExport={entries.length > 0}
         onExport={handleExport}
         onLogToday={() => setModalDate(todayStr())}
+        onSignOut={signOut}
       />
 
       <HeroStats

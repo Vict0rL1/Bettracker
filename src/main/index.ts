@@ -1,27 +1,17 @@
-import { BrowserWindow, app } from 'electron'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { BrowserWindow, app, shell } from 'electron'
 import { join } from 'node:path'
-import { BetDb } from './db'
-import { registerIpc } from './ipc'
 
-// Test hooks: BETTRACKER_USERDATA points the app at a throwaway profile so
-// smoke runs and UI checks never touch the real database.
+// The desktop app is a native window around the same React UI the phone runs.
+// All data lives in Supabase, so the main process holds no database — it just
+// hosts the renderer and lets it talk to the cloud.
 const isSmoke = process.env.BETTRACKER_SMOKE === '1'
-if (process.env.BETTRACKER_USERDATA) {
-  app.setPath('userData', process.env.BETTRACKER_USERDATA)
-} else if (isSmoke) {
-  app.setPath('userData', mkdtempSync(join(tmpdir(), 'bettracker-smoke-')))
-}
-
-let db: BetDb | null = null
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
-    minWidth: 1000,
-    minHeight: 680,
+    minWidth: 480,
+    minHeight: 600,
     show: false,
     backgroundColor: '#0a0f14',
     autoHideMenuBar: true,
@@ -36,6 +26,12 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => win.show())
 
+  // Open external links (e.g. Supabase email confirmations) in the real browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://')) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -44,7 +40,7 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-/** Headless CI check: poll until the renderer flags itself ready, then exit. */
+/** Headless CI check: load the app, confirm the renderer boots, then exit. */
 function runSmoke(win: BrowserWindow): void {
   const deadline = setTimeout(() => {
     console.error('SMOKE_TIMEOUT')
@@ -53,7 +49,7 @@ function runSmoke(win: BrowserWindow): void {
 
   const poll = (): void => {
     win.webContents
-      .executeJavaScript(`document.documentElement.dataset.ready === '1'`)
+      .executeJavaScript(`document.documentElement.dataset.ready === '1' || !!document.querySelector('.auth-card,.app,.setup-card')`)
       .then((ready: unknown) => {
         if (ready === true) {
           clearTimeout(deadline)
@@ -81,8 +77,6 @@ if (!gotLock) {
   })
 
   void app.whenReady().then(() => {
-    db = new BetDb(join(app.getPath('userData'), 'bettracker.db'))
-    registerIpc(db)
     const win = createWindow()
     if (isSmoke) runSmoke(win)
 
@@ -93,10 +87,5 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
-  })
-
-  app.on('will-quit', () => {
-    db?.close()
-    db = null
   })
 }

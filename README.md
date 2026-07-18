@@ -1,112 +1,168 @@
 # BetTracker
 
-A local-first desktop app for logging daily sports-betting results. Track wins
-and losses one day at a time, watch your monthly and lifetime P/L, and see your
-bankroll curve build over the season. Everything is stored locally in SQLite —
-no account, no cloud, no internet dependency.
+A cloud-synced tracker for daily sports-betting results. Log your wins and
+losses on your **computer** or your **phone**, and they stay in sync in real
+time — a bet you add on the couch shows up on your laptop instantly.
 
-Built with **Electron + React + TypeScript**, with **better-sqlite3** for
-storage and **electron-builder** for packaging into a standalone installer for
-Windows and macOS.
+One React UI runs two ways:
 
-## Features
+- **Phone** — an installable **PWA** (Add to Home Screen). Works on Wi-Fi or
+  cellular; opens full-screen like a native app.
+- **Computer** — the same app, either installed as a desktop PWA from your
+  browser **or** as a native **Electron** window.
 
-- **Daily entry** — log a date, an amount (win, loss, or push), and an optional
-  note like "NBA parlay". One entry per day; every entry is editable and
-  deletable.
-- **Big-number dashboard** — the current month's P/L and lifetime P/L are the
-  visual focal point, rendered large and bold, neon-green when up and red when
-  down. Win rate, current streak, and best/worst day fill in the secondary stats.
-- **Calendar heatmap** — each day of the month is a colored tile (green win, red
-  loss, gray push, empty for no entry). Click any day to log or edit it.
-- **History table** — every entry in a scrollable list, sortable by date or
-  amount, with inline edit and delete (delete asks for a confirming second click).
-- **Month navigation** — arrow between months; each month totals itself
-  independently while the lifetime number stays cumulative.
-- **Balance chart** — a cumulative P/L area chart over your whole history, with a
-  hover crosshair and tooltip.
-- **CSV export** — write every entry to a CSV file (Excel-friendly, UTF-8 BOM +
-  CRLF) from the header button.
+Both talk to your own **Supabase** project (hosted Postgres + Auth + Realtime),
+so your data lives in one place, protected by an email/password login and
+row-level security. It's your account, your data, your cloud project.
 
-## Getting started
+> **Trade-off vs. the old version:** to sync across devices the data now lives
+> in the cloud instead of a local SQLite file, so an internet connection is
+> needed to load and save. That's inherent to "connected on both devices."
+
+## What you'll need
+
+- **Node 20+**
+- A free **Supabase** account (supabase.com) — this is the shared backend.
+
+## One-time setup
+
+### 1. Create the Supabase project
+
+1. Sign in at [supabase.com](https://supabase.com) and create a new project
+   (the free tier is plenty).
+2. Open **SQL Editor → New query**, paste the contents of
+   [`supabase/schema.sql`](supabase/schema.sql), and **Run**. That creates the
+   `entries` table, locks it to each user with row-level security, and enables
+   realtime sync.
+3. Go to **Project Settings → API** and copy your **Project URL** and the
+   **anon public** key.
+
+### 2. Point the app at your project
 
 ```bash
 cd bettracker
-npm install     # installs deps and rebuilds better-sqlite3 for Electron's ABI
-npm run dev      # launches the app with hot-reload
+cp .env.example .env
+# edit .env and paste in your URL + anon key
+npm install
 ```
 
-> `npm install` downloads the Electron runtime and runs
-> `electron-builder install-app-deps`, which compiles the native SQLite module
-> against Electron. This needs network access to GitHub's release CDN the first
-> time — run it on a machine with unrestricted outbound HTTPS.
+`.env` holds:
 
-## Building an installer
+```
+VITE_SUPABASE_URL=https://YOUR-PROJECT-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-public-key
+```
+
+(The anon key is safe to ship in a client app — it can only do what your
+row-level security policies allow.)
+
+## Run it in dev
 
 ```bash
-npm run build         # installer for your current OS
-npm run build:win     # Windows NSIS installer  -> release/
-npm run build:mac     # macOS DMG               -> release/
-npm run build:linux   # Linux AppImage          -> release/
-npm run build:dir     # unpacked app (no installer), for a quick sanity check
+npm run dev
 ```
 
-Artifacts land in `release/`. Building a given OS's installer is only fully
-supported when running on that OS (a Windows `.exe` must be built on Windows,
-a macOS `.dmg` on macOS).
+Vite prints two URLs — a `localhost` one for your computer and a
+**Network** one (e.g. `http://192.168.1.20:5173`). Open the Network URL on your
+phone (same Wi-Fi) to use both at once and watch them sync.
+
+Prefer the native desktop window instead of the browser?
+
+```bash
+npm run dev:desktop     # Electron, hot-reloaded
+```
+
+The first time you launch, create an account (Sign up), then sign in with the
+same email/password on your phone — both devices now share the same data.
+
+## Put it on your phone (deploy the PWA)
+
+The web app is fully static (just HTML/JS/CSS talking to Supabase), so any
+static host works. Build it, then deploy the `dist/` folder:
+
+```bash
+npm run build          # type-checks, bundles, and generates the PWA -> dist/
+```
+
+Easiest hosts (all have free tiers) — set the two `VITE_SUPABASE_*` values as
+build-time environment variables in the host's dashboard:
+
+- **Vercel** — `vercel` (or connect the repo); framework preset "Vite".
+- **Netlify** — `netlify deploy --prod --dir dist`, or drag `dist/` onto the
+  dashboard.
+- **Cloudflare Pages / GitHub Pages** — serve `dist/` as static files.
+
+Then on your phone open the deployed URL and **Add to Home Screen**
+(iOS: Share → Add to Home Screen; Android: install prompt / ⋮ menu). It installs
+with the BetTracker icon and launches full-screen.
+
+To preview a production build on your LAN without deploying:
+
+```bash
+npm run preview        # serves dist/ on your network; open it on your phone
+```
+
+## Build a native desktop installer (optional)
+
+```bash
+npm run build:desktop       # installer for your current OS  -> release/
+npm run build:desktop:dir   # unpacked app (no installer)     -> release/
+```
+
+electron-builder targets NSIS (Windows), DMG (macOS), and AppImage (Linux). A
+given OS's installer must be built on that OS.
 
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Dev mode with hot-reload (electron-vite) |
-| `npm run start` | Preview the production build without packaging |
-| `npm run build` | Type-check, bundle, and package an installer for this OS |
-| `npm run build:dir` | Bundle and produce an unpacked app in `release/` |
-| `npm run typecheck` | Type-check main and renderer without emitting |
-| `npm run rebuild` | Rebuild native deps against Electron (if `better-sqlite3` errors) |
+| `npm run dev` | Web app dev server (open on phone + computer) |
+| `npm run build` | Type-check + build the web/PWA bundle → `dist/` (deploy this) |
+| `npm run preview` | Serve the built web app on your LAN |
+| `npm run dev:desktop` | Native desktop app (Electron) in dev |
+| `npm run build:desktop` | Package a native desktop installer → `release/` |
+| `npm run typecheck` | Type-check the web + desktop code |
 
 ## How it's put together
 
 ```
 bettracker/
-├── electron.vite.config.ts     # main / preload / renderer build config
-├── electron-builder.yml        # packaging targets and options
-├── build/                      # installer resources (app icon)
+├── vite.config.ts              # web / PWA build (the phone + browser app)
+├── electron.vite.config.ts     # desktop build
+├── electron-builder.yml        # desktop packaging targets
+├── supabase/schema.sql         # run once in your Supabase project
+├── build/make-icon.mjs         # regenerates all app/PWA icons
 └── src/
-    ├── main/                   # Electron main process
-    │   ├── index.ts            #   window + app lifecycle
-    │   ├── db.ts               #   better-sqlite3: schema, upsert, validation
-    │   ├── csv.ts              #   CSV serialization
-    │   └── ipc.ts              #   IPC handlers (get/upsert/delete/export)
-    ├── preload/index.ts        # contextBridge — the only main↔renderer surface
-    ├── shared/types.ts         # types + IPC channel names shared both ways
-    └── renderer/               # React UI
-        └── src/
-            ├── App.tsx
-            ├── components/     # HeroStats, CalendarView, BalanceChart, …
-            └── lib/            # date, money, and stats helpers
+    ├── main/index.ts           # Electron: a native window around the web UI
+    ├── preload/index.ts        # minimal (data goes over the network, not IPC)
+    ├── shared/types.ts         # shared entry types
+    └── renderer/src/
+        ├── App.tsx             # auth gate + dashboard + live sync wiring
+        ├── auth/               # AuthProvider + Login screen
+        ├── data/entries.ts     # Supabase CRUD + realtime subscription
+        ├── lib/                # supabase client, validation, csv, dates, stats
+        └── components/         # HeroStats, CalendarView, BalanceChart, …
 ```
 
-**Security.** The renderer runs sandboxed with context isolation on and Node
-integration off. It never touches the database directly — it calls a small,
-typed API exposed over `contextBridge`, and every write is validated in the main
-process before it reaches SQLite.
+**Sync.** Every device subscribes to Postgres change events for its own rows, so
+an insert/edit/delete on one device refreshes the others within a second — no
+refresh button.
 
-**Where the data lives.** A single SQLite file, `bettracker.db`, in Electron's
-per-user app-data directory (e.g. `%APPDATA%/BetTracker` on Windows,
-`~/Library/Application Support/BetTracker` on macOS). It persists across restarts
-and app updates. Use **Export CSV** to back it up or move it elsewhere.
+**Security.** Auth is Supabase email/password. Row-level security means every
+query is automatically scoped to the signed-in user; one account can never read
+or write another's rows. The anon key in the client grants nothing beyond those
+policies.
 
 ## Data model
 
-One table, one row per day:
+One row per day, per user (`supabase/schema.sql`):
 
 | Column | Type | Notes |
 |---|---|---|
-| `date` | TEXT | `YYYY-MM-DD`, unique — enforces one entry per day |
-| `amount` | REAL | net result; `> 0` win, `< 0` loss, `0` push |
-| `note` | TEXT | optional, up to 500 chars |
+| `user_id` | uuid | the owner; enforced by row-level security |
+| `date` | date | `YYYY-MM-DD`; unique per user (one entry per day) |
+| `amount` | numeric | net result; `> 0` win, `< 0` loss, `0` push |
+| `note` | text | optional |
 
 Re-logging a date updates that day in place (upsert) rather than adding a
-duplicate.
+duplicate. Use **Export CSV** anytime to pull a full backup to your device.

@@ -1,6 +1,11 @@
 node_modules/
 out/
+dist/
+dev-dist/
 release/
 *.log
 *.local
+.env
+.env.*
+!.env.example
 .DS_Store

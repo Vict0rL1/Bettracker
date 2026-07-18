@@ -1,11 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type BetTrackerApi, type EntryInput } from '../shared/types'
+import { contextBridge } from 'electron'
 
-const api: BetTrackerApi = {
-  getEntries: () => ipcRenderer.invoke(IPC.getEntries),
-  upsertEntry: (input: EntryInput) => ipcRenderer.invoke(IPC.upsertEntry, input),
-  deleteEntry: (date: string) => ipcRenderer.invoke(IPC.deleteEntry, date),
-  exportCsv: () => ipcRenderer.invoke(IPC.exportCsv)
-}
-
-contextBridge.exposeInMainWorld('api', api)
+// The renderer talks to Supabase directly over the network, so there is no
+// privileged main-process surface to expose. A tiny flag lets the UI know it's
+// running inside the desktop shell if it ever needs to adapt.
+contextBridge.exposeInMainWorld('bettracker', { desktop: true })
