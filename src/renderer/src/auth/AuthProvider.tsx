@@ -1,12 +1,16 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import { clearUserData, loadLastUser, saveLastUser, type OfflineUser } from '../data/offline'
 
 interface AuthState {
   session: Session | null
   loading: boolean
   email: string | null
   userId: string | null
+  /** Cached identity from the last sign-in on this device — lets the app open
+   *  with local data when a session can't be refreshed (e.g. fully offline). */
+  offlineUser: OfflineUser | null
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string) => Promise<{ needsConfirmation: boolean }>
   signOut: () => Promise<void>
@@ -40,12 +44,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Remember who is signed in on this device, for offline boots.
+  useEffect(() => {
+    if (session?.user) saveLastUser({ id: session.user.id, email: session.user.email ?? null })
+  }, [session])
+
   const value = useMemo<AuthState>(
     () => ({
       session,
       loading,
       email: session?.user?.email ?? null,
       userId: session?.user?.id ?? null,
+      offlineUser: session ? null : loadLastUser(),
       async signIn(email, password) {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw new Error(error.message)
@@ -57,7 +67,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { needsConfirmation: !data.session }
       },
       async signOut() {
-        await supabase.auth.signOut()
+        // Signing out removes this device's copy of the data (cache + queued
+        // changes) — anything already synced stays safe in the cloud.
+        const uid = session?.user?.id ?? loadLastUser()?.id
+        if (uid) clearUserData(uid)
+        try {
+          await supabase.auth.signOut()
+        } catch {
+          // Offline sign-out: the server call failed, clear locally anyway.
+        }
+        try {
+          localStorage.removeItem('bettracker-auth')
+        } catch {
+          // storage unavailable — nothing more to clear
+        }
+        setSession(null)
       }
     }),
     [session, loading]

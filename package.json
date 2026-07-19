@@ -1,7 +1,7 @@
 {
   "name": "bettracker",
   "productName": "BetTracker",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Cloud-synced sports betting tracker for desktop and phone (React + Supabase)",
   "main": "out/main/index.js",
   "author": "Victor Li",

@@ -19,9 +19,19 @@ Both talk to your own **Supabase** project (hosted Postgres + Auth + Realtime),
 so your data lives in one place, protected by an email/password login and
 row-level security. It's your account, your data, your cloud project.
 
-> **Trade-off vs. the old version:** to sync across devices the data now lives
-> in the cloud instead of a local SQLite file, so an internet connection is
-> needed to load and save. That's inherent to "connected on both devices."
+The app is **offline-tolerant**: each device keeps a local copy of your data,
+so BetTracker opens instantly (even with no connection) and you can keep
+logging bets offline — changes queue on the device and sync automatically the
+moment you're back online. The header badge tells you where you stand:
+
+| Badge | Meaning |
+|---|---|
+| 🟢 **Synced** | Everything is saved to the cloud and shared with your other devices |
+| 🟡 **Syncing n…** | Queued changes are being pushed right now |
+| ⚪ **Offline · n queued** | No connection — changes are safe on this device and will sync automatically |
+
+Signing out removes that device's local copy (cache and queued changes);
+anything already synced stays safe in your Supabase project.
 
 ## What you'll need
 
@@ -155,6 +165,13 @@ bettracker/
 **Sync.** Every device subscribes to Postgres change events for its own rows, so
 an insert/edit/delete on one device refreshes the others within a second — no
 refresh button.
+
+**Offline.** The last-known rows are cached on the device for instant startup,
+and mutations go through a persistent outbox: applied to the UI immediately,
+replayed against Supabase in order on reconnect (entry ids are client-generated
+UUIDs, so a retried insert can never create a duplicate). Editing a
+not-yet-synced entry rewrites its queued insert; deleting one cancels it before
+the server ever hears about it.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read

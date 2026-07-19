@@ -1,14 +1,33 @@
+import type { SyncStatus } from '../data/useEntrySync'
 import { DownloadIcon, PlusIcon, SparkIcon } from './icons'
 
 interface Props {
   email: string | null
+  status: SyncStatus
+  pendingCount: number
   canExport: boolean
   onExport: () => void
   onLogToday: () => void
   onSignOut: () => void
 }
 
-export default function Header({ email, canExport, onExport, onLogToday, onSignOut }: Props) {
+const BADGE: Record<SyncStatus, { label: (n: number) => string; title: string }> = {
+  synced: {
+    label: () => 'Synced',
+    title: 'All changes are saved to the cloud and shared with your other devices'
+  },
+  syncing: {
+    label: (n) => (n > 0 ? `Syncing ${n}…` : 'Syncing…'),
+    title: 'Saving queued changes to the cloud…'
+  },
+  offline: {
+    label: (n) => (n > 0 ? `Offline · ${n} queued` : 'Offline'),
+    title: 'No connection — changes are saved on this device and will sync automatically when you are back online'
+  }
+}
+
+export default function Header({ email, status, pendingCount, canExport, onExport, onLogToday, onSignOut }: Props) {
+  const badge = BADGE[status]
   return (
     <header className="topbar">
       <div className="brand">
@@ -18,8 +37,8 @@ export default function Header({ email, canExport, onExport, onLogToday, onSignO
         <h1>
           Bet<span>Tracker</span>
         </h1>
-        <span className="sync-badge" title="Your bets sync across every signed-in device">
-          <i className="sync-dot" /> Synced
+        <span className={`sync-badge ${status}`} title={badge.title}>
+          <i className="sync-dot" /> {badge.label(pendingCount)}
         </span>
       </div>
       <div className="topbar-actions">

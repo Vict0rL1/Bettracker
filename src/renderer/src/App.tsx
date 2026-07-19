@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { BetEntry, EntryInput } from '../../shared/types'
+import type { EntryInput } from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
 import CalendarView from './components/CalendarView'
 import DayModal from './components/DayModal'
@@ -9,7 +9,7 @@ import HistoryTable from './components/HistoryTable'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
-import { addEntry, deleteEntry, getEntries, subscribeToEntries, updateEntry } from './data/entries'
+import { useEntrySync } from './data/useEntrySync'
 import { downloadCsv } from './lib/csv'
 import { groupByDay } from './lib/stats'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
@@ -25,9 +25,13 @@ function Boot() {
 }
 
 export default function App() {
-  const { loading, session, userId, email, signOut } = useAuth()
+  const { loading, session, userId, email, offlineUser, signOut } = useAuth()
 
-  const [entries, setEntries] = useState<BetEntry[] | null>(null)
+  // With a live session we sync; with only a cached identity (e.g. reopened
+  // fully offline) the app still renders this device's copy of the data.
+  const activeUserId = userId ?? offlineUser?.id ?? null
+  const activeEmail = email ?? offlineUser?.email ?? null
+
   const [ym, setYm] = useState<MonthKey>(currentMonth)
   const [modalDate, setModalDate] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastMsg | null>(null)
@@ -37,32 +41,14 @@ export default function App() {
     setToast({ kind: 'error', text })
   }, [])
 
-  const reload = useCallback(async () => {
-    setEntries(await getEntries())
-  }, [])
+  const sync = useEntrySync(activeUserId, Boolean(session), showError)
+  const { entries, status, pendingCount, isOffline } = sync
 
   useEffect(() => {
-    if (!userId) {
-      setEntries(null)
-      return
-    }
-    reload().catch(showError)
-  }, [userId, reload, showError])
-
-  // Live sync: refetch whenever this account's rows change on any device.
-  useEffect(() => {
-    if (!userId) return
-    const unsubscribe = subscribeToEntries(userId, () => {
-      reload().catch(showError)
-    })
-    return unsubscribe
-  }, [userId, reload, showError])
-
-  useEffect(() => {
-    if (!loading && (!session || entries !== null)) {
+    if (!loading && (!activeUserId || entries !== null)) {
       document.documentElement.dataset.ready = '1'
     }
-  }, [loading, session, entries])
+  }, [loading, activeUserId, entries])
 
   // Sessions grouped into one summary per day, for the calendar and day editor.
   const dayMap = useMemo(() => {
@@ -85,45 +71,51 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [modalDate])
 
-  // Add / edit / delete a single session. The day modal stays open so you can
-  // log several in a row (morning, then afternoon, …).
+  const savedNote = useCallback(
+    (action: string, date?: string) =>
+      isOffline
+        ? `${action} — saved on this device, will sync when you're back online`
+        : date
+          ? `${action} on ${humanDate(date)}`
+          : action,
+    [isOffline]
+  )
+
+  // Mutations apply instantly (optimistic) and sync in the background.
   const handleAdd = useCallback(
     async (input: EntryInput) => {
       try {
-        await addEntry(input)
-        await reload()
-        setToast({ kind: 'ok', text: `Added a bet on ${humanDate(input.date)}` })
+        sync.addSession(input)
+        setToast({ kind: 'ok', text: savedNote('Added a bet', input.date) })
       } catch (err) {
         showError(err)
       }
     },
-    [reload, showError]
+    [sync, savedNote, showError]
   )
 
   const handleUpdate = useCallback(
     async (id: string, input: EntryInput) => {
       try {
-        await updateEntry(id, input)
-        await reload()
-        setToast({ kind: 'ok', text: `Updated a bet on ${humanDate(input.date)}` })
+        sync.updateSession(id, input)
+        setToast({ kind: 'ok', text: savedNote('Updated a bet', input.date) })
       } catch (err) {
         showError(err)
       }
     },
-    [reload, showError]
+    [sync, savedNote, showError]
   )
 
   const handleDelete = useCallback(
     async (id: string) => {
       try {
-        await deleteEntry(id)
-        await reload()
-        setToast({ kind: 'ok', text: 'Deleted a bet' })
+        sync.deleteSession(id)
+        setToast({ kind: 'ok', text: savedNote('Deleted a bet') })
       } catch (err) {
         showError(err)
       }
     },
-    [reload, showError]
+    [sync, savedNote, showError]
   )
 
   const handleExport = useCallback(() => {
@@ -133,21 +125,27 @@ export default function App() {
   }, [entries])
 
   if (loading) return <Boot />
-  if (!session) return <Login />
-  if (entries === null) return <Boot />
+  if (!activeUserId) return <Login />
+
+  // No cached data yet: wait for the first fetch unless we're offline, in
+  // which case show the (empty) app instead of blocking forever.
+  const shownEntries = entries ?? (isOffline ? [] : null)
+  if (shownEntries === null) return <Boot />
 
   return (
     <div className="app">
       <Header
-        email={email}
-        canExport={entries.length > 0}
+        email={activeEmail}
+        status={status}
+        pendingCount={pendingCount}
+        canExport={shownEntries.length > 0}
         onExport={handleExport}
         onLogToday={() => setModalDate(todayStr())}
         onSignOut={signOut}
       />
 
       <HeroStats
-        entries={entries}
+        entries={shownEntries}
         ym={ym}
         onPrev={() => setYm((m) => addMonths(m, -1))}
         onNext={() => setYm((m) => addMonths(m, 1))}
@@ -156,10 +154,10 @@ export default function App() {
 
       <div className="grid-mid">
         <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
-        <BalanceChart entries={entries} />
+        <BalanceChart entries={shownEntries} />
       </div>
 
-      <HistoryTable entries={entries} onEdit={setModalDate} onDelete={handleDelete} />
+      <HistoryTable entries={shownEntries} onEdit={setModalDate} onDelete={handleDelete} />
 
       {modalDate !== null && (
         <DayModal

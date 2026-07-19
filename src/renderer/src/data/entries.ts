@@ -26,6 +26,15 @@ function toEntry(row: Row): BetEntry {
   }
 }
 
+/** True when a request failed because the network/server was unreachable (retryable). */
+export function isNetworkError(err: unknown): boolean {
+  if (err instanceof TypeError) return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return /failed to fetch|networkerror|network request failed|load failed|fetch failed|err_internet|err_network|timeout/i.test(
+    msg
+  )
+}
+
 async function currentUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getSession()
   if (error) throw error
@@ -44,16 +53,23 @@ export async function getEntries(): Promise<BetEntry[]> {
   return (data as Row[]).map(toEntry)
 }
 
-/** Add one session (a single trade/bet). Days can hold any number of these. */
-export async function addEntry(input: EntryInput): Promise<BetEntry> {
+/**
+ * Add one session. `id` is a client-generated UUID so an offline retry of the
+ * same insert is recognized as a duplicate instead of creating a second row.
+ */
+export async function addEntry(input: EntryInput, id?: string): Promise<BetEntry> {
   const clean = normalizeInput(input)
   const user_id = await currentUserId()
-  const { data, error } = await supabase
-    .from(TABLE)
-    .insert({ user_id, date: clean.date, amount: clean.amount, note: clean.note })
-    .select()
-    .single()
-  if (error) throw new Error(error.message)
+  const payload = { user_id, date: clean.date, amount: clean.amount, note: clean.note, ...(id ? { id } : {}) }
+  const { data, error } = await supabase.from(TABLE).insert(payload).select().single()
+  if (error) {
+    if (error.code === '23505' && id) {
+      // Already inserted by an earlier attempt whose response we never saw.
+      const { data: existing } = await supabase.from(TABLE).select('*').eq('id', id).single()
+      if (existing) return toEntry(existing as Row)
+    }
+    throw new Error(error.message)
+  }
   return toEntry(data as Row)
 }
 
