@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { BetEntry } from '../../../shared/types'
 import { monthLabel, monthYearShort, sameMonth, shortDate, currentMonth, type MonthKey } from '../lib/dates'
 import { fmtMoney, fmtMoneyCompact, fmtPct } from '../lib/format'
-import { bestDay, currentStreak, forMonth, total, winLoss, winRate, worstDay } from '../lib/stats'
+import { bestDay, currentStreak, dayWinLoss, forMonth, groupByDay, total, winRate, worstDay } from '../lib/stats'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons'
 
 interface Props {
@@ -35,17 +35,17 @@ function Mini({ label, value, sub, toneClass = '' }: MiniProps) {
 export default function HeroStats({ entries, ym, onPrev, onNext, onResetMonth }: Props) {
   const stats = useMemo(() => {
     const month = forMonth(entries, ym)
-    const monthWl = winLoss(month)
-    const first = entries.length > 0 ? entries[0].date : null
     return {
       monthTotal: total(month),
-      monthCount: month.length,
-      monthWl,
+      monthSessions: month.length,
+      monthDays: groupByDay(month).length,
+      monthWl: dayWinLoss(month),
       lifetime: total(entries),
-      count: entries.length,
-      first,
+      sessions: entries.length,
+      lifeDays: groupByDay(entries).length,
+      first: entries.length > 0 ? entries[0].date : null,
       rate: winRate(entries),
-      wl: winLoss(entries),
+      wl: dayWinLoss(entries),
       streak: currentStreak(entries),
       best: bestDay(entries),
       worst: worstDay(entries)
@@ -54,9 +54,9 @@ export default function HeroStats({ entries, ym, onPrev, onNext, onResetMonth }:
 
   const onCurrentMonth = sameMonth(ym, currentMonth())
   const monthSub =
-    stats.monthCount === 0
+    stats.monthSessions === 0
       ? 'No bets logged this month'
-      : `${stats.monthCount} ${stats.monthCount === 1 ? 'day' : 'days'} · ${stats.monthWl.wins}W–${stats.monthWl.losses}L` +
+      : `${stats.monthDays} ${stats.monthDays === 1 ? 'day' : 'days'} · ${stats.monthSessions} ${stats.monthSessions === 1 ? 'bet' : 'bets'} · ${stats.monthWl.wins}W–${stats.monthWl.losses}L` +
         (stats.monthWl.pushes > 0 ? `–${stats.monthWl.pushes}P` : '')
 
   return (
@@ -88,9 +88,9 @@ export default function HeroStats({ entries, ym, onPrev, onNext, onResetMonth }:
         </div>
         <div className={`life-value ${tone(stats.lifetime)}`}>{fmtMoney(stats.lifetime)}</div>
         <div className="stat-sub">
-          {stats.count === 0
+          {stats.sessions === 0
             ? 'Log your first bet to get started'
-            : `${stats.count} ${stats.count === 1 ? 'day' : 'days'} logged since ${monthYearShort(stats.first ?? '')}`}
+            : `${stats.sessions} ${stats.sessions === 1 ? 'bet' : 'bets'} over ${stats.lifeDays} ${stats.lifeDays === 1 ? 'day' : 'days'} since ${monthYearShort(stats.first ?? '')}`}
         </div>
       </article>
 
@@ -98,7 +98,7 @@ export default function HeroStats({ entries, ym, onPrev, onNext, onResetMonth }:
         <Mini
           label="Win rate"
           value={stats.rate === null ? '—' : fmtPct(stats.rate)}
-          sub={stats.rate === null ? 'no decisive days yet' : `${stats.wl.wins}W–${stats.wl.losses}L all-time`}
+          sub={stats.rate === null ? 'no decisive days yet' : `${stats.wl.wins}W–${stats.wl.losses}L by day`}
         />
         <Mini
           label="Streak"
@@ -112,13 +112,13 @@ export default function HeroStats({ entries, ym, onPrev, onNext, onResetMonth }:
         />
         <Mini
           label="Best day"
-          value={stats.best ? fmtMoneyCompact(stats.best.amount) : '—'}
+          value={stats.best ? fmtMoneyCompact(stats.best.total) : '—'}
           toneClass={stats.best ? 'win' : ''}
           sub={stats.best ? shortDate(stats.best.date) : 'nothing yet'}
         />
         <Mini
           label="Worst day"
-          value={stats.worst ? fmtMoneyCompact(stats.worst.amount) : '—'}
+          value={stats.worst ? fmtMoneyCompact(stats.worst.total) : '—'}
           toneClass={stats.worst ? 'loss' : ''}
           sub={stats.worst ? shortDate(stats.worst.date) : 'nothing yet'}
         />

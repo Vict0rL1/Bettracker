@@ -7,7 +7,7 @@ import { PencilIcon, TrashIcon } from './icons'
 interface Props {
   entries: BetEntry[]
   onEdit: (date: string) => void
-  onDelete: (date: string) => void
+  onDelete: (id: string) => void
 }
 
 type SortKey = 'date' | 'amount'
@@ -29,7 +29,11 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
   const sorted = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1
     return [...entries].sort((a, b) => {
-      if (sortKey === 'date') return a.date < b.date ? -dir : dir
+      if (sortKey === 'date') {
+        if (a.date !== b.date) return a.date < b.date ? -dir : dir
+        // Same day: keep sessions in the order they were logged.
+        return a.createdAt < b.createdAt ? -dir : dir
+      }
       if (a.amount !== b.amount) return (a.amount - b.amount) * dir
       return a.date < b.date ? -dir : dir
     })
@@ -44,14 +48,14 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
     }
   }
 
-  const handleDeleteClick = (date: string) => {
-    if (confirming === date) {
+  const handleDeleteClick = (id: string) => {
+    if (confirming === id) {
       setConfirming(null)
       if (confirmTimer.current) clearTimeout(confirmTimer.current)
-      onDelete(date)
+      onDelete(id)
       return
     }
-    setConfirming(date)
+    setConfirming(id)
     if (confirmTimer.current) clearTimeout(confirmTimer.current)
     confirmTimer.current = setTimeout(() => setConfirming(null), 3000)
   }
@@ -63,7 +67,7 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
       <header className="card-head">
         <h2>History</h2>
         <span className="card-note">
-          {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
+          {entries.length} {entries.length === 1 ? 'bet' : 'bets'}
         </span>
       </header>
 
@@ -93,7 +97,7 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
               {sorted.map((e) => {
                 const kind = kindOf(e.amount)
                 return (
-                  <tr key={e.date}>
+                  <tr key={e.id}>
                     <td className="td-date">{humanDate(e.date)}</td>
                     <td>
                       <span className={`pill ${kind}`}>{KIND_LABEL[kind]}</span>
@@ -107,19 +111,19 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
                         type="button"
                         className="btn-icon"
                         aria-label={`Edit ${e.date}`}
-                        title="Edit"
+                        title="Edit this day"
                         onClick={() => onEdit(e.date)}
                       >
                         <PencilIcon />
                       </button>
                       <button
                         type="button"
-                        className={`btn-icon danger ${confirming === e.date ? 'confirming' : ''}`}
-                        aria-label={`Delete ${e.date}`}
-                        title={confirming === e.date ? 'Click again to confirm' : 'Delete'}
-                        onClick={() => handleDeleteClick(e.date)}
+                        className={`btn-icon danger ${confirming === e.id ? 'confirming' : ''}`}
+                        aria-label={`Delete bet on ${e.date}`}
+                        title={confirming === e.id ? 'Click again to confirm' : 'Delete'}
+                        onClick={() => handleDeleteClick(e.id)}
                       >
-                        {confirming === e.date ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
+                        {confirming === e.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
                       </button>
                     </td>
                   </tr>

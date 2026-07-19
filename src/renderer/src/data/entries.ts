@@ -35,31 +35,44 @@ async function currentUserId(): Promise<string> {
 }
 
 export async function getEntries(): Promise<BetEntry[]> {
-  const { data, error } = await supabase.from(TABLE).select('*').order('date', { ascending: true })
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('*')
+    .order('date', { ascending: true })
+    .order('created_at', { ascending: true })
   if (error) throw new Error(error.message)
   return (data as Row[]).map(toEntry)
 }
 
-export async function upsertEntry(input: EntryInput): Promise<BetEntry> {
+/** Add one session (a single trade/bet). Days can hold any number of these. */
+export async function addEntry(input: EntryInput): Promise<BetEntry> {
   const clean = normalizeInput(input)
   const user_id = await currentUserId()
   const { data, error } = await supabase
     .from(TABLE)
-    .upsert(
-      { user_id, date: clean.date, amount: clean.amount, note: clean.note, updated_at: new Date().toISOString() },
-      { onConflict: 'user_id,date' }
-    )
+    .insert({ user_id, date: clean.date, amount: clean.amount, note: clean.note })
     .select()
     .single()
   if (error) throw new Error(error.message)
   return toEntry(data as Row)
 }
 
-export async function deleteEntry(date: string): Promise<boolean> {
-  const { error, count } = await supabase
+/** Edit one existing session by id. */
+export async function updateEntry(id: string, input: EntryInput): Promise<BetEntry> {
+  const clean = normalizeInput(input)
+  const { data, error } = await supabase
     .from(TABLE)
-    .delete({ count: 'exact' })
-    .eq('date', date)
+    .update({ date: clean.date, amount: clean.amount, note: clean.note, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) throw new Error(error.message)
+  return toEntry(data as Row)
+}
+
+/** Delete one session by id. */
+export async function deleteEntry(id: string): Promise<boolean> {
+  const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
   if (error) throw new Error(error.message)
   return (count ?? 0) > 0
 }

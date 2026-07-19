@@ -75,7 +75,7 @@ export default function BalanceChart({ entries }: Props) {
                     <div className="chart-tip">
                       <div className="tip-value">{fmtMoneyPlain(point.balance)}</div>
                       <div className="tip-sub">
-                        {humanDate(point.date)} · day {point.amount === 0 ? 'push' : fmtMoney(point.amount)}
+                        {humanDate(point.date)} · day {point.dayTotal === 0 ? 'push' : fmtMoney(point.dayTotal)}
                       </div>
                     </div>
                   )

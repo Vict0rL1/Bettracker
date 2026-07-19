@@ -2,15 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { BetEntry, EntryInput } from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
 import CalendarView from './components/CalendarView'
-import EntryModal from './components/EntryModal'
+import DayModal from './components/DayModal'
 import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
-import { deleteEntry, getEntries, subscribeToEntries, upsertEntry } from './data/entries'
+import { addEntry, deleteEntry, getEntries, subscribeToEntries, updateEntry } from './data/entries'
 import { downloadCsv } from './lib/csv'
+import { groupByDay } from './lib/stats'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
 
 function Boot() {
@@ -40,7 +41,6 @@ export default function App() {
     setEntries(await getEntries())
   }, [])
 
-  // Initial load once signed in.
   useEffect(() => {
     if (!userId) {
       setEntries(null)
@@ -58,14 +58,20 @@ export default function App() {
     return unsubscribe
   }, [userId, reload, showError])
 
-  // Signals a stable state to the smoke/UI harness.
   useEffect(() => {
     if (!loading && (!session || entries !== null)) {
       document.documentElement.dataset.ready = '1'
     }
   }, [loading, session, entries])
 
-  const entryMap = useMemo(() => new Map((entries ?? []).map((e) => [e.date, e])), [entries])
+  // Sessions grouped into one summary per day, for the calendar and day editor.
+  const dayMap = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof groupByDay>[number]>()
+    for (const day of groupByDay(entries ?? [])) map.set(day.date, day)
+    return map
+  }, [entries])
+
+  const modalSessions = modalDate ? (dayMap.get(modalDate)?.entries ?? []) : []
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -79,13 +85,27 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [modalDate])
 
-  const handleSave = useCallback(
+  // Add / edit / delete a single session. The day modal stays open so you can
+  // log several in a row (morning, then afternoon, …).
+  const handleAdd = useCallback(
     async (input: EntryInput) => {
       try {
-        await upsertEntry(input)
-        setModalDate(null)
+        await addEntry(input)
         await reload()
-        setToast({ kind: 'ok', text: `Saved ${humanDate(input.date)}` })
+        setToast({ kind: 'ok', text: `Added a bet on ${humanDate(input.date)}` })
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [reload, showError]
+  )
+
+  const handleUpdate = useCallback(
+    async (id: string, input: EntryInput) => {
+      try {
+        await updateEntry(id, input)
+        await reload()
+        setToast({ kind: 'ok', text: `Updated a bet on ${humanDate(input.date)}` })
       } catch (err) {
         showError(err)
       }
@@ -94,12 +114,11 @@ export default function App() {
   )
 
   const handleDelete = useCallback(
-    async (date: string) => {
+    async (id: string) => {
       try {
-        await deleteEntry(date)
-        setModalDate(null)
+        await deleteEntry(id)
         await reload()
-        setToast({ kind: 'ok', text: `Deleted ${humanDate(date)}` })
+        setToast({ kind: 'ok', text: 'Deleted a bet' })
       } catch (err) {
         showError(err)
       }
@@ -110,7 +129,7 @@ export default function App() {
   const handleExport = useCallback(() => {
     if (!entries || entries.length === 0) return
     const count = downloadCsv(entries)
-    setToast({ kind: 'ok', text: `Exported ${count} ${count === 1 ? 'entry' : 'entries'} to your downloads` })
+    setToast({ kind: 'ok', text: `Exported ${count} ${count === 1 ? 'bet' : 'bets'} to your downloads` })
   }, [entries])
 
   if (loading) return <Boot />
@@ -136,17 +155,18 @@ export default function App() {
       />
 
       <div className="grid-mid">
-        <CalendarView ym={ym} entryMap={entryMap} onDayClick={setModalDate} />
+        <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
         <BalanceChart entries={entries} />
       </div>
 
       <HistoryTable entries={entries} onEdit={setModalDate} onDelete={handleDelete} />
 
       {modalDate !== null && (
-        <EntryModal
+        <DayModal
           date={modalDate}
-          entryMap={entryMap}
-          onSave={handleSave}
+          sessions={modalSessions}
+          onAdd={handleAdd}
+          onUpdate={handleUpdate}
           onDelete={handleDelete}
           onClose={() => setModalDate(null)}
         />

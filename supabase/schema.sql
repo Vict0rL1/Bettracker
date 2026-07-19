@@ -10,11 +10,16 @@ create table if not exists public.entries (
   amount     numeric(12, 2) not null,
   note       text not null default '',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique (user_id, date)          -- one entry per day, per user
+  updated_at timestamptz not null default now()
+  -- Multiple sessions per day are allowed; each row is one bet/trade, and a
+  -- day's total is the sum of its rows.
 );
 
 create index if not exists entries_user_date_idx on public.entries (user_id, date);
+
+-- If you created the table before multi-session support, drop the old
+-- one-per-day constraint (no-op on fresh installs).
+alter table public.entries drop constraint if exists entries_user_id_date_key;
 
 -- Row-level security: a signed-in user can only touch rows they own.
 alter table public.entries enable row level security;
@@ -41,4 +46,11 @@ create policy "entries are private - delete"
   using (auth.uid() = user_id);
 
 -- Broadcast row changes to subscribed clients (the live cross-device sync).
-alter publication supabase_realtime add table public.entries;
+-- Wrapped so re-running this whole file is safe (adding a table already in the
+-- publication would otherwise error).
+do $$
+begin
+  alter publication supabase_realtime add table public.entries;
+exception
+  when duplicate_object then null;
+end $$;

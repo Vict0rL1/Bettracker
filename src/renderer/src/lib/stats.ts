@@ -3,6 +3,7 @@ import { monthPrefix, type MonthKey } from './dates'
 
 export const round2 = (n: number): number => Math.round(n * 100) / 100
 
+/** Sum of every session's amount (works the same whether one or many per day). */
 export const total = (entries: readonly BetEntry[]): number =>
   round2(entries.reduce((sum, e) => sum + e.amount, 0))
 
@@ -11,17 +12,44 @@ export const forMonth = (entries: readonly BetEntry[], ym: MonthKey): BetEntry[]
   return entries.filter((e) => e.date.startsWith(prefix))
 }
 
+/** All sessions logged on one calendar day, plus their net total. */
+export interface DaySummary {
+  date: string
+  total: number
+  count: number
+  entries: BetEntry[]
+}
+
+/** Collapse sessions into one summary per day, ascending by date. */
+export function groupByDay(entries: readonly BetEntry[]): DaySummary[] {
+  const byDate = new Map<string, BetEntry[]>()
+  for (const e of entries) {
+    const list = byDate.get(e.date)
+    if (list) list.push(e)
+    else byDate.set(e.date, [e])
+  }
+  return [...byDate.entries()]
+    .map(([date, list]) => ({
+      date,
+      total: total(list),
+      count: list.length,
+      entries: [...list].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+    }))
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+}
+
 export interface WinLoss {
   wins: number
   losses: number
   pushes: number
 }
 
-export function winLoss(entries: readonly BetEntry[]): WinLoss {
+/** Win/loss/push counts by DAY total (a day is a win if its sessions net positive). */
+export function dayWinLoss(entries: readonly BetEntry[]): WinLoss {
   const counts: WinLoss = { wins: 0, losses: 0, pushes: 0 }
-  for (const e of entries) {
-    if (e.amount > 0) counts.wins++
-    else if (e.amount < 0) counts.losses++
+  for (const day of groupByDay(entries)) {
+    if (day.total > 0) counts.wins++
+    else if (day.total < 0) counts.losses++
     else counts.pushes++
   }
   return counts
@@ -29,7 +57,7 @@ export function winLoss(entries: readonly BetEntry[]): WinLoss {
 
 /** Percentage of decisive days that were green; null when nothing decisive yet. */
 export function winRate(entries: readonly BetEntry[]): number | null {
-  const { wins, losses } = winLoss(entries)
+  const { wins, losses } = dayWinLoss(entries)
   const decisive = wins + losses
   return decisive === 0 ? null : (wins / decisive) * 100
 }
@@ -39,14 +67,14 @@ export interface Streak {
   count: number
 }
 
-/** Run of same-sign results over logged days, newest first. Pushes are skipped. */
+/** Run of same-sign DAY totals, newest first. Break-even days are skipped. */
 export function currentStreak(entries: readonly BetEntry[]): Streak | null {
-  const desc = [...entries].sort((a, b) => (a.date < b.date ? 1 : -1))
+  const desc = groupByDay(entries).reverse()
   let kind: 'W' | 'L' | null = null
   let count = 0
-  for (const e of desc) {
-    if (e.amount === 0) continue
-    const k: 'W' | 'L' = e.amount > 0 ? 'W' : 'L'
+  for (const day of desc) {
+    if (day.total === 0) continue
+    const k: 'W' | 'L' = day.total > 0 ? 'W' : 'L'
     if (kind === null) {
       kind = k
       count = 1
@@ -61,27 +89,33 @@ export function currentStreak(entries: readonly BetEntry[]): Streak | null {
 
 export interface BalancePoint {
   date: string
-  amount: number
+  dayTotal: number
   balance: number
 }
 
+/** Cumulative balance, one point per day (each day's sessions summed first). */
 export function cumulativeSeries(entries: readonly BetEntry[]): BalancePoint[] {
-  const asc = [...entries].sort((a, b) => (a.date < b.date ? -1 : 1))
   let balance = 0
-  return asc.map((e) => {
-    balance = round2(balance + e.amount)
-    return { date: e.date, amount: e.amount, balance }
+  return groupByDay(entries).map((day) => {
+    balance = round2(balance + day.total)
+    return { date: day.date, dayTotal: day.total, balance }
   })
 }
 
-export function bestDay(entries: readonly BetEntry[]): BetEntry | null {
-  let best: BetEntry | null = null
-  for (const e of entries) if (e.amount > 0 && (best === null || e.amount > best.amount)) best = e
+/** Best net day (by day total). Null when no green day exists. */
+export function bestDay(entries: readonly BetEntry[]): DaySummary | null {
+  let best: DaySummary | null = null
+  for (const day of groupByDay(entries)) {
+    if (day.total > 0 && (best === null || day.total > best.total)) best = day
+  }
   return best
 }
 
-export function worstDay(entries: readonly BetEntry[]): BetEntry | null {
-  let worst: BetEntry | null = null
-  for (const e of entries) if (e.amount < 0 && (worst === null || e.amount < worst.amount)) worst = e
+/** Worst net day (by day total). Null when no red day exists. */
+export function worstDay(entries: readonly BetEntry[]): DaySummary | null {
+  let worst: DaySummary | null = null
+  for (const day of groupByDay(entries)) {
+    if (day.total < 0 && (worst === null || day.total < worst.total)) worst = day
+  }
   return worst
 }

@@ -4,6 +4,10 @@ A cloud-synced tracker for daily sports-betting results. Log your wins and
 losses on your **computer** or your **phone**, and they stay in sync in real
 time — a bet you add on the couch shows up on your laptop instantly.
 
+Log **as many sessions per day as you like** — a bet in the morning, another in
+the afternoon, and so on — and the app sums them into that day's net total. The
+calendar, dashboard, and win/loss streaks all work off those daily totals.
+
 One React UI runs two ways:
 
 - **Phone** — an installable **PWA** (Add to Home Screen). Works on Wi-Fi or
@@ -34,6 +38,10 @@ row-level security. It's your account, your data, your cloud project.
    [`supabase/schema.sql`](supabase/schema.sql), and **Run**. That creates the
    `entries` table, locks it to each user with row-level security, and enables
    realtime sync.
+   - *Already set up an earlier version?* Re-run `schema.sql` (it's safe to run
+     again) or just run
+     [`supabase/migrations/001_multiple_sessions_per_day.sql`](supabase/migrations/001_multiple_sessions_per_day.sql)
+     to enable multiple sessions per day. Your existing entries are untouched.
 3. Go to **Project Settings → API** and copy your **Project URL** and the
    **anon public** key.
 
@@ -160,9 +168,11 @@ One row per day, per user (`supabase/schema.sql`):
 | Column | Type | Notes |
 |---|---|---|
 | `user_id` | uuid | the owner; enforced by row-level security |
-| `date` | date | `YYYY-MM-DD`; unique per user (one entry per day) |
-| `amount` | numeric | net result; `> 0` win, `< 0` loss, `0` push |
-| `note` | text | optional |
+| `date` | date | `YYYY-MM-DD` — many rows can share a date |
+| `amount` | numeric | one session's result; `> 0` win, `< 0` loss, `0` push |
+| `note` | text | optional (e.g. "morning parlay") |
 
-Re-logging a date updates that day in place (upsert) rather than adding a
-duplicate. Use **Export CSV** anytime to pull a full backup to your device.
+Each row is a single session/bet. A day can hold any number of them, and the
+app sums a day's rows into its net total everywhere it's shown. **Export CSV**
+writes one row per session (sorted by date), so summing a date in a spreadsheet
+reproduces the day total.
