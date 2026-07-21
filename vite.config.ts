@@ -1,12 +1,19 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+
+// The project folder (where package.json and .env live). `root` points Vite at
+// the renderer sources, but env files should load from the project folder so
+// `.env` sits next to package.json — the natural place to put it.
+const projectDir = fileURLToPath(new URL('.', import.meta.url))
 
 // Standalone web build — this is what you deploy and install on your phone.
 // (The desktop Electron build uses electron.vite.config.ts instead.)
 export default defineConfig({
   root: 'src/renderer',
   publicDir: 'public',
+  envDir: projectDir,
   base: '/',
   server: {
     host: true, // expose on the LAN so you can open the dev app on your phone
