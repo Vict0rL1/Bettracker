@@ -49,6 +49,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (session?.user) saveLastUser({ id: session.user.id, email: session.user.email ?? null })
   }, [session])
 
+  // Keep the access token fresh across app open/close cycles. An installed app
+  // gets backgrounded a lot; refreshing while it's in the foreground (and
+  // pausing when hidden) keeps you signed in without re-entering credentials.
+  useEffect(() => {
+    const manage = (): void => {
+      if (document.visibilityState === 'visible') void supabase.auth.startAutoRefresh?.()
+      else void supabase.auth.stopAutoRefresh?.()
+    }
+    manage()
+    document.addEventListener('visibilitychange', manage)
+    return () => document.removeEventListener('visibilitychange', manage)
+  }, [])
+
   const value = useMemo<AuthState>(
     () => ({
       session,
