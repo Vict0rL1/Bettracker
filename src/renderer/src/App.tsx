@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { EntryInput } from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
+import Breakdown from './components/Breakdown'
 import CalendarView from './components/CalendarView'
-import DayModal from './components/DayModal'
+import DayModal, { type TagSuggestions } from './components/DayModal'
 import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
@@ -10,8 +11,9 @@ import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
 import { useEntrySync } from './data/useEntrySync'
-import { downloadCsv } from './lib/csv'
-import { groupByDay } from './lib/stats'
+import { downloadCsv, parseEntriesCsv } from './lib/csv'
+import { summarize, tagValues, type DaySummary } from './lib/stats'
+import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
 
 function Boot() {
@@ -26,6 +28,7 @@ function Boot() {
 
 export default function App() {
   const { loading, session, userId, email, offlineUser, signOut } = useAuth()
+  const { theme, toggle: toggleTheme } = useTheme()
 
   // With a live session we sync; with only a cached identity (e.g. reopened
   // fully offline) the app still renders this device's copy of the data.
@@ -50,12 +53,23 @@ export default function App() {
     }
   }, [loading, activeUserId, entries])
 
-  // Sessions grouped into one summary per day, for the calendar and day editor.
+  // One grouping pass feeds the calendar, the stat cards and the chart.
+  const lifetime = useMemo(() => summarize(entries ?? []), [entries])
+
   const dayMap = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof groupByDay>[number]>()
-    for (const day of groupByDay(entries ?? [])) map.set(day.date, day)
+    const map = new Map<string, DaySummary>()
+    for (const day of lifetime.days) map.set(day.date, day)
     return map
-  }, [entries])
+  }, [lifetime])
+
+  const suggestions = useMemo<TagSuggestions>(
+    () => ({
+      sport: tagValues(entries ?? [], 'sport'),
+      book: tagValues(entries ?? [], 'book'),
+      betType: tagValues(entries ?? [], 'betType')
+    }),
+    [entries]
+  )
 
   const modalSessions = modalDate ? (dayMap.get(modalDate)?.entries ?? []) : []
 
@@ -66,6 +80,7 @@ export default function App() {
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
       if (e.key === 'ArrowRight') setYm((m) => addMonths(m, 1))
+      if (e.key === 't' || e.key === 'T') setModalDate(todayStr())
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -74,7 +89,7 @@ export default function App() {
   const savedNote = useCallback(
     (action: string, date?: string) =>
       isOffline
-        ? `${action} — saved on this device, will sync when you're back online`
+        ? `${action} — saved on this device, will sync when you’re back online`
         : date
           ? `${action} on ${humanDate(date)}`
           : action,
@@ -124,6 +139,27 @@ export default function App() {
     setToast({ kind: 'ok', text: `Exported ${count} ${count === 1 ? 'bet' : 'bets'} to your downloads` })
   }, [entries])
 
+  const handleImport = useCallback(
+    async (file: File) => {
+      try {
+        const { rows, errors, skipped } = parseEntriesCsv(await file.text())
+        if (rows.length === 0) {
+          setToast({ kind: 'error', text: errors[0] ?? 'Nothing to import from that file.' })
+          return
+        }
+        const count = sync.importSessions(rows)
+        const tail = skipped > 0 ? ` · skipped ${skipped} ${skipped === 1 ? 'line' : 'lines'}` : ''
+        setToast({
+          kind: 'ok',
+          text: savedNote(`Imported ${count} ${count === 1 ? 'bet' : 'bets'}${tail}`)
+        })
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [sync, savedNote, showError]
+  )
+
   if (loading) return <Boot />
   if (!activeUserId) return <Login />
 
@@ -139,13 +175,17 @@ export default function App() {
         status={status}
         pendingCount={pendingCount}
         canExport={shownEntries.length > 0}
+        theme={theme}
         onExport={handleExport}
+        onImport={handleImport}
+        onToggleTheme={toggleTheme}
         onLogToday={() => setModalDate(todayStr())}
         onSignOut={signOut}
       />
 
       <HeroStats
         entries={shownEntries}
+        lifetime={lifetime}
         ym={ym}
         onPrev={() => setYm((m) => addMonths(m, -1))}
         onNext={() => setYm((m) => addMonths(m, 1))}
@@ -154,8 +194,10 @@ export default function App() {
 
       <div className="grid-mid">
         <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
-        <BalanceChart entries={shownEntries} />
+        <BalanceChart entries={shownEntries} lifetime={lifetime} ym={ym} />
       </div>
+
+      <Breakdown entries={shownEntries} />
 
       <HistoryTable entries={shownEntries} onEdit={setModalDate} onDelete={handleDelete} />
 
@@ -163,6 +205,7 @@ export default function App() {
         <DayModal
           date={modalDate}
           sessions={modalSessions}
+          suggestions={suggestions}
           onAdd={handleAdd}
           onUpdate={handleUpdate}
           onDelete={handleDelete}

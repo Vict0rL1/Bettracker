@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BetEntry, EntryInput } from '../../../shared/types'
 import { normalizeInput } from '../lib/validate'
-import { addEntry, deleteEntry, getEntries, isNetworkError, subscribeToEntries, updateEntry } from './entries'
+import {
+  addEntries,
+  addEntry,
+  deleteEntry,
+  getEntries,
+  isNetworkError,
+  subscribeToEntries,
+  updateEntry
+} from './entries'
 import {
   applyOutbox,
   enqueueOp,
   loadCache,
   loadOutbox,
+  opSize,
   reconcile,
   saveCache,
   saveOutbox,
@@ -24,6 +33,8 @@ export interface EntrySync {
   addSession: (input: EntryInput) => void
   updateSession: (id: string, input: EntryInput) => void
   deleteSession: (id: string) => void
+  /** Queue an imported batch as a single op. Returns how many rows were queued. */
+  importSessions: (inputs: readonly EntryInput[]) => number
 }
 
 const RETRY_INTERVAL_MS = 20_000
@@ -98,6 +109,7 @@ export function useEntrySync(
           let result: BetEntry | null = null
           if (op.kind === 'add') result = await addEntry(op.input, op.id)
           else if (op.kind === 'update') result = await updateEntry(op.id, op.input)
+          else if (op.kind === 'bulk-add') await addEntries(op.entries)
           else await deleteEntry(op.id)
 
           setServer(reconcile(serverRef.current ?? [], op, result))
@@ -221,6 +233,18 @@ export function useEntrySync(
     [mutate]
   )
 
+  const importSessions = useCallback(
+    (inputs: readonly EntryInput[]): number => {
+      // Validate the whole batch up front so a bad row fails the import instead
+      // of half-writing it.
+      const entries = inputs.map((input) => ({ id: crypto.randomUUID(), input: normalizeInput(input) }))
+      if (entries.length === 0) return 0
+      mutate({ opId: crypto.randomUUID(), kind: 'bulk-add', entries, queuedAt: new Date().toISOString() })
+      return entries.length
+    },
+    [mutate]
+  )
+
   const entries = useMemo(() => {
     if (server === null && outbox.length === 0) return null
     return applyOutbox(server ?? [], outbox)
@@ -228,13 +252,17 @@ export function useEntrySync(
 
   const status: SyncStatus = !canSync || offline ? 'offline' : outbox.length > 0 ? 'syncing' : 'synced'
 
+  // Rows waiting to sync, not ops — one queued import of 40 bets reads as 40.
+  const pendingCount = useMemo(() => outbox.reduce((n, op) => n + opSize(op), 0), [outbox])
+
   return {
     entries,
     status,
-    pendingCount: outbox.length,
+    pendingCount,
     isOffline: status === 'offline',
     addSession,
     updateSession,
-    deleteSession
+    deleteSession,
+    importSessions
   }
 }

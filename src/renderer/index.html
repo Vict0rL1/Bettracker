@@ -15,8 +15,31 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>BetTracker</title>
+    <script>
+      // Resolve the theme before first paint so a light-theme user never sees a
+      // dark flash (and vice versa). Mirrors the logic in lib/theme.ts.
+      ;(function () {
+        var stored = null
+        try {
+          stored = localStorage.getItem('bettracker:theme')
+        } catch (e) {
+          /* storage blocked — fall back to the OS preference */
+        }
+        var theme =
+          stored === 'light' || stored === 'dark'
+            ? stored
+            : window.matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark'
+        var root = document.documentElement
+        root.dataset.theme = theme
+        root.style.background = theme === 'light' ? '#f6f7f9' : '#0a0f14'
+        var meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f7f9' : '#0a0f14')
+      })()
+    </script>
   </head>
-  <body style="background: #0a0f14">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

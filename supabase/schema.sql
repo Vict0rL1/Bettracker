@@ -7,15 +7,33 @@ create table if not exists public.entries (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
   date       date not null,
+  -- NET result of the bet: positive when it won, negative when it lost, 0 push.
   amount     numeric(12, 2) not null,
+  -- How much was risked. Nullable: bets logged before stake tracking existed
+  -- have no recorded stake, and those rows are excluded from ROI rather than
+  -- given an invented one. 0 is valid (free bets / risk-free promos).
+  stake      numeric(12, 2),
   note       text not null default '',
+  -- Optional tags, all free text so you are not boxed into a fixed list.
+  sport      text not null default '',
+  book       text not null default '',
+  bet_type   text not null default '',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint entries_stake_nonneg check (stake is null or stake >= 0)
   -- Multiple sessions per day are allowed; each row is one bet/trade, and a
   -- day's total is the sum of its rows.
 );
 
-create index if not exists entries_user_date_idx on public.entries (user_id, date);
+-- Existing installs: pick up the columns added after the first release.
+alter table public.entries add column if not exists stake    numeric(12, 2);
+alter table public.entries add column if not exists sport    text not null default '';
+alter table public.entries add column if not exists book     text not null default '';
+alter table public.entries add column if not exists bet_type text not null default '';
+
+create index if not exists entries_user_date_idx  on public.entries (user_id, date);
+create index if not exists entries_user_sport_idx on public.entries (user_id, sport) where sport <> '';
+create index if not exists entries_user_book_idx  on public.entries (user_id, book)  where book  <> '';
 
 -- If you created the table before multi-session support, drop the old
 -- one-per-day constraint (no-op on fresh installs).

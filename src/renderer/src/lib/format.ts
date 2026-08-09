@@ -41,3 +41,19 @@ export function axisMoney(n: number): string {
 }
 
 export const fmtPct = (n: number): string => `${Math.round(n)}%`
+
+/**
+ * Signed percentage for ROI, to one decimal — a bettor's edge lives in tenths
+ * of a point, so rounding to whole percent throws away the signal.
+ */
+export function fmtPctSigned(n: number): string {
+  const body = `${Math.abs(n).toFixed(1)}%`
+  if (n > 0) return `+${body}`
+  if (n < 0) return `-${body}`
+  return body
+}
+
+/** Unsigned money for "amount staked" style figures: $1,240 (no cents past $1k). */
+export function fmtStake(n: number): string {
+  return n >= 1000 ? `$${Math.round(n).toLocaleString('en-US')}` : usd.format(n)
+}

@@ -1,12 +1,17 @@
+import { useRef } from 'react'
 import type { SyncStatus } from '../data/useEntrySync'
-import { DownloadIcon, PlusIcon, SparkIcon } from './icons'
+import type { Theme } from '../lib/theme'
+import { DownloadIcon, MoonIcon, PlusIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
 
 interface Props {
   email: string | null
   status: SyncStatus
   pendingCount: number
   canExport: boolean
+  theme: Theme
   onExport: () => void
+  onImport: (file: File) => void
+  onToggleTheme: () => void
   onLogToday: () => void
   onSignOut: () => void
 }
@@ -26,8 +31,21 @@ const BADGE: Record<SyncStatus, { label: (n: number) => string; title: string }>
   }
 }
 
-export default function Header({ email, status, pendingCount, canExport, onExport, onLogToday, onSignOut }: Props) {
+export default function Header({
+  email,
+  status,
+  pendingCount,
+  canExport,
+  theme,
+  onExport,
+  onImport,
+  onToggleTheme,
+  onLogToday,
+  onSignOut
+}: Props) {
   const badge = BADGE[status]
+  const fileRef = useRef<HTMLInputElement>(null)
+
   return (
     <header className="topbar">
       <div className="brand">
@@ -42,6 +60,26 @@ export default function Header({ email, status, pendingCount, canExport, onExpor
         </span>
       </div>
       <div className="topbar-actions">
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="visually-hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) onImport(file)
+            // Reset so picking the same file twice still fires a change event.
+            e.target.value = ''
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => fileRef.current?.click()}
+          title="Import bets from a CSV file"
+        >
+          <UploadIcon /> Import
+        </button>
         <button
           type="button"
           className="btn btn-ghost"
@@ -49,13 +87,26 @@ export default function Header({ email, status, pendingCount, canExport, onExpor
           onClick={onExport}
           title={canExport ? 'Download all entries as a CSV file' : 'Nothing to export yet'}
         >
-          <DownloadIcon /> Export CSV
+          <DownloadIcon /> Export
+        </button>
+        <button
+          type="button"
+          className="btn-icon theme-btn"
+          onClick={onToggleTheme}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+        >
+          {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
         </button>
         <button type="button" className="btn btn-primary" onClick={onLogToday}>
           <PlusIcon /> Log today
         </button>
         <div className="account">
-          {email && <span className="account-email" title={email}>{email}</span>}
+          {email && (
+            <span className="account-email" title={email}>
+              {email}
+            </span>
+          )}
           <button type="button" className="btn btn-ghost btn-signout" onClick={onSignOut} title="Sign out">
             Sign out
           </button>

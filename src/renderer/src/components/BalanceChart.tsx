@@ -1,16 +1,29 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { BetEntry } from '../../../shared/types'
-import { humanDate, monthYearShort, shortDate } from '../lib/dates'
+import { humanDate, monthLabel, monthYearShort, shortDate, type MonthKey } from '../lib/dates'
 import { axisMoney, fmtMoney, fmtMoneyPlain } from '../lib/format'
-import { cumulativeSeries, type BalancePoint } from '../lib/stats'
+import { cumulativeSeries, forMonth, groupByDay, type BalancePoint, type Summary } from '../lib/stats'
 
 interface Props {
   entries: BetEntry[]
+  /** All-time summary, already computed by the app — reused as the "all" series. */
+  lifetime: Summary
+  ym: MonthKey
 }
 
-export default function BalanceChart({ entries }: Props) {
-  const data = useMemo(() => cumulativeSeries(entries), [entries])
+type Scope = 'all' | 'month'
+
+export default function BalanceChart({ entries, lifetime, ym }: Props) {
+  const [scope, setScope] = useState<Scope>('all')
+
+  // In month scope the curve restarts at zero, answering "how did this month
+  // go" rather than "where does this month sit in my all-time balance".
+  const monthSeries = useMemo(
+    () => (scope === 'month' ? cumulativeSeries(groupByDay(forMonth(entries, ym))) : []),
+    [scope, entries, ym]
+  )
+  const data = scope === 'all' ? lifetime.series : monthSeries
 
   const ticks = useMemo(() => {
     if (data.length < 2) return []
@@ -24,15 +37,37 @@ export default function BalanceChart({ entries }: Props) {
   const lastBalance = data.length > 0 ? data[data.length - 1].balance : 0
   const lineColor = lastBalance >= 0 ? 'var(--green)' : 'var(--red)'
 
+  const emptyText =
+    scope === 'month'
+      ? `Log at least two days in ${monthLabel(ym)} to draw a curve.`
+      : 'Log at least two days to draw your balance curve.'
+
   return (
     <article className="card chart-card">
       <header className="card-head">
         <h2>Balance</h2>
-        <span className="card-note">cumulative P/L · all time</span>
+        <div className="scope-toggle" role="group" aria-label="Chart range">
+          <button
+            type="button"
+            className={`scope-btn ${scope === 'all' ? 'active' : ''}`}
+            aria-pressed={scope === 'all'}
+            onClick={() => setScope('all')}
+          >
+            All time
+          </button>
+          <button
+            type="button"
+            className={`scope-btn ${scope === 'month' ? 'active' : ''}`}
+            aria-pressed={scope === 'month'}
+            onClick={() => setScope('month')}
+          >
+            This month
+          </button>
+        </div>
       </header>
 
       {data.length < 2 ? (
-        <div className="chart-empty">Log at least two days to draw your balance curve.</div>
+        <div className="chart-empty">{emptyText}</div>
       ) : (
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height={272}>
