@@ -9,3 +9,6 @@ release/
 .env.*
 !.env.example
 .DS_Store
+
+# Scratch dir the Supabase CLI writes next to the migrations.
+supabase/.temp/
