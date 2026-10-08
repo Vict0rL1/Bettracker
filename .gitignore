@@ -12,3 +12,8 @@ release/
 
 # Scratch dir the Supabase CLI writes next to the migrations.
 supabase/.temp/
+
+# Playwright: the e2e build and its reports.
+dist-e2e/
+test-results/
+playwright-report/
