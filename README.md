@@ -66,8 +66,11 @@ month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log toda
      [`001_multiple_sessions_per_day.sql`](supabase/migrations/001_multiple_sessions_per_day.sql)
      (several bets per day) and
      [`002_stake_and_tags.sql`](supabase/migrations/002_stake_and_tags.sql)
-     (stake, sport, book, bet type). Your existing entries are untouched — old
-     bets simply have no stake recorded and are left out of ROI.
+     (stake, sport, book, bet type) and
+     [`003_odds_and_status.sql`](supabase/migrations/003_odds_and_status.sql)
+     (odds, pending bets). Your existing bets are untouched — old ones simply
+     have no stake or odds recorded, and 003 gives each the status its result
+     implies.
 3. Go to **Project Settings → API** and copy your **Project URL** and the
    **anon public** key.
 
@@ -192,6 +195,17 @@ row whose profit and ROI cover different sets is marked `(1/2)`.
 an insert/edit/delete on one device refreshes the others within a second — no
 refresh button.
 
+**Conflicts.** Two devices can edit the same bet while offline. The rule is
+*last write wins, by when the edit was made*: every edit carries the moment the
+user made it, that moment is written as the row's `updated_at`, and the server
+applies an edit only if the row's `updated_at` is not newer. If another
+device's later edit already landed, the older one is refused, dropped from the
+queue, and the app shows "A newer edit from another device was kept" before
+refreshing to the winning version. A retry of the same edit after a lost
+response still applies (its own timestamp satisfies the check), and a delete
+beats an edit in either order. Device clocks are trusted, which is the price
+of needing no server-side logic — no extra column, no trigger.
+
 **Offline.** The last-known rows are cached on the device for instant startup,
 and mutations go through a persistent outbox: applied to the UI immediately,
 replayed against Supabase in order on reconnect (entry ids are client-generated
@@ -212,15 +226,25 @@ One row per day, per user (`supabase/schema.sql`):
 |---|---|---|
 | `user_id` | uuid | the owner; enforced by row-level security |
 | `date` | date | `YYYY-MM-DD` — many rows can share a date |
-| `amount` | numeric | one session's **net result**; `> 0` win, `< 0` loss, `0` push |
-| `stake` | numeric | optional amount risked; `null` = not recorded, excluded from ROI |
+| `amount` | numeric | the bet's **net result**; `> 0` won, `< 0` lost, `0` push/void, `null` while pending |
+| `stake` | numeric | amount risked; `null` = not recorded (excluded from ROI), `0` = free bet (bonus profit) |
+| `odds` | numeric | decimal price, `> 1`; optional |
+| `status` | text | `pending` · `won` · `lost` · `push` · `void` — names shared with the Sports Predictor |
 | `note` | text | optional (e.g. "morning parlay") |
 | `sport` | text | optional tag (e.g. "NBA") |
 | `book` | text | optional tag (e.g. "DraftKings") |
 | `bet_type` | text | optional tag (e.g. "Parlay") |
 
-Each row is a single session/bet. A day can hold any number of them, and the
-app sums a day's rows into its net total everywhere it's shown.
+Each row is one bet. A day can hold any number of them, and the app sums a
+day's settled rows into its net total; a pending bet stays out of P/L, ROI
+and streaks until you settle it (one tap from the day dialog or the history).
+
+ROI counts won and lost bets with a real stake. Pushes and voids return the
+stake, so they're out of the denominator; free bets (stake 0) risk nothing,
+so their profit is reported beside ROI as *bonus* rather than inside it.
+Next to ROI and the strike rate you'll see the sample size, a *small sample*
+flag under 50 bets, and the average implied probability of your odds — the
+strike rate you need to beat at those prices.
 
 `amount` is the **net** result, so a $100 bet that wins at even money is
 `amount = 100, stake = 100` (not 200), and losing it is `amount = -100`. When
@@ -229,14 +253,18 @@ bet almost always costs exactly what was risked.
 
 ## Import and export
 
-**Export CSV** writes one row per session, sorted by date, with the columns
-`date, stake, amount, sport, book, bet_type, note` — summing a date in a
+**Export CSV** writes one row per bet, sorted by date, with the columns
+`date, status, stake, odds, amount, sport, book, bet_type, note` — summing a
 spreadsheet reproduces that day's total.
 
 **Import** reads that same shape back, so an export is a working backup. Only a
 header row is required; column order doesn't matter, extra columns are ignored,
 and common aliases from other trackers are accepted (`day`, `p/l`, `profit`,
-`risk`, `wagered`, `league`, `sportsbook`, `market`, `notes`, …). Values may
+`risk`, `wagered`, `league`, `sportsbook`, `market`, `notes`, `result`,
+`price`, and `session` from the days when a row was called that, …). Files
+from before odds and statuses existed import unchanged — the status is what
+the amount implies. The import reports how many rows came without a stake,
+since those stay out of ROI. Values may
 carry currency symbols, thousands separators, or parenthesised negatives
 (`"$1,234.50"`, `(45.00)`). Lines that can't be read are skipped and reported
 rather than half-guessed, and the import queues through the same offline outbox

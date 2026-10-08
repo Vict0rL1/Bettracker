@@ -1,15 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BetEntry, EntryInput } from '../../../shared/types'
+import type { Bet, BetInput } from '../../../shared/types'
 import { normalizeInput } from '../lib/validate'
-import {
-  addEntries,
-  addEntry,
-  deleteEntry,
-  getEntries,
-  isNetworkError,
-  subscribeToEntries,
-  updateEntry
-} from './entries'
+import { addBet, addBets, deleteBet, getBets, isNetworkError, subscribeToBets, updateBet } from './bets'
 import {
   applyOutbox,
   enqueueOp,
@@ -24,52 +16,59 @@ import {
 
 export type SyncStatus = 'synced' | 'syncing' | 'offline'
 
-export interface EntrySync {
-  /** Server rows with pending local changes applied; null until first load. */
-  entries: BetEntry[] | null
+export interface BetSync {
+  /** Server rows with queued local changes applied; null until first load. */
+  bets: Bet[] | null
   status: SyncStatus
-  pendingCount: number
+  /** Rows waiting to reach the server (not bets awaiting settlement). */
+  queuedCount: number
   isOffline: boolean
-  addSession: (input: EntryInput) => void
-  updateSession: (id: string, input: EntryInput) => void
-  deleteSession: (id: string) => void
+  addBet: (input: BetInput) => void
+  updateBet: (id: string, input: BetInput) => void
+  deleteBet: (id: string) => void
   /** Queue an imported batch as a single op. Returns how many rows were queued. */
-  importSessions: (inputs: readonly EntryInput[]) => number
+  importBets: (inputs: readonly BetInput[]) => number
 }
 
 const RETRY_INTERVAL_MS = 20_000
 const REALTIME_DEBOUNCE_MS = 400
 
 /**
- * Offline-first entry state.
+ * Offline-first bet state.
  *
  * The device cache renders instantly on boot; mutations apply to the UI
  * immediately and enter a persistent outbox that is replayed against Supabase
  * in order — on enqueue, on reconnect, and on a slow retry timer. A full fetch
  * remains the reconciliation anchor after the queue drains and on realtime
  * events from other devices.
+ *
+ * `onNotice` is for things that are not errors but the user should hear, such
+ * as an edit losing to a newer one from another device.
  */
-export function useEntrySync(
+export function useBetSync(
   userId: string | null,
   canSync: boolean,
-  onError: (err: unknown) => void
-): EntrySync {
-  const [server, setServerState] = useState<BetEntry[] | null>(null)
+  onError: (err: unknown) => void,
+  onNotice?: (text: string) => void
+): BetSync {
+  const [server, setServerState] = useState<Bet[] | null>(null)
   const [outbox, setOutboxState] = useState<PendingOp[]>([])
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
 
   // Refs are the source of truth inside the async sync loop; state mirrors
   // them for rendering.
-  const serverRef = useRef<BetEntry[] | null>(null)
+  const serverRef = useRef<Bet[] | null>(null)
   const outboxRef = useRef<PendingOp[]>([])
   const syncingRef = useRef(false)
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
+  const onNoticeRef = useRef(onNotice)
+  onNoticeRef.current = onNotice
 
   const setServer = useCallback(
-    (rows: BetEntry[]) => {
+    (rows: Bet[]) => {
       serverRef.current = rows
       setServerState(rows)
       if (userId) saveCache(userId, rows)
@@ -89,7 +88,7 @@ export function useEntrySync(
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
-      const rows = await getEntries()
+      const rows = await getBets()
       setServer(rows)
       setOffline(false)
     } catch (err) {
@@ -106,11 +105,16 @@ export function useEntrySync(
       while (outboxRef.current.length > 0) {
         const op = outboxRef.current[0]
         try {
-          let result: BetEntry | null = null
-          if (op.kind === 'add') result = await addEntry(op.input, op.id)
-          else if (op.kind === 'update') result = await updateEntry(op.id, op.input)
-          else if (op.kind === 'bulk-add') await addEntries(op.entries)
-          else await deleteEntry(op.id)
+          let result: Bet | null = null
+          if (op.kind === 'add') result = await addBet(op.input, op.id)
+          else if (op.kind === 'update') {
+            result = await updateBet(op.id, op.input, op.editedAt)
+            // A refused update lost to a newer edit elsewhere (or the bet is
+            // gone). Nothing to retry: the refresh after the drain shows the
+            // version that won.
+            if (result === null) onNoticeRef.current?.('A newer edit from another device was kept')
+          } else if (op.kind === 'bulk-add') await addBets(op.entries)
+          else await deleteBet(op.id)
 
           setServer(reconcile(serverRef.current ?? [], op, result))
           setOutbox(outboxRef.current.slice(1))
@@ -161,7 +165,7 @@ export function useEntrySync(
   useEffect(() => {
     if (!userId || !canSync) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsubscribe = subscribeToEntries(userId, () => {
+    const unsubscribe = subscribeToBets(userId, () => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => void refresh(), REALTIME_DEBOUNCE_MS)
     })
@@ -204,8 +208,8 @@ export function useEntrySync(
     [setOutbox, syncNow]
   )
 
-  const addSession = useCallback(
-    (input: EntryInput) => {
+  const add = useCallback(
+    (input: BetInput) => {
       const clean = normalizeInput(input) // throws on bad input, before anything is queued
       mutate({
         opId: crypto.randomUUID(),
@@ -218,23 +222,23 @@ export function useEntrySync(
     [mutate]
   )
 
-  const updateSession = useCallback(
-    (id: string, input: EntryInput) => {
+  const update = useCallback(
+    (id: string, input: BetInput) => {
       const clean = normalizeInput(input)
-      mutate({ opId: crypto.randomUUID(), kind: 'update', id, input: clean })
+      mutate({ opId: crypto.randomUUID(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
     },
     [mutate]
   )
 
-  const deleteSession = useCallback(
+  const remove = useCallback(
     (id: string) => {
       mutate({ opId: crypto.randomUUID(), kind: 'delete', id })
     },
     [mutate]
   )
 
-  const importSessions = useCallback(
-    (inputs: readonly EntryInput[]): number => {
+  const importBets = useCallback(
+    (inputs: readonly BetInput[]): number => {
       // Validate the whole batch up front so a bad row fails the import instead
       // of half-writing it.
       const entries = inputs.map((input) => ({ id: crypto.randomUUID(), input: normalizeInput(input) }))
@@ -245,7 +249,7 @@ export function useEntrySync(
     [mutate]
   )
 
-  const entries = useMemo(() => {
+  const bets = useMemo(() => {
     if (server === null && outbox.length === 0) return null
     return applyOutbox(server ?? [], outbox)
   }, [server, outbox])
@@ -253,16 +257,16 @@ export function useEntrySync(
   const status: SyncStatus = !canSync || offline ? 'offline' : outbox.length > 0 ? 'syncing' : 'synced'
 
   // Rows waiting to sync, not ops — one queued import of 40 bets reads as 40.
-  const pendingCount = useMemo(() => outbox.reduce((n, op) => n + opSize(op), 0), [outbox])
+  const queuedCount = useMemo(() => outbox.reduce((n, op) => n + opSize(op), 0), [outbox])
 
   return {
-    entries,
+    bets,
     status,
-    pendingCount,
+    queuedCount,
     isOffline: status === 'offline',
-    addSession,
-    updateSession,
-    deleteSession,
-    importSessions
+    addBet: add,
+    updateBet: update,
+    deleteBet: remove,
+    importBets
   }
 }

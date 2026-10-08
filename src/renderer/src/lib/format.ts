@@ -57,3 +57,9 @@ export function fmtPctSigned(n: number): string {
 export function fmtStake(n: number): string {
   return n >= 1000 ? `$${Math.round(n).toLocaleString('en-US')}` : usd.format(n)
 }
+
+/** Decimal odds, always two places: 1.91, 2.50, 11.00. */
+export const fmtOdds = (n: number): string => n.toFixed(2)
+
+/** A probability already expressed as a percentage: 52%. */
+export const fmtProb = (pct: number): string => `${Math.round(pct)}%`

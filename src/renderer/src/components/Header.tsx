@@ -1,12 +1,13 @@
 import { useRef } from 'react'
-import type { SyncStatus } from '../data/useEntrySync'
+import type { SyncStatus } from '../data/useBetSync'
 import type { Theme } from '../lib/theme'
 import { DownloadIcon, MoonIcon, PlusIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
 
 interface Props {
   email: string | null
   status: SyncStatus
-  pendingCount: number
+  /** Rows waiting to reach the server (not bets awaiting a result). */
+  queuedCount: number
   canExport: boolean
   theme: Theme
   onExport: () => void
@@ -34,7 +35,7 @@ const BADGE: Record<SyncStatus, { label: (n: number) => string; title: string }>
 export default function Header({
   email,
   status,
-  pendingCount,
+  queuedCount,
   canExport,
   theme,
   onExport,
@@ -56,7 +57,7 @@ export default function Header({
           Bet<span>Tracker</span>
         </h1>
         <span className={`sync-badge ${status}`} title={badge.title}>
-          <i className="sync-dot" /> {badge.label(pendingCount)}
+          <i className="sync-dot" /> {badge.label(queuedCount)}
         </span>
       </div>
       <div className="topbar-actions">
@@ -85,7 +86,7 @@ export default function Header({
           className="btn btn-ghost"
           disabled={!canExport}
           onClick={onExport}
-          title={canExport ? 'Download all entries as a CSV file' : 'Nothing to export yet'}
+          title={canExport ? 'Download every bet as a CSV file' : 'Nothing to export yet'}
         >
           <DownloadIcon /> Export
         </button>

@@ -20,6 +20,9 @@ export interface SeedEntry {
   date: string
   amount: number
   stake: number | null
+  odds?: number | null
+  /** Omitted on most seeds: the app derives it from the amount, as it does for pre-003 caches. */
+  status?: 'pending' | 'won' | 'lost' | 'push' | 'void'
   note: string
   sport: string
   book: string

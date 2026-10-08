@@ -1,12 +1,12 @@
 import { useMemo } from 'react'
-import type { BetEntry } from '../../../shared/types'
+import type { Bet } from '../../../shared/types'
 import { monthLabel, monthYearShort, sameMonth, shortDate, currentMonth, type MonthKey } from '../lib/dates'
-import { fmtMoney, fmtMoneyCompact, fmtPct, fmtPctSigned, fmtStake } from '../lib/format'
-import { forMonth, summarize, type Summary } from '../lib/stats'
+import { fmtMoney, fmtMoneyCompact, fmtPct, fmtPctSigned, fmtProb, fmtStake } from '../lib/format'
+import { forMonth, isSmallSample, SMALL_SAMPLE, summarize, type Summary } from '../lib/stats'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons'
 
 interface Props {
-  entries: BetEntry[]
+  bets: Bet[]
   /** All-time summary, computed once by the app and shared with the chart. */
   lifetime: Summary
   ym: MonthKey
@@ -37,27 +37,35 @@ function Mini({ label, value, sub, toneClass = '', title }: MiniProps) {
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
-export default function HeroStats({ entries, lifetime, ym, onPrev, onNext, onResetMonth }: Props) {
-  const month = useMemo(() => summarize(forMonth(entries, ym)), [entries, ym])
+export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetMonth }: Props) {
+  const month = useMemo(() => summarize(forMonth(bets, ym)), [bets, ym])
 
   const onCurrentMonth = sameMonth(ym, currentMonth())
   const monthSub =
     month.bets === 0
       ? 'No bets logged this month'
       : `${plural(month.dayCount, 'day')} · ${plural(month.bets, 'bet')} · ${month.dayWl.wins}W–${month.dayWl.losses}L` +
-        (month.dayWl.pushes > 0 ? `–${month.dayWl.pushes}P` : '')
+        (month.dayWl.pushes > 0 ? `–${month.dayWl.pushes}P` : '') +
+        (month.pendingCount > 0 ? ` · ${month.pendingCount} pending` : '')
 
-  const { roi } = lifetime
+  const { roi, bonus, implied } = lifetime
+  const smallSample = roi !== null && isSmallSample(roi.counted)
 
   // ROI only speaks for the bets that recorded a stake. When that's a subset,
   // its profit differs from lifetime P/L above — "63 of 79 bets" is what stops
   // the two numbers from looking like they contradict each other.
   const roiSub = roi
     ? `${fmtMoney(roi.profit)} on ${fmtStake(roi.staked)} staked · ` +
-      (roi.missing > 0 ? `${roi.counted} of ${plural(lifetime.bets, 'bet')} with a stake` : plural(roi.counted, 'bet'))
+      (roi.missing > 0 ? `${roi.counted} of ${plural(roi.counted + roi.missing, 'bet')} with a stake` : plural(roi.counted, 'bet'))
     : lifetime.bets === 0
       ? 'Log a bet with its stake to see ROI'
-      : `No stakes recorded yet — add one to ${plural(lifetime.bets, 'bet')} to see ROI`
+      : `No staked results yet — ROI needs a settled bet with a stake`
+
+  const lifetimeSub =
+    lifetime.bets === 0
+      ? 'Log your first bet to get started'
+      : `${plural(lifetime.bets, 'bet')} over ${plural(lifetime.dayCount, 'day')} since ${monthYearShort(lifetime.first ?? '')}` +
+        (lifetime.pendingCount > 0 ? ` · ${lifetime.pendingCount} pending, ${fmtStake(lifetime.pendingStaked)} riding` : '')
 
   return (
     <section className="hero">
@@ -87,24 +95,40 @@ export default function HeroStats({ entries, lifetime, ym, onPrev, onNext, onRes
           <span className="stat-label">Lifetime P/L</span>
         </div>
         <div className={`life-value ${tone(lifetime.total)}`}>{fmtMoney(lifetime.total)}</div>
-        <div className="stat-sub">
-          {lifetime.bets === 0
-            ? 'Log your first bet to get started'
-            : `${plural(lifetime.bets, 'bet')} over ${plural(lifetime.dayCount, 'day')} since ${monthYearShort(lifetime.first ?? '')}`}
-        </div>
+        <div className="stat-sub">{lifetimeSub}</div>
       </article>
 
       <article className="card stat-card roi-card">
         <div className="stat-head">
           <span className="stat-label">ROI</span>
-          {lifetime.avgStake !== null && (
-            <span className="chip chip-static" title="Average stake across bets that recorded one">
-              avg {fmtStake(lifetime.avgStake)}
-            </span>
-          )}
+          <span className="stat-chips">
+            {smallSample && (
+              <span
+                className="chip chip-static chip-warn"
+                title={`${roi.counted} settled bets with a stake. Below ${SMALL_SAMPLE} the number is mostly noise.`}
+              >
+                small sample
+              </span>
+            )}
+            {lifetime.avgStake !== null && (
+              <span className="chip chip-static" title="Average stake across bets that recorded one">
+                avg {fmtStake(lifetime.avgStake)}
+              </span>
+            )}
+          </span>
         </div>
         <div className={`life-value ${roi ? tone(roi.pct) : 'flat'}`}>{roi ? fmtPctSigned(roi.pct) : '—'}</div>
-        <div className="stat-sub">{roiSub}</div>
+        <div className="stat-sub">
+          {roiSub}
+          {bonus.count > 0 && (
+            <>
+              <br />
+              <span className="bonus" title="Free bets risk nothing, so they can't have a return — their profit is shown apart">
+                {fmtMoney(bonus.profit)} bonus from {plural(bonus.count, 'free bet')}
+              </span>
+            </>
+          )}
+        </div>
       </article>
 
       <article className="card mini-card">
@@ -113,10 +137,16 @@ export default function HeroStats({ entries, lifetime, ym, onPrev, onNext, onRes
           value={lifetime.strike === null ? '—' : fmtPct(lifetime.strike)}
           sub={
             lifetime.strike === null
-              ? 'no decisive bets yet'
-              : `${lifetime.betWl.wins}W–${lifetime.betWl.losses}L by bet`
+              ? 'no decided bets yet'
+              : `${lifetime.betWl.wins}W–${lifetime.betWl.losses}L · n=${lifetime.strikeN}` +
+                (implied ? ` · implied ${fmtProb(implied.avg)}` : '') +
+                (isSmallSample(lifetime.strikeN) ? ' · small sample' : '')
           }
-          title="Share of individual bets that won, ignoring pushes"
+          title={
+            implied
+              ? `Share of decided bets that won. At your average odds the break-even strike rate is ${fmtProb(implied.avg)} (over the ${implied.n} with odds recorded).`
+              : 'Share of decided bets that won. Record the odds to see the break-even rate next to it.'
+          }
         />
         <Mini
           label="Green days"

@@ -1,26 +1,38 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { BetEntry } from '../../../shared/types'
+import type { Bet, BetStatus } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
-import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
+import { fmtMoney, fmtOdds, fmtPctSigned, fmtStake } from '../lib/format'
 import { tagValues } from '../lib/stats'
+import { suggestedAmount } from '../lib/validate'
+import { toneOf } from './DayModal'
 import { ChevronLeftIcon, ChevronRightIcon, PencilIcon, TrashIcon } from './icons'
 
 interface Props {
-  entries: BetEntry[]
+  bets: Bet[]
   onEdit: (date: string) => void
   onDelete: (id: string) => void
+  /** Settle a pending bet with the result its stake and odds imply, or open it when they can't. */
+  onSettle: (bet: Bet, status: BetStatus, amount: number | null) => void
 }
 
-type SortKey = 'date' | 'amount' | 'stake'
+type SortKey = 'date' | 'amount' | 'stake' | 'odds'
 type SortDir = 'asc' | 'desc'
-type ResultFilter = 'all' | 'win' | 'loss' | 'push'
+type ResultFilter = 'all' | BetStatus
 
 const PAGE_SIZE = 25
 
-const kindOf = (amount: number): 'win' | 'loss' | 'push' => (amount > 0 ? 'win' : amount < 0 ? 'loss' : 'push')
-const KIND_LABEL = { win: 'WIN', loss: 'LOSS', push: 'PUSH' } as const
+const KIND_LABEL: Record<BetStatus, string> = { won: 'WON', lost: 'LOST', push: 'PUSH', void: 'VOID', pending: 'PENDING' }
 
-export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
+/** Nulls sort last in either direction: missing data, not the smallest value. */
+function compareNullable(a: number | null, b: number | null, dir: number): number {
+  if (a === null || b === null) {
+    if (a === b) return 0
+    return a === null ? 1 : -1
+  }
+  return (a - b) * dir
+}
+
+export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -38,40 +50,36 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
     []
   )
 
-  const sports = useMemo(() => tagValues(entries, 'sport'), [entries])
-  const books = useMemo(() => tagValues(entries, 'book'), [entries])
+  const sports = useMemo(() => tagValues(bets, 'sport'), [bets])
+  const books = useMemo(() => tagValues(bets, 'book'), [bets])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return entries.filter((e) => {
-      if (result !== 'all' && kindOf(e.amount) !== result) return false
-      if (sport && e.sport !== sport) return false
-      if (book && e.book !== book) return false
-      if (q && !`${e.note} ${e.sport} ${e.book} ${e.betType} ${e.date}`.toLowerCase().includes(q)) return false
+    return bets.filter((b) => {
+      if (result !== 'all' && b.status !== result) return false
+      if (sport && b.sport !== sport) return false
+      if (book && b.book !== book) return false
+      if (q && !`${b.note} ${b.sport} ${b.book} ${b.betType} ${b.date}`.toLowerCase().includes(q)) return false
       return true
     })
-  }, [entries, query, result, sport, book])
+  }, [bets, query, result, sport, book])
 
   const sorted = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1
+    const byDate = (a: Bet, b: Bet): number => {
+      if (a.date !== b.date) return a.date < b.date ? -dir : dir
+      // Same day: keep bets in the order they were logged.
+      return a.createdAt < b.createdAt ? -dir : dir
+    }
     return [...filtered].sort((a, b) => {
-      if (sortKey === 'date') {
-        if (a.date !== b.date) return a.date < b.date ? -dir : dir
-        // Same day: keep sessions in the order they were logged.
-        return a.createdAt < b.createdAt ? -dir : dir
-      }
-      if (sortKey === 'stake') {
-        // Rows without a stake sort last in either direction — they're missing
-        // data, not the smallest bet.
-        if (a.stake === null || b.stake === null) {
-          if (a.stake === b.stake) return a.date < b.date ? -dir : dir
-          return a.stake === null ? 1 : -1
-        }
-        if (a.stake !== b.stake) return (a.stake - b.stake) * dir
-        return a.date < b.date ? -dir : dir
-      }
-      if (a.amount !== b.amount) return (a.amount - b.amount) * dir
-      return a.date < b.date ? -dir : dir
+      if (sortKey === 'date') return byDate(a, b)
+      const c =
+        sortKey === 'stake'
+          ? compareNullable(a.stake, b.stake, dir)
+          : sortKey === 'odds'
+            ? compareNullable(a.odds, b.odds, dir)
+            : compareNullable(a.amount, b.amount, dir)
+      return c !== 0 ? c : byDate(a, b)
     })
   }, [filtered, sortKey, sortDir])
 
@@ -119,18 +127,27 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
     setPage(0)
   }
 
+  const sortHeader = (key: SortKey, label: string, right = false) => (
+    <th className={right ? 'th-right' : undefined}>
+      <button type="button" className="th-sort" onClick={() => toggleSort(key)}>
+        {label}
+        {arrow(key)}
+      </button>
+    </th>
+  )
+
   return (
     <article className="card history-card">
       <header className="card-head">
         <h2>History</h2>
         <span className="card-note">
           {hasFilters
-            ? `${filtered.length} of ${entries.length} ${entries.length === 1 ? 'bet' : 'bets'}`
-            : `${entries.length} ${entries.length === 1 ? 'bet' : 'bets'}`}
+            ? `${filtered.length} of ${bets.length} ${bets.length === 1 ? 'bet' : 'bets'}`
+            : `${bets.length} ${bets.length === 1 ? 'bet' : 'bets'}`}
         </span>
       </header>
 
-      {entries.length === 0 ? (
+      {bets.length === 0 ? (
         <div className="empty-state">No bets logged yet. Hit “Log today” or click a day on the calendar.</div>
       ) : (
         <>
@@ -143,15 +160,13 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
               value={query}
               onChange={(e) => resetPage(setQuery)(e.target.value)}
             />
-            <select
-              aria-label="Filter by result"
-              value={result}
-              onChange={(e) => resetPage(setResult)(e.target.value as ResultFilter)}
-            >
+            <select aria-label="Filter by result" value={result} onChange={(e) => resetPage(setResult)(e.target.value as ResultFilter)}>
               <option value="all">All results</option>
-              <option value="win">Wins</option>
-              <option value="loss">Losses</option>
-              <option value="push">Pushes</option>
+              <option value="won">Won</option>
+              <option value="lost">Lost</option>
+              <option value="push">Push</option>
+              <option value="void">Void</option>
+              <option value="pending">Pending</option>
             </select>
             {sports.length > 0 && (
               <select aria-label="Filter by sport" value={sport} onChange={(e) => resetPage(setSport)(e.target.value)}>
@@ -188,45 +203,36 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
                 <table>
                   <thead>
                     <tr>
-                      <th>
-                        <button type="button" className="th-sort" onClick={() => toggleSort('date')}>
-                          Date{arrow('date')}
-                        </button>
-                      </th>
+                      {sortHeader('date', 'Date')}
                       <th>Result</th>
-                      <th className="th-right">
-                        <button type="button" className="th-sort" onClick={() => toggleSort('stake')}>
-                          Stake{arrow('stake')}
-                        </button>
-                      </th>
-                      <th className="th-right">
-                        <button type="button" className="th-sort" onClick={() => toggleSort('amount')}>
-                          Amount{arrow('amount')}
-                        </button>
-                      </th>
-                      <th className="th-right">ROI</th>
+                      {sortHeader('stake', 'Stake', true)}
+                      {sortHeader('odds', 'Odds', true)}
+                      {sortHeader('amount', 'Amount', true)}
+                      <th className="th-right">Return</th>
                       <th>Tags</th>
                       <th>Note</th>
                       <th className="th-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.map((e) => {
-                      const kind = kindOf(e.amount)
-                      const roi = e.stake !== null && e.stake > 0 ? (e.amount / e.stake) * 100 : null
-                      const tags = [e.sport, e.book, e.betType].filter(Boolean)
+                    {visible.map((b) => {
+                      const tone = toneOf(b.status)
+                      const decided = b.status === 'won' || b.status === 'lost'
+                      const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
+                      const tags = [b.sport, b.book, b.betType].filter(Boolean)
                       return (
-                        <tr key={e.id}>
-                          <td className="td-date">{humanDate(e.date)}</td>
+                        <tr key={b.id} className={b.status === 'pending' ? 'is-pending' : undefined}>
+                          <td className="td-date">{humanDate(b.date)}</td>
                           <td>
-                            <span className={`pill ${kind}`}>{KIND_LABEL[kind]}</span>
+                            <span className={`pill ${tone}`}>{KIND_LABEL[b.status]}</span>
                           </td>
-                          <td className="td-stake">
-                            {e.stake === null ? <span className="td-none">—</span> : fmtStake(e.stake)}
+                          <td className="td-stake">{b.stake === null ? <span className="td-none">—</span> : fmtStake(b.stake)}</td>
+                          <td className="td-stake">{b.odds === null ? <span className="td-none">—</span> : fmtOdds(b.odds)}</td>
+                          <td className={`td-amt ${tone}`}>
+                            {b.amount === null ? <span className="td-none">—</span> : fmtMoney(b.amount)}
                           </td>
-                          <td className={`td-amt ${kind}`}>{fmtMoney(e.amount)}</td>
-                          <td className={`td-roi ${roi === null ? '' : kindOf(roi)}`}>
-                            {roi === null ? <span className="td-none">—</span> : fmtPctSigned(roi)}
+                          <td className={`td-roi ${ret === null ? '' : ret > 0 ? 'win' : ret < 0 ? 'loss' : ''}`}>
+                            {ret === null ? <span className="td-none">—</span> : fmtPctSigned(ret)}
                           </td>
                           <td className="td-tags">
                             {tags.length === 0 ? (
@@ -239,27 +245,37 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
                               ))
                             )}
                           </td>
-                          <td className="td-note" title={e.note || undefined}>
-                            {e.note || <span className="td-none">—</span>}
+                          <td className="td-note" title={b.note || undefined}>
+                            {b.status === 'pending' ? (
+                              <span className="settle" role="group" aria-label={`Settle bet on ${b.date}`}>
+                                {(['won', 'lost', 'push', 'void'] as const).map((s) => (
+                                  <button
+                                    key={s}
+                                    type="button"
+                                    className={`settle-btn ${toneOf(s)}`}
+                                    title={`Mark as ${KIND_LABEL[s].toLowerCase()}`}
+                                    onClick={() => onSettle(b, s, suggestedAmount(s, b.stake, b.odds))}
+                                  >
+                                    {KIND_LABEL[s]}
+                                  </button>
+                                ))}
+                              </span>
+                            ) : (
+                              b.note || <span className="td-none">—</span>
+                            )}
                           </td>
                           <td className="td-actions">
-                            <button
-                              type="button"
-                              className="btn-icon"
-                              aria-label={`Edit ${e.date}`}
-                              title="Edit this day"
-                              onClick={() => onEdit(e.date)}
-                            >
+                            <button type="button" className="btn-icon" aria-label={`Edit ${b.date}`} title="Edit this day" onClick={() => onEdit(b.date)}>
                               <PencilIcon />
                             </button>
                             <button
                               type="button"
-                              className={`btn-icon danger ${confirming === e.id ? 'confirming' : ''}`}
-                              aria-label={`Delete bet on ${e.date}`}
-                              title={confirming === e.id ? 'Click again to confirm' : 'Delete'}
-                              onClick={() => handleDeleteClick(e.id)}
+                              className={`btn-icon danger ${confirming === b.id ? 'confirming' : ''}`}
+                              aria-label={`Delete bet on ${b.date}`}
+                              title={confirming === b.id ? 'Click again to confirm' : 'Delete'}
+                              onClick={() => handleDeleteClick(b.id)}
                             >
-                              {confirming === e.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
+                              {confirming === b.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
                             </button>
                           </td>
                         </tr>
@@ -271,13 +287,7 @@ export default function HistoryTable({ entries, onEdit, onDelete }: Props) {
 
               {pageCount > 1 && (
                 <footer className="pager">
-                  <button
-                    type="button"
-                    className="nav-btn"
-                    aria-label="Previous page"
-                    disabled={safePage === 0}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  >
+                  <button type="button" className="nav-btn" aria-label="Previous page" disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
                     <ChevronLeftIcon />
                   </button>
                   <span className="pager-label">

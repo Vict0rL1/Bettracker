@@ -1,13 +1,19 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import type { BetEntry, EntryInput } from '../../../shared/types'
+import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
-import { normalizeInput, type CleanEntry } from '../lib/validate'
+import { normalizeInput, type CleanBet } from '../lib/validate'
+
+// The table keeps its original name: renaming it is not an additive migration
+// and every policy and index refers to it. Everywhere else these are bets.
+const TABLE = 'entries'
 
 interface Row {
   id: string
   date: string
-  amount: number | string
+  amount: number | string | null
   stake?: number | string | null
+  odds?: number | string | null
+  status?: string | null
   note: string | null
   sport?: string | null
   book?: string | null
@@ -16,15 +22,22 @@ interface Row {
   updated_at: string
 }
 
-const TABLE = 'entries'
+const num = (v: number | string | null | undefined): number | null =>
+  v === null || v === undefined || v === '' ? null : Number(v)
 
 // PostgREST returns numeric columns as strings to preserve precision — coerce.
-function toEntry(row: Row): BetEntry {
+// A row from a database that hasn't had migration 003 has no status column:
+// it gets the status its amount implies, exactly as the migration will.
+function toBet(row: Row): Bet {
+  const amount = num(row.amount)
+  const status = isBetStatus(row.status) ? row.status : amount === null ? 'pending' : statusForAmount(amount)
   return {
     id: row.id,
     date: row.date,
-    amount: Number(row.amount),
-    stake: row.stake === null || row.stake === undefined ? null : Number(row.stake),
+    amount: status === 'pending' ? null : (amount ?? 0),
+    stake: num(row.stake),
+    odds: num(row.odds),
+    status,
     note: row.note ?? '',
     sport: row.sport ?? '',
     book: row.book ?? '',
@@ -34,12 +47,14 @@ function toEntry(row: Row): BetEntry {
   }
 }
 
-/** The column shape a clean entry writes to. */
-function toRowPayload(clean: CleanEntry): Record<string, unknown> {
+/** The column shape a clean bet writes to. */
+function toRowPayload(clean: CleanBet): Record<string, unknown> {
   return {
     date: clean.date,
     amount: clean.amount,
     stake: clean.stake,
+    odds: clean.odds,
+    status: clean.status,
     note: clean.note,
     sport: clean.sport,
     book: clean.book,
@@ -58,19 +73,18 @@ export function isNetworkError(err: unknown): boolean {
 
 /**
  * True when the backend rejected a column the app knows about but the database
- * doesn't have yet — i.e. the stake/tags migration hasn't been run. Callers use
- * this to tell the user exactly what to do instead of showing a raw PostgREST
- * error.
+ * doesn't have yet — i.e. a migration hasn't been run. Callers use this to tell
+ * the user exactly what to do instead of showing a raw PostgREST error.
  */
 export function isMissingColumnError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
-  return /column .*(stake|sport|book|bet_type).* does not exist|could not find the .*(stake|sport|book|bet_type).* column/i.test(
+  return /column .*(stake|sport|book|bet_type|odds|status).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status).* column/i.test(
     msg
   )
 }
 
 export const MIGRATION_HINT =
-  'Your database is missing the stake/tags columns. Run supabase/migrations/002_stake_and_tags.sql in your Supabase SQL editor.'
+  'Your database is behind the app. Run the files in supabase/migrations/ (002, then 003) in your Supabase SQL editor.'
 
 function describe(error: { message: string }): Error {
   const err = new Error(error.message)
@@ -85,21 +99,21 @@ async function currentUserId(): Promise<string> {
   return id
 }
 
-export async function getEntries(): Promise<BetEntry[]> {
+export async function getBets(): Promise<Bet[]> {
   const { data, error } = await supabase
     .from(TABLE)
     .select('*')
     .order('date', { ascending: true })
     .order('created_at', { ascending: true })
   if (error) throw describe(error)
-  return (data as Row[]).map(toEntry)
+  return (data as Row[]).map(toBet)
 }
 
 /**
- * Add one session. `id` is a client-generated UUID so an offline retry of the
- * same insert is recognized as a duplicate instead of creating a second row.
+ * Add one bet. `id` is a client-generated UUID so an offline retry of the same
+ * insert is recognized as a duplicate instead of creating a second row.
  */
-export async function addEntry(input: EntryInput, id?: string): Promise<BetEntry> {
+export async function addBet(input: BetInput, id?: string): Promise<Bet> {
   const clean = normalizeInput(input)
   const user_id = await currentUserId()
   const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}) }
@@ -108,39 +122,54 @@ export async function addEntry(input: EntryInput, id?: string): Promise<BetEntry
     if (error.code === '23505' && id) {
       // Already inserted by an earlier attempt whose response we never saw.
       const { data: existing } = await supabase.from(TABLE).select('*').eq('id', id).single()
-      if (existing) return toEntry(existing as Row)
+      if (existing) return toBet(existing as Row)
     }
     throw describe(error)
   }
-  return toEntry(data as Row)
+  return toBet(data as Row)
 }
 
-/** Edit one existing session by id. */
-export async function updateEntry(id: string, input: EntryInput): Promise<BetEntry> {
+/**
+ * Edit one bet — last write wins, by when the edit was made.
+ *
+ * Two devices can edit the same bet offline. Each edit carries `editedAt`, the
+ * moment the user made it, and it is written as the row's `updated_at`. The
+ * update only applies if the row's `updated_at` is not newer: if another
+ * device's later edit already landed, this one is refused (no row comes back),
+ * the caller drops it, and the refresh that follows shows the winning version.
+ * A retry of the same edit after a lost response still applies, because its
+ * own timestamp satisfies the check. Device clocks are trusted; a device with
+ * a clock far in the future would win every conflict, which is the accepted
+ * cost of needing no server-side logic.
+ *
+ * Returns null when the edit was refused or the row no longer exists.
+ */
+export async function updateBet(id: string, input: BetInput, editedAt: string): Promise<Bet | null> {
   const clean = normalizeInput(input)
   const { data, error } = await supabase
     .from(TABLE)
-    .update({ ...toRowPayload(clean), updated_at: new Date().toISOString() })
+    .update({ ...toRowPayload(clean), updated_at: editedAt })
     .eq('id', id)
+    .lte('updated_at', editedAt)
     .select()
-    .single()
+    .maybeSingle()
   if (error) throw describe(error)
-  return toEntry(data as Row)
+  return data ? toBet(data as Row) : null
 }
 
-/** Delete one session by id. */
-export async function deleteEntry(id: string): Promise<boolean> {
+/** Delete one bet by id. */
+export async function deleteBet(id: string): Promise<boolean> {
   const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
   if (error) throw describe(error)
   return (count ?? 0) > 0
 }
 
 /**
- * Insert many entries at once (CSV import). Rows are sent in chunks so a large
+ * Insert many bets at once (CSV import). Rows are sent in chunks so a large
  * file doesn't hit request-size limits, and ids are client-generated so a
  * partially-applied import can be re-run without duplicating rows.
  */
-export async function addEntries(inputs: readonly { id: string; input: EntryInput }[]): Promise<number> {
+export async function addBets(inputs: readonly { id: string; input: BetInput }[]): Promise<number> {
   if (inputs.length === 0) return 0
   const user_id = await currentUserId()
   const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)) }))
@@ -161,7 +190,7 @@ export async function addEntries(inputs: readonly { id: string; input: EntryInpu
  * Live-update hook: fires `onChange` whenever this user's rows change on any
  * device. Returns an unsubscribe function.
  */
-export function subscribeToEntries(userId: string, onChange: () => void): () => void {
+export function subscribeToBets(userId: string, onChange: () => void): () => void {
   const channel: RealtimeChannel = supabase
     .channel('entries-sync')
     .on(

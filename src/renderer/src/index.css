@@ -1241,7 +1241,7 @@ tbody tr:hover {
   padding: 9px 11px;
 }
 
-/* ---------- day modal (multi-session) ---------- */
+/* ---------- day modal (several bets per day) ---------- */
 .day-modal {
   width: 580px;
   gap: 14px;
@@ -1288,7 +1288,7 @@ tbody tr:hover {
   color: var(--text-2);
 }
 
-.session-list {
+.bet-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1299,7 +1299,7 @@ tbody tr:hover {
   overflow-y: auto;
 }
 
-.session {
+.bet-item {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1309,32 +1309,32 @@ tbody tr:hover {
   border: 1px solid transparent;
 }
 
-.session.editing {
+.bet-item.editing {
   border-color: var(--border-strong);
   background: var(--tint-2);
 }
 
-.session-amt {
+.bet-amt {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   min-width: 84px;
 }
 
-.session-amt.win {
+.bet-amt.win {
   color: var(--green);
 }
 
-.session-amt.loss {
+.bet-amt.loss {
   color: var(--red);
 }
 
-.session-amt.push {
+.bet-amt.push {
   color: var(--push);
   font-size: 12px;
   letter-spacing: 0.06em;
 }
 
-.session-note {
+.bet-note {
   flex: 1;
   min-width: 0;
   font-size: 13px;
@@ -1344,13 +1344,13 @@ tbody tr:hover {
   white-space: nowrap;
 }
 
-.session-actions {
+.bet-actions {
   display: flex;
   gap: 2px;
   flex-shrink: 0;
 }
 
-.session-form {
+.bet-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1358,7 +1358,7 @@ tbody tr:hover {
   border-top: 1px solid var(--border);
 }
 
-.session-form-head {
+.bet-form-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1369,7 +1369,7 @@ tbody tr:hover {
   color: var(--text-2);
 }
 
-.session-add {
+.bet-add {
   flex-shrink: 0;
   padding: 9px 14px;
 }
@@ -1780,7 +1780,7 @@ tbody tr:hover {
 }
 
 /* ---------- day modal form ---------- */
-.session-body {
+.bet-body {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1788,21 +1788,21 @@ tbody tr:hover {
   gap: 3px;
 }
 
-.session-meta {
+.bet-meta {
   display: flex;
   align-items: center;
   gap: 5px;
   flex-wrap: wrap;
 }
 
-.session-stake {
+.bet-stake {
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.session-grid {
+.bet-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -1863,28 +1863,28 @@ tbody tr:hover {
   font-weight: 600;
 }
 
-.session-submit {
+.bet-submit {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.session-submit .hint {
+.bet-submit .hint {
   margin: 0;
 }
 
 @media (max-width: 640px) {
-  .session-grid {
+  .bet-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .session-submit {
+  .bet-submit {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .session-submit .session-add {
+  .bet-submit .bet-add {
     width: 100%;
     justify-content: center;
   }
@@ -1892,4 +1892,143 @@ tbody tr:hover {
   .bd-list {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---------- bet statuses: pending and void ---------- */
+/* Pending is amber: not a result, a bet still in flight. Void reads as push —
+   the stake came back — but dimmer, since it's out of the record entirely. */
+.seg-btn.pending.active {
+  background: var(--amber-dim);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.seg-btn.void.active {
+  background: var(--push-dim);
+  border-color: var(--push);
+  color: var(--text-2);
+}
+
+.pill.pending {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+.pill.void {
+  background: var(--push-dim);
+  color: var(--text-3);
+}
+
+.bet-amt.pending {
+  color: var(--amber);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.bet-amt.void {
+  color: var(--text-3);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.td-amt.pending,
+.td-amt.void {
+  color: var(--text-3);
+}
+
+tr.is-pending td {
+  background: var(--amber-dim);
+}
+
+.cal-cell.pending {
+  background: var(--amber-dim);
+  border-color: var(--amber-dim);
+}
+
+.cal-cell.pending .cal-amt {
+  color: var(--amber);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.cal-dot {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.cal-cell {
+  position: relative;
+}
+
+.lg-swatch.pending {
+  background: var(--amber);
+  opacity: 0.8;
+}
+
+/* One-tap settlement for a pending bet, in the day dialog and the history. */
+.settle {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.settle-btn {
+  border: 1px solid var(--border);
+  background: var(--tint-1);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.settle-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.settle-btn.win:hover:not(:disabled) {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-dim-2);
+}
+
+.settle-btn.loss:hover:not(:disabled) {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: var(--red-dim-2);
+}
+
+.settle-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stat-chips {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip-warn {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-color: transparent;
+}
+
+.bonus {
+  color: var(--text-2);
 }

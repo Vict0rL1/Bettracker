@@ -1,12 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import type { BetEntry, EntryInput } from '../../../shared/types'
+import type { Bet, BetInput, BetStatus } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
-import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
+import { fmtMoney, fmtOdds, fmtPctSigned, fmtStake } from '../lib/format'
 import { round2, total as sumTotal } from '../lib/stats'
-import { MAX_AMOUNT } from '../lib/validate'
+import { MAX_AMOUNT, MAX_ODDS, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
-
-type Kind = 'win' | 'loss' | 'push'
 
 export interface TagSuggestions {
   sport: string[]
@@ -16,24 +14,40 @@ export interface TagSuggestions {
 
 interface Props {
   date: string
-  sessions: BetEntry[]
+  bets: Bet[]
   suggestions: TagSuggestions
-  onAdd: (input: EntryInput) => Promise<void>
-  onUpdate: (id: string, input: EntryInput) => Promise<void>
+  onAdd: (input: BetInput) => Promise<void>
+  onUpdate: (id: string, input: BetInput) => Promise<void>
   onDelete: (id: string) => Promise<void>
   onClose: () => void
 }
 
-const kindOf = (amount: number): Kind => (amount > 0 ? 'win' : amount < 0 ? 'loss' : 'push')
+const STATUSES: readonly BetStatus[] = ['won', 'lost', 'push', 'void', 'pending']
+const LABEL: Record<BetStatus, string> = { won: 'WON', lost: 'LOST', push: 'PUSH', void: 'VOID', pending: 'PENDING' }
+/** CSS tone for a status (the stylesheet's older names, kept for the calendar's sake). */
+export const toneOf = (s: BetStatus): string => (s === 'won' ? 'win' : s === 'lost' ? 'loss' : s)
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
+const toInput = (b: Bet): BetInput => ({
+  date: b.date,
+  amount: b.amount,
+  stake: b.stake,
+  odds: b.odds,
+  status: b.status,
+  note: b.note,
+  sport: b.sport,
+  book: b.book,
+  betType: b.betType
+})
+
+export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [kind, setKind] = useState<Kind>('win')
+  const [status, setStatus] = useState<BetStatus>('won')
   const [amountStr, setAmountStr] = useState('')
   const [stakeStr, setStakeStr] = useState('')
+  const [oddsStr, setOddsStr] = useState('')
   const [note, setNote] = useState('')
   const [sport, setSport] = useState('')
   const [book, setBook] = useState('')
@@ -42,10 +56,13 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const amountRef = useRef<HTMLInputElement>(null)
+  const stakeRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
-  // A loss almost always costs exactly the stake, so we mirror it — until the
-  // user types their own figure, which is remembered for the rest of the entry.
+  // Once the user types their own result we stop suggesting one from the stake
+  // and odds, for the rest of this entry.
   const amountEdited = useRef(false)
+  // Legacy bets never recorded a stake; editing one shouldn't force it.
+  const [stakeOptional, setStakeOptional] = useState(false)
   const titleId = useId()
   const listId = useId()
 
@@ -85,59 +102,92 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const dayTotal = sumTotal(sessions)
+  const dayTotal = sumTotal(bets)
+  const pendingHere = bets.filter((b) => b.status === 'pending').length
+
+  const parsedStake = stakeStr.trim() === '' ? null : parseFloat(stakeStr)
+  const parsedOdds = oddsStr.trim() === '' ? null : parseFloat(oddsStr)
+
+  /** Put the result the stake and odds imply into the amount box, unless the user has typed one. */
+  const suggest = (s: BetStatus, stake: number | null, odds: number | null): void => {
+    if (amountEdited.current) return
+    const hint = suggestedAmount(s, stake, odds)
+    setAmountStr(hint === null || hint === 0 ? '' : String(Math.abs(hint)))
+  }
 
   const resetForm = (): void => {
     setEditingId(null)
-    setKind('win')
+    setStatus('won')
     setAmountStr('')
     setStakeStr('')
+    setOddsStr('')
     setNote('')
     setSport('')
     setBook('')
     setBetType('')
+    setStakeOptional(false)
     amountEdited.current = false
   }
 
-  const startEdit = (s: BetEntry): void => {
-    setEditingId(s.id)
-    setKind(kindOf(s.amount))
-    setAmountStr(s.amount === 0 ? '' : String(Math.abs(s.amount)))
-    setStakeStr(s.stake === null ? '' : String(s.stake))
-    setNote(s.note)
-    setSport(s.sport)
-    setBook(s.book)
-    setBetType(s.betType)
-    amountEdited.current = true
-    amountRef.current?.focus()
+  const startEdit = (b: Bet, as: BetStatus = b.status): void => {
+    setEditingId(b.id)
+    setStatus(as)
+    setStakeStr(b.stake === null ? '' : String(b.stake))
+    setOddsStr(b.odds === null ? '' : String(b.odds))
+    setNote(b.note)
+    setSport(b.sport)
+    setBook(b.book)
+    setBetType(b.betType)
+    setStakeOptional(b.stake === null)
+    if (as === b.status && b.amount !== null) {
+      amountEdited.current = true
+      setAmountStr(b.amount === 0 ? '' : String(Math.abs(b.amount)))
+    } else {
+      // Settling from the list: the result is still to be worked out.
+      amountEdited.current = false
+      const hint = suggestedAmount(as, b.stake, b.odds)
+      setAmountStr(hint === null || hint === 0 ? '' : String(Math.abs(hint)))
+    }
+    ;(as === 'won' || as === 'lost' ? amountRef : stakeRef).current?.focus()
   }
 
-  const handleStakeChange = (value: string): void => {
+  const handleStatus = (next: BetStatus): void => {
+    setStatus(next)
+    suggest(next, parsedStake, parsedOdds)
+  }
+  const handleStake = (value: string): void => {
     setStakeStr(value)
-    if (kind === 'loss' && !amountEdited.current) setAmountStr(value)
+    suggest(status, value.trim() === '' ? null : parseFloat(value), parsedOdds)
   }
-
-  const handleKindChange = (next: Kind): void => {
-    setKind(next)
-    if (next === 'loss' && !amountEdited.current && stakeStr) setAmountStr(stakeStr)
+  const handleOdds = (value: string): void => {
+    setOddsStr(value)
+    suggest(status, parsedStake, value.trim() === '' ? null : parseFloat(value))
   }
 
   const amount = parseFloat(amountStr)
-  const stake = stakeStr.trim() === '' ? null : parseFloat(stakeStr)
-  const stakeValid = stake === null || (Number.isFinite(stake) && stake >= 0 && stake <= MAX_AMOUNT)
-  const amountValid = kind === 'push' || (Number.isFinite(amount) && amount > 0 && amount <= MAX_AMOUNT)
-  const canSave = amountValid && stakeValid && !busy
-  const signedAmount = kind === 'push' ? 0 : kind === 'win' ? round2(amount) : -round2(amount)
+  const needsAmount = status === 'won' || status === 'lost'
+  const amountValid = !needsAmount || (Number.isFinite(amount) && amount > 0 && amount <= MAX_AMOUNT)
+  const stakeValid =
+    parsedStake === null
+      ? stakeOptional
+      : Number.isFinite(parsedStake) && parsedStake >= 0 && parsedStake <= MAX_AMOUNT
+  const oddsValid = parsedOdds === null || (Number.isFinite(parsedOdds) && parsedOdds > 1 && parsedOdds <= MAX_ODDS)
+  const canSave = amountValid && stakeValid && oddsValid && !busy
+
+  const signedAmount: number | null =
+    status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!canSave) return
     setBusy(true)
     try {
-      const input: EntryInput = {
+      const input: BetInput = {
         date,
         amount: signedAmount,
-        stake,
+        stake: parsedStake,
+        odds: parsedOdds,
+        status,
         note: note.trim(),
         sport,
         book,
@@ -146,7 +196,22 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
       if (editingId) await onUpdate(editingId, input)
       else await onAdd(input)
       resetForm()
-      amountRef.current?.focus()
+      stakeRef.current?.focus()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** One tap from the list. Falls back to the form when the result can't be worked out. */
+  const quickSettle = async (b: Bet, as: BetStatus): Promise<void> => {
+    const hint = suggestedAmount(as, b.stake, b.odds)
+    if (hint === null) {
+      startEdit(b, as)
+      return
+    }
+    setBusy(true)
+    try {
+      await onUpdate(b.id, { ...toInput(b), status: as, amount: hint })
     } finally {
       setBusy(false)
     }
@@ -170,7 +235,19 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
     }
   }
 
-  const amountLabel = kind === 'win' ? 'Profit' : kind === 'loss' ? 'Amount lost' : 'Result'
+  const amountLabel = status === 'won' ? 'Profit' : status === 'lost' ? 'Amount lost' : 'Result'
+  const hint =
+    status === 'won'
+      ? parsedOdds === null
+        ? 'Profit only — what you got back beyond the stake. Add the odds and it fills in.'
+        : 'Profit only — filled in from stake × (odds − 1). Edit it if the book paid differently.'
+      : status === 'lost'
+        ? 'Defaults to the stake, since that is what a loss costs.'
+        : status === 'push'
+          ? 'A push returns the stake: counts as $0 and stays out of ROI.'
+          : status === 'void'
+            ? 'Cancelled by the book: stake returned, out of the record entirely.'
+            : 'No result yet. It stays out of P/L, ROI and streaks until you settle it.'
 
   return (
     <div
@@ -184,9 +261,10 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
           <div>
             <h2 id={titleId}>{humanDate(date)}</h2>
             <span className="day-sub">
-              {sessions.length === 0
-                ? 'No sessions yet'
-                : `${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'}`}
+              {bets.length === 0
+                ? 'No bets yet'
+                : `${bets.length} ${bets.length === 1 ? 'bet' : 'bets'}` +
+                  (pendingHere > 0 ? ` · ${pendingHere} pending` : '')}
             </span>
           </div>
           <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
@@ -194,27 +272,32 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
           </button>
         </header>
 
-        {sessions.length > 0 && (
+        {bets.length > 0 && (
           <>
             <div className="day-total-row">
               <span className="day-total-label">Day total</span>
-              <span className={`day-total ${kindOf(dayTotal)}`}>{fmtMoney(dayTotal)}</span>
+              <span className={`day-total ${dayTotal > 0 ? 'win' : dayTotal < 0 ? 'loss' : 'push'}`}>
+                {fmtMoney(dayTotal)}
+              </span>
             </div>
 
-            <ul className="session-list">
-              {sessions.map((s) => {
-                const k = kindOf(s.amount)
-                const tags = [s.sport, s.book, s.betType].filter(Boolean)
+            <ul className="bet-list">
+              {bets.map((b) => {
+                const tags = [b.sport, b.book, b.betType].filter(Boolean)
+                const ret = b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
                 return (
-                  <li key={s.id} className={`session ${editingId === s.id ? 'editing' : ''}`}>
-                    <span className={`session-amt ${k}`}>{s.amount === 0 ? 'PUSH' : fmtMoney(s.amount)}</span>
-                    <span className="session-body">
-                      <span className="session-note">{s.note || <span className="td-none">no note</span>}</span>
-                      <span className="session-meta">
-                        {s.stake !== null && (
-                          <span className="session-stake">
-                            {fmtStake(s.stake)} risked
-                            {s.stake > 0 && ` · ${fmtPctSigned((s.amount / s.stake) * 100)}`}
+                  <li key={b.id} className={`bet-item ${editingId === b.id ? 'editing' : ''}`}>
+                    <span className={`bet-amt ${toneOf(b.status)}`}>
+                      {b.status === 'pending' || b.amount === 0 ? LABEL[b.status] : fmtMoney(b.amount ?? 0)}
+                    </span>
+                    <span className="bet-body">
+                      <span className="bet-note">{b.note || <span className="td-none">no note</span>}</span>
+                      <span className="bet-meta">
+                        {b.stake !== null && (
+                          <span className="bet-stake">
+                            {fmtStake(b.stake)} {b.status === 'pending' ? 'riding' : 'risked'}
+                            {b.odds !== null && ` @ ${fmtOdds(b.odds)}`}
+                            {ret !== null && (b.status === 'won' || b.status === 'lost') && ` · ${fmtPctSigned(ret)}`}
                           </span>
                         )}
                         {tags.map((t) => (
@@ -223,25 +306,34 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
                           </span>
                         ))}
                       </span>
+                      {b.status === 'pending' && (
+                        <span className="settle" role="group" aria-label="Settle this bet">
+                          {(['won', 'lost', 'push', 'void'] as const).map((s) => (
+                            <button
+                              key={s}
+                              type="button"
+                              className={`settle-btn ${toneOf(s)}`}
+                              disabled={busy}
+                              onClick={() => quickSettle(b, s)}
+                            >
+                              {LABEL[s]}
+                            </button>
+                          ))}
+                        </span>
+                      )}
                     </span>
-                    <span className="session-actions">
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        aria-label="Edit session"
-                        title="Edit"
-                        onClick={() => startEdit(s)}
-                      >
+                    <span className="bet-actions">
+                      <button type="button" className="btn-icon" aria-label="Edit bet" title="Edit" onClick={() => startEdit(b)}>
                         <PencilIcon />
                       </button>
                       <button
                         type="button"
-                        className={`btn-icon danger ${confirmId === s.id ? 'confirming' : ''}`}
-                        aria-label="Delete session"
-                        title={confirmId === s.id ? 'Click again to confirm' : 'Delete'}
-                        onClick={() => handleDelete(s.id)}
+                        className={`btn-icon danger ${confirmId === b.id ? 'confirming' : ''}`}
+                        aria-label="Delete bet"
+                        title={confirmId === b.id ? 'Click again to confirm' : 'Delete'}
+                        onClick={() => handleDelete(b.id)}
                       >
-                        {confirmId === s.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
+                        {confirmId === b.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
                       </button>
                     </span>
                   </li>
@@ -251,9 +343,9 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
           </>
         )}
 
-        <form className="session-form" onSubmit={submit}>
-          <div className="session-form-head">
-            <span>{editingId ? 'Edit session' : 'Add a session'}</span>
+        <form className="bet-form" onSubmit={submit}>
+          <div className="bet-form-head">
+            <span>{editingId ? 'Edit bet' : 'Add a bet'}</span>
             {editingId && (
               <button type="button" className="auth-toggle" onClick={resetForm}>
                 Cancel edit
@@ -261,42 +353,60 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
             )}
           </div>
 
-          <div className="seg">
-            {(['win', 'loss', 'push'] as const).map((k) => (
+          <div className="seg" role="group" aria-label="Result">
+            {STATUSES.map((s) => (
               <button
                 type="button"
-                key={k}
-                className={`seg-btn ${k} ${kind === k ? 'active' : ''}`}
-                aria-pressed={kind === k}
-                onClick={() => handleKindChange(k)}
+                key={s}
+                className={`seg-btn ${toneOf(s)} ${status === s ? 'active' : ''}`}
+                aria-pressed={status === s}
+                onClick={() => handleStatus(s)}
               >
-                {k.toUpperCase()}
+                {LABEL[s]}
               </button>
             ))}
           </div>
 
-          <div className="session-grid">
+          <div className="bet-grid">
             <label className="field">
               <span className="field-label">
-                Stake <span className="field-opt">optional</span>
+                Stake {stakeOptional && <span className="field-opt">not recorded</span>}
               </span>
               <div className="amount-wrap">
                 <span className="amount-cur">$</span>
                 <input
+                  ref={stakeRef}
                   type="number"
                   inputMode="decimal"
                   min="0"
                   step="0.01"
+                  required={!stakeOptional}
                   placeholder="0.00"
                   value={stakeStr}
-                  onChange={(e) => handleStakeChange(e.target.value)}
+                  onChange={(e) => handleStake(e.target.value)}
+                  autoFocus
                 />
               </div>
             </label>
 
             <label className="field">
+              <span className="field-label">
+                Odds <span className="field-opt">decimal, optional</span>
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="1.01"
+                step="0.01"
+                placeholder="1.91"
+                value={oddsStr}
+                onChange={(e) => handleOdds(e.target.value)}
+              />
+            </label>
+
+            <label className="field">
               <span className="field-label">{amountLabel}</span>
-              <div className={`amount-wrap ${kind === 'push' ? 'disabled' : ''}`}>
+              <div className={`amount-wrap ${needsAmount ? '' : 'disabled'}`}>
                 <span className="amount-cur">$</span>
                 <input
                   ref={amountRef}
@@ -304,14 +414,13 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
                   inputMode="decimal"
                   min="0.01"
                   step="0.01"
-                  placeholder={kind === 'push' ? 'break-even' : '0.00'}
-                  value={kind === 'push' ? '' : amountStr}
-                  disabled={kind === 'push'}
+                  placeholder={status === 'pending' ? 'not yet' : needsAmount ? '0.00' : '0.00 (stake returned)'}
+                  value={needsAmount ? amountStr : ''}
+                  disabled={!needsAmount}
                   onChange={(e) => {
                     amountEdited.current = true
                     setAmountStr(e.target.value)
                   }}
-                  autoFocus
                 />
               </div>
             </label>
@@ -320,55 +429,28 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
               <span className="field-label">
                 Sport <span className="field-opt">optional</span>
               </span>
-              <input
-                type="text"
-                list={`${listId}-sport`}
-                maxLength={40}
-                placeholder="NBA"
-                value={sport}
-                onChange={(e) => setSport(e.target.value)}
-              />
+              <input type="text" list={`${listId}-sport`} maxLength={40} placeholder="NBA" value={sport} onChange={(e) => setSport(e.target.value)} />
             </label>
 
             <label className="field">
               <span className="field-label">
                 Book <span className="field-opt">optional</span>
               </span>
-              <input
-                type="text"
-                list={`${listId}-book`}
-                maxLength={40}
-                placeholder="DraftKings"
-                value={book}
-                onChange={(e) => setBook(e.target.value)}
-              />
+              <input type="text" list={`${listId}-book`} maxLength={40} placeholder="DraftKings" value={book} onChange={(e) => setBook(e.target.value)} />
             </label>
 
             <label className="field">
               <span className="field-label">
                 Bet type <span className="field-opt">optional</span>
               </span>
-              <input
-                type="text"
-                list={`${listId}-type`}
-                maxLength={40}
-                placeholder="Parlay"
-                value={betType}
-                onChange={(e) => setBetType(e.target.value)}
-              />
+              <input type="text" list={`${listId}-type`} maxLength={40} placeholder="Parlay" value={betType} onChange={(e) => setBetType(e.target.value)} />
             </label>
 
             <label className="field field-wide">
               <span className="field-label">
                 Note <span className="field-opt">optional</span>
               </span>
-              <input
-                type="text"
-                maxLength={200}
-                placeholder="e.g. morning parlay"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
+              <input type="text" maxLength={200} placeholder="e.g. morning parlay" value={note} onChange={(e) => setNote(e.target.value)} />
             </label>
           </div>
 
@@ -388,14 +470,9 @@ export default function DayModal({ date, sessions, suggestions, onAdd, onUpdate,
             ))}
           </datalist>
 
-          <div className="session-submit">
-            <p className="hint">
-              {kind === 'win' && 'Profit only — what you got back beyond the stake.'}
-              {kind === 'loss' && 'Subtracted from the day total. Defaults to your stake.'}
-              {kind === 'push' && 'Push counts as $0 toward the day total.'}
-              {stake !== null && stakeValid && ' Stake feeds ROI.'}
-            </p>
-            <button type="submit" className="btn btn-primary session-add" disabled={!canSave}>
+          <div className="bet-submit">
+            <p className="hint">{hint}</p>
+            <button type="submit" className="btn btn-primary bet-add" disabled={!canSave}>
               {editingId ? 'Save' : (<><PlusIcon /> Add</>)}
             </button>
           </div>

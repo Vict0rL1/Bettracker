@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_AMOUNT, isValidDate, normalizeInput } from './validate'
+import { MAX_AMOUNT, MAX_ODDS, isValidDate, normalizeInput, suggestedAmount } from './validate'
 
 describe('isValidDate', () => {
   it('accepts a real calendar date', () => {
@@ -39,7 +39,7 @@ describe('normalizeInput', () => {
   })
 
   it('rejects a negative stake', () => {
-    expect(() => normalizeInput({ ...base, stake: -5 })).toThrow(/risked/i)
+    expect(() => normalizeInput({ ...base, stake: -5 })).toThrow(/negative/i)
   })
 
   it('rejects out-of-range money', () => {
@@ -72,5 +72,79 @@ describe('normalizeInput', () => {
 
   it('defaults every tag to an empty string', () => {
     expect(normalizeInput(base)).toMatchObject({ note: '', sport: '', book: '', betType: '' })
+  })
+
+  describe('status', () => {
+    it('follows the sign of the amount when not given — the pre-status rule', () => {
+      expect(normalizeInput({ date: '2026-05-04', amount: 25 }).status).toBe('won')
+      expect(normalizeInput({ date: '2026-05-04', amount: -25 }).status).toBe('lost')
+      expect(normalizeInput({ date: '2026-05-04', amount: 0 }).status).toBe('push')
+    })
+
+    it('is pending when there is no amount at all', () => {
+      const clean = normalizeInput({ date: '2026-05-04' })
+      expect(clean.status).toBe('pending')
+      expect(clean.amount).toBeNull()
+    })
+
+    it('drops the amount of a pending bet, whatever was passed', () => {
+      expect(normalizeInput({ date: '2026-05-04', amount: 40, status: 'pending' }).amount).toBeNull()
+    })
+
+    it('insists a won bet nets positive and a lost bet negative', () => {
+      expect(() => normalizeInput({ date: '2026-05-04', amount: -1, status: 'won' })).toThrow(/positive/i)
+      expect(() => normalizeInput({ date: '2026-05-04', amount: 0, status: 'won' })).toThrow(/positive/i)
+      expect(() => normalizeInput({ date: '2026-05-04', amount: 5, status: 'lost' })).toThrow(/negative/i)
+      expect(() => normalizeInput({ date: '2026-05-04', status: 'won' })).toThrow(/needs its result/i)
+    })
+
+    it('settles a push or void at exactly 0', () => {
+      expect(normalizeInput({ date: '2026-05-04', status: 'push' }).amount).toBe(0)
+      expect(normalizeInput({ date: '2026-05-04', status: 'void', amount: 0 }).amount).toBe(0)
+      expect(() => normalizeInput({ date: '2026-05-04', status: 'push', amount: 3 })).toThrow(/returns the stake/i)
+    })
+
+    it('rejects an unknown status', () => {
+      expect(() => normalizeInput({ ...base, status: 'cashout' as never })).toThrow(/not a bet status/i)
+    })
+  })
+
+  describe('odds', () => {
+    it('keeps decimal odds to three places and null when absent', () => {
+      expect(normalizeInput({ ...base, odds: 1.9091 }).odds).toBe(1.909)
+      expect(normalizeInput(base).odds).toBeNull()
+      expect(normalizeInput({ ...base, odds: null }).odds).toBeNull()
+    })
+
+    it('rejects a price that is not above 1', () => {
+      expect(() => normalizeInput({ ...base, odds: 1 })).toThrow(/greater than 1/i)
+      expect(() => normalizeInput({ ...base, odds: 0.5 })).toThrow(/greater than 1/i)
+      expect(() => normalizeInput({ ...base, odds: -2 })).toThrow(/greater than 1/i)
+    })
+
+    it('rejects a typo-sized price', () => {
+      expect(() => normalizeInput({ ...base, odds: MAX_ODDS + 1 })).toThrow(/out of range/i)
+      expect(() => normalizeInput({ ...base, odds: Number.NaN })).toThrow(/finite/i)
+    })
+  })
+})
+
+describe('suggestedAmount', () => {
+  it('works a win out from stake and odds, a loss from the stake alone', () => {
+    expect(suggestedAmount('won', 100, 1.91)).toBe(91)
+    expect(suggestedAmount('won', 50, 2.5)).toBe(75)
+    expect(suggestedAmount('lost', 100, null)).toBe(-100)
+  })
+
+  it('returns the stake on a push or void', () => {
+    expect(suggestedAmount('push', 100, 1.91)).toBe(0)
+    expect(suggestedAmount('void', null, null)).toBe(0)
+  })
+
+  it('has nothing to suggest without the inputs it needs', () => {
+    expect(suggestedAmount('won', 100, null)).toBeNull()
+    expect(suggestedAmount('won', null, 1.91)).toBeNull()
+    expect(suggestedAmount('lost', null, 1.91)).toBeNull()
+    expect(suggestedAmount('pending', 100, 1.91)).toBeNull()
   })
 })

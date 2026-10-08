@@ -1,9 +1,11 @@
-import type { EntryInput } from '../../../shared/types'
+import { isBetStatus, statusForAmount, type BetInput, type BetStatus } from '../../../shared/types'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-/** Single source of truth for the amount ceiling — the form and the writer agree. */
+/** Single source of truth for the money ceiling — the form and the writer agree. */
 export const MAX_AMOUNT = 100_000_000
+/** Decimal odds above this are a typo, not a price. */
+export const MAX_ODDS = 1000
 export const MAX_NOTE_LENGTH = 500
 export const MAX_TAG_LENGTH = 40
 
@@ -21,51 +23,120 @@ function cleanTag(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH)
 }
 
-export interface CleanEntry {
+function cleanMoney(value: number | null | undefined, what: string, min: number): number | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
+  if (value < min) throw new Error(`${what} cannot be ${min === 0 ? 'negative' : `below ${min}`}`)
+  if (value > MAX_AMOUNT) throw new Error(`${what} is out of range`)
+  return round2(value)
+}
+
+export interface CleanBet {
   date: string
-  amount: number
+  amount: number | null
   stake: number | null
+  odds: number | null
+  status: BetStatus
   note: string
   sport: string
   book: string
   betType: string
 }
 
-/** Validate and clean a raw entry before it is written to the backend. Throws on bad input. */
-export function normalizeInput(input: EntryInput): CleanEntry {
+/**
+ * Validate and clean a raw bet before it is written anywhere. Throws on bad
+ * input, so nothing half-valid reaches the outbox or the backend.
+ *
+ * Status and amount are checked against each other: a pending bet has no
+ * amount, a won bet nets positive, a lost one negative, and a push or void is
+ * exactly 0. The same rule the 003 migration used to backfill status.
+ */
+export function normalizeInput(input: BetInput): CleanBet {
   if (!isValidDate(input.date)) {
     throw new Error(`"${input.date}" is not a valid calendar date`)
   }
-  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) {
+
+  if (input.status !== undefined && !isBetStatus(input.status)) {
+    throw new Error(`"${String(input.status)}" is not a bet status`)
+  }
+
+  const rawAmount = input.amount === undefined ? null : input.amount
+  if (rawAmount !== null && (typeof rawAmount !== 'number' || !Number.isFinite(rawAmount))) {
     throw new Error('Amount must be a finite number')
   }
-  if (Math.abs(input.amount) > MAX_AMOUNT) {
+  if (rawAmount !== null && Math.abs(rawAmount) > MAX_AMOUNT) {
     throw new Error('Amount is out of range')
+  }
+
+  // No status given: it is whatever the result says, which is what every bet
+  // logged before statuses existed relies on.
+  let status: BetStatus
+  if (input.status !== undefined) status = input.status
+  else if (rawAmount === null) status = 'pending'
+  else status = statusForAmount(rawAmount)
+
+  let amount: number | null
+  switch (status) {
+    case 'pending':
+      amount = null
+      break
+    case 'won':
+      if (rawAmount === null) throw new Error('A won bet needs its result')
+      if (rawAmount <= 0) throw new Error('A won bet nets a positive amount')
+      amount = round2(rawAmount)
+      break
+    case 'lost':
+      if (rawAmount === null) throw new Error('A lost bet needs its result')
+      if (rawAmount >= 0) throw new Error('A lost bet nets a negative amount')
+      amount = round2(rawAmount)
+      break
+    case 'push':
+    case 'void':
+      if (rawAmount !== null && rawAmount !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
+      amount = 0
+      break
   }
 
   // Undefined/null both mean "not recorded" and stay null — only a real number
   // becomes a stake, so ROI is never computed against a value nobody entered.
-  let stake: number | null = null
-  if (input.stake !== undefined && input.stake !== null) {
-    if (typeof input.stake !== 'number' || !Number.isFinite(input.stake)) {
-      throw new Error('Stake must be a finite number')
-    }
-    if (input.stake < 0) {
-      throw new Error('Stake cannot be negative — it is the amount you risked')
-    }
-    if (input.stake > MAX_AMOUNT) {
-      throw new Error('Stake is out of range')
-    }
-    stake = round2(input.stake)
+  const stake = cleanMoney(input.stake, 'Stake', 0)
+
+  let odds: number | null = null
+  if (input.odds !== undefined && input.odds !== null) {
+    if (typeof input.odds !== 'number' || !Number.isFinite(input.odds)) throw new Error('Odds must be a finite number')
+    if (input.odds <= 1) throw new Error('Decimal odds must be greater than 1')
+    if (input.odds > MAX_ODDS) throw new Error('Odds are out of range')
+    odds = Math.round(input.odds * 1000) / 1000
   }
 
   return {
     date: input.date,
-    amount: round2(input.amount),
+    amount,
     stake,
+    odds,
+    status,
     note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH),
     sport: cleanTag(input.sport),
     book: cleanTag(input.book),
     betType: cleanTag(input.betType)
+  }
+}
+
+/**
+ * The result a settlement implies when stake and odds are known: a win pays
+ * stake × (odds − 1), a loss costs the stake, a push or void returns it. Null
+ * when it can't be worked out, so the form leaves the field for the user.
+ */
+export function suggestedAmount(status: BetStatus, stake: number | null, odds: number | null): number | null {
+  switch (status) {
+    case 'push':
+    case 'void':
+      return 0
+    case 'lost':
+      return stake === null ? null : -stake
+    case 'won':
+      return stake === null || odds === null ? null : round2(stake * (odds - 1))
+    case 'pending':
+      return null
   }
 }

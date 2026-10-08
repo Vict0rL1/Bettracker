@@ -24,8 +24,9 @@ test.describe('day modal', () => {
     await boot(page)
     await page.locator('.history-card tbody tr').first().locator('button[aria-label^="Edit"]').click()
     await page.click('.day-modal .seg-btn.loss')
+    // Fields, in order: stake, odds, amount.
     const stake = page.locator('.day-modal .field').nth(0).locator('input')
-    const amount = page.locator('.day-modal .field').nth(1).locator('input')
+    const amount = page.locator('.day-modal .field').nth(2).locator('input')
     await stake.fill('80')
     await expect(amount).toHaveValue('80')
     await amount.fill('55')

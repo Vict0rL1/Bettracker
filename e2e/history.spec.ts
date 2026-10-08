@@ -16,9 +16,9 @@ test.describe('history filters', () => {
 
   test('result filter', async ({ page }) => {
     await boot(page)
-    await page.selectOption('select[aria-label="Filter by result"]', 'loss')
+    await page.selectOption('select[aria-label="Filter by result"]', 'lost')
     await expect(rows(page)).toHaveCount(1)
-    await expect(rows(page).first().locator('.pill')).toHaveText('LOSS')
+    await expect(rows(page).first().locator('.pill')).toHaveText('LOST')
   })
 
   test('sport filter', async ({ page }) => {

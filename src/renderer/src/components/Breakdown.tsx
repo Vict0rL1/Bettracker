@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
-import type { BetEntry } from '../../../shared/types'
+import type { Bet } from '../../../shared/types'
 import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { breakdown, type TagKey } from '../lib/stats'
 
 interface Props {
-  entries: BetEntry[]
+  bets: Bet[]
 }
 
 const TABS: { key: TagKey; label: string; empty: string }[] = [
@@ -15,9 +15,9 @@ const TABS: { key: TagKey; label: string; empty: string }[] = [
 
 const tone = (n: number): string => (n > 0 ? 'win' : n < 0 ? 'loss' : 'push')
 
-export default function Breakdown({ entries }: Props) {
+export default function Breakdown({ bets }: Props) {
   const [tab, setTab] = useState<TagKey>('sport')
-  const rows = useMemo(() => breakdown(entries, tab), [entries, tab])
+  const rows = useMemo(() => breakdown(bets, tab), [bets, tab])
   const active = TABS.find((t) => t.key === tab) ?? TABS[0]
 
   // The widest slice sets the bar scale, so the bars compare rows against each
@@ -58,28 +58,26 @@ export default function Breakdown({ entries }: Props) {
                 <span className={`bd-profit ${tone(r.profit)}`}>{fmtMoney(r.profit)}</span>
               </div>
               <div className="bd-bar" aria-hidden="true">
-                <span
-                  className={`bd-fill ${tone(r.profit)}`}
-                  style={{ width: `${(Math.abs(r.profit) / peak) * 100}%` }}
-                />
+                <span className={`bd-fill ${tone(r.profit)}`} style={{ width: `${(Math.abs(r.profit) / peak) * 100}%` }} />
               </div>
               <div className="bd-meta">
                 <span>
                   {r.bets} {r.bets === 1 ? 'bet' : 'bets'} · {r.wl.wins}W–{r.wl.losses}L
                   {r.wl.pushes > 0 ? `–${r.wl.pushes}P` : ''}
+                  {r.pending > 0 ? ` · ${r.pending} pending` : ''}
                 </span>
                 <span
                   className={r.roi === null ? '' : tone(r.roi)}
                   title={
                     r.roi === null
-                      ? 'None of these bets recorded a stake, so ROI cannot be computed'
+                      ? 'No decided bet here has a real stake, so ROI cannot be computed'
                       : r.roiBets < r.bets
-                        ? `ROI covers the ${r.roiBets} of ${r.bets} bets with a recorded stake — the profit above covers all ${r.bets}`
-                        : `ROI across all ${r.bets} bets`
+                        ? `ROI covers the ${r.roiBets} of ${r.bets} settled bets that put a stake at risk — the profit above covers all ${r.bets}`
+                        : `ROI across all ${r.bets} settled bets`
                   }
                 >
                   {r.roi === null
-                    ? 'no stakes logged'
+                    ? 'no ROI'
                     : `${fmtPctSigned(r.roi)} on ${fmtStake(r.staked)}${r.roiBets < r.bets ? ` (${r.roiBets}/${r.bets})` : ''}`}
                 </span>
               </div>

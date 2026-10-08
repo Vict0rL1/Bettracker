@@ -1,22 +1,22 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { BetEntry } from '../../../shared/types'
-import { entry } from '../test-utils'
+import type { Bet } from '../../../shared/types'
+import { bet } from '../test-utils'
 import {
   applyOutbox,
   clearUserData,
   enqueueOp,
-  hydrateEntry,
+  hydrateBet,
   loadCache,
   loadOutbox,
   opSize,
   reconcile,
   saveCache,
   saveOutbox,
-  sortEntries,
+  sortBets,
   type PendingOp
 } from './offline'
 
-const add = (id: string, over: Partial<BetEntry> = {}): PendingOp => ({
+const add = (id: string, over: Partial<Bet> = {}): PendingOp => ({
   opId: `op-${id}`,
   kind: 'add',
   id,
@@ -24,11 +24,12 @@ const add = (id: string, over: Partial<BetEntry> = {}): PendingOp => ({
   queuedAt: '2026-01-01T10:00:00.000Z'
 })
 
-const update = (id: string, amount: number): PendingOp => ({
-  opId: `op-u-${id}`,
+const update = (id: string, amount: number, editedAt = '2026-01-02T10:00:00.000Z'): PendingOp => ({
+  opId: `op-u-${id}-${editedAt}`,
   kind: 'update',
   id,
-  input: { date: '2026-01-01', amount, stake: null }
+  input: { date: '2026-01-01', amount, stake: null },
+  editedAt
 })
 
 const del = (id: string): PendingOp => ({ opId: `op-d-${id}`, kind: 'delete', id })
@@ -42,16 +43,19 @@ const bulk = (ids: string[]): PendingOp => ({
 
 beforeEach(() => localStorage.clear())
 
-describe('hydrateEntry', () => {
+describe('hydrateBet', () => {
   it('fills in fields a cache from an older version never stored', () => {
     const old = { id: 'a', date: '2026-01-01', amount: 12, note: 'x', createdAt: 'c', updatedAt: 'u' }
     // Missing stake must land on null, not undefined — undefined would read as
-    // "has a stake" downstream and poison ROI with NaN.
-    expect(hydrateEntry(old)).toEqual({
+    // "has a stake" downstream and poison ROI with NaN. Missing status is what
+    // the amount implies, as the 003 migration backfills it.
+    expect(hydrateBet(old)).toEqual({
       id: 'a',
       date: '2026-01-01',
       amount: 12,
       stake: null,
+      odds: null,
+      status: 'won',
       note: 'x',
       sport: '',
       book: '',
@@ -61,18 +65,39 @@ describe('hydrateEntry', () => {
     })
   })
 
-  it('rejects a non-finite stake', () => {
-    expect(hydrateEntry({ id: 'a', date: '2026-01-01', stake: Number.NaN }).stake).toBeNull()
+  it('derives lost and push the same way', () => {
+    expect(hydrateBet({ id: 'a', date: '2026-01-01', amount: -3 }).status).toBe('lost')
+    expect(hydrateBet({ id: 'a', date: '2026-01-01', amount: 0 }).status).toBe('push')
   })
 
-  it('keeps a real stake, including zero', () => {
-    expect(hydrateEntry({ id: 'a', date: '2026-01-01', stake: 0 }).stake).toBe(0)
+  it('treats a row with no amount at all as pending', () => {
+    const b = hydrateBet({ id: 'a', date: '2026-01-01' })
+    expect(b.status).toBe('pending')
+    expect(b.amount).toBeNull()
+  })
+
+  it('keeps a stored status even when it disagrees with the amount, and blanks a pending amount', () => {
+    expect(hydrateBet({ id: 'a', date: '2026-01-01', amount: 7, status: 'void' }).status).toBe('void')
+    const p = hydrateBet({ id: 'a', date: '2026-01-01', amount: 7, status: 'pending' })
+    expect(p.amount).toBeNull()
+  })
+
+  it('rejects a non-finite stake or odds', () => {
+    const b = hydrateBet({ id: 'a', date: '2026-01-01', stake: Number.NaN, odds: Number.POSITIVE_INFINITY })
+    expect(b.stake).toBeNull()
+    expect(b.odds).toBeNull()
+  })
+
+  it('keeps a real stake, including zero, and real odds', () => {
+    const b = hydrateBet({ id: 'a', date: '2026-01-01', stake: 0, odds: 1.91 })
+    expect(b.stake).toBe(0)
+    expect(b.odds).toBe(1.91)
   })
 })
 
 describe('cache and outbox persistence', () => {
   it('round-trips the cache per user', () => {
-    const rows = [entry({ id: 'a', amount: 5, stake: 10 })]
+    const rows = [bet({ id: 'a', amount: 5, stake: 10, odds: 2 })]
     saveCache('u1', rows)
     expect(loadCache('u1')).toEqual(rows)
     expect(loadCache('u2')).toBeNull()
@@ -80,7 +105,7 @@ describe('cache and outbox persistence', () => {
 
   it('hydrates rows written by an older version', () => {
     localStorage.setItem('bettracker:cache:u1', JSON.stringify([{ id: 'a', date: '2026-01-01', amount: 3 }]))
-    expect(loadCache('u1')?.[0]).toMatchObject({ stake: null, sport: '', betType: '' })
+    expect(loadCache('u1')?.[0]).toMatchObject({ stake: null, odds: null, status: 'won', sport: '', betType: '' })
   })
 
   it('returns an empty outbox when nothing is stored', () => {
@@ -88,7 +113,7 @@ describe('cache and outbox persistence', () => {
   })
 
   it('wipes both on sign-out', () => {
-    saveCache('u1', [entry({})])
+    saveCache('u1', [bet({})])
     saveOutbox('u1', [add('a')])
     clearUserData('u1')
     expect(loadCache('u1')).toBeNull()
@@ -96,14 +121,14 @@ describe('cache and outbox persistence', () => {
   })
 })
 
-describe('sortEntries', () => {
+describe('sortBets', () => {
   it('orders by date, then creation, then id', () => {
     const rows = [
-      entry({ id: 'c', date: '2026-01-02', createdAt: 'T1' }),
-      entry({ id: 'a', date: '2026-01-01', createdAt: 'T2' }),
-      entry({ id: 'b', date: '2026-01-01', createdAt: 'T1' })
+      bet({ id: 'c', date: '2026-01-02', createdAt: 'T1' }),
+      bet({ id: 'a', date: '2026-01-01', createdAt: 'T2' }),
+      bet({ id: 'b', date: '2026-01-01', createdAt: 'T1' })
     ]
-    expect(sortEntries(rows).map((e) => e.id)).toEqual(['b', 'a', 'c'])
+    expect(sortBets(rows).map((b) => b.id)).toEqual(['b', 'a', 'c'])
   })
 })
 
@@ -111,15 +136,39 @@ describe('applyOutbox', () => {
   it('shows a pending add before it reaches the server', () => {
     const rows = applyOutbox([], [add('new', { amount: 40, stake: 20 })])
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ id: 'new', amount: 40, stake: 20, createdAt: '2026-01-01T10:00:00.000Z' })
+    expect(rows[0]).toMatchObject({ id: 'new', amount: 40, stake: 20, status: 'won', createdAt: '2026-01-01T10:00:00.000Z' })
   })
 
-  it('layers an update onto a server row', () => {
-    const server = [entry({ id: 'a', amount: 10, note: 'old', sport: 'NBA' })]
-    const rows = applyOutbox(server, [update('a', 99)])
+  it('shows a queued pending bet with no amount', () => {
+    const op: PendingOp = { opId: 'o', kind: 'add', id: 'p', input: { date: '2026-01-01', status: 'pending', stake: 25 }, queuedAt: 'Q' }
+    const [row] = applyOutbox([], [op])
+    expect(row.status).toBe('pending')
+    expect(row.amount).toBeNull()
+    expect(row.stake).toBe(25)
+  })
+
+  it('layers an update onto a server row and stamps it with the edit time', () => {
+    const server = [bet({ id: 'a', amount: 10, note: 'old', sport: 'NBA', updatedAt: 'T0' })]
+    const rows = applyOutbox(server, [update('a', 99, 'T9')])
     expect(rows[0].amount).toBe(99)
-    // An update carries the whole entry, so absent tags clear rather than linger.
+    expect(rows[0].status).toBe('won')
+    expect(rows[0].updatedAt).toBe('T9')
+    // An update carries the whole bet, so absent tags clear rather than linger.
     expect(rows[0].sport).toBe('')
+  })
+
+  it('settles a pending row through an update', () => {
+    const server = [bet({ id: 'a', status: 'pending', stake: 50 })]
+    const op: PendingOp = {
+      opId: 'o',
+      kind: 'update',
+      id: 'a',
+      input: { date: '2026-01-01', status: 'lost', amount: -50, stake: 50 },
+      editedAt: 'T1'
+    }
+    const [row] = applyOutbox(server, [op])
+    expect(row.status).toBe('lost')
+    expect(row.amount).toBe(-50)
   })
 
   it('ignores an update for a row that is gone', () => {
@@ -127,11 +176,11 @@ describe('applyOutbox', () => {
   })
 
   it('hides a pending delete', () => {
-    expect(applyOutbox([entry({ id: 'a' })], [del('a')])).toEqual([])
+    expect(applyOutbox([bet({ id: 'a' })], [del('a')])).toEqual([])
   })
 
   it('shows every row of a pending import', () => {
-    expect(applyOutbox([], [bulk(['x', 'y'])]).map((e) => e.id)).toEqual(['x', 'y'])
+    expect(applyOutbox([], [bulk(['x', 'y'])]).map((b) => b.id)).toEqual(['x', 'y'])
   })
 
   it('applies ops in order', () => {
@@ -148,22 +197,22 @@ describe('enqueueOp', () => {
     expect(out[0]).toMatchObject({ input: { amount: 55 } })
   })
 
-  it('collapses repeated edits of one entry into a single update', () => {
-    const out = enqueueOp(enqueueOp([], update('a', 1)), update('a', 2))
+  it('collapses repeated edits of one bet into a single update, keeping the latest edit time', () => {
+    const out = enqueueOp(enqueueOp([], update('a', 1, 'T1')), update('a', 2, 'T2'))
     expect(out).toHaveLength(1)
-    expect(out[0]).toMatchObject({ input: { amount: 2 } })
+    expect(out[0]).toMatchObject({ kind: 'update', input: { amount: 2 }, editedAt: 'T2' })
   })
 
   it('cancels an add outright when it is deleted before syncing', () => {
     expect(enqueueOp([add('a')], del('a'))).toEqual([])
   })
 
-  it('drops pending edits when a synced entry is deleted', () => {
+  it('drops pending edits when a synced bet is deleted', () => {
     const out = enqueueOp([update('a', 5)], del('a'))
     expect(out).toEqual([del('a')])
   })
 
-  it('keeps ops for other entries untouched', () => {
+  it('keeps ops for other bets untouched', () => {
     const out = enqueueOp([add('a'), add('b')], del('a'))
     expect(out.map((o) => (o.kind === 'bulk-add' ? 'bulk' : o.id))).toEqual(['b'])
   })
@@ -190,23 +239,25 @@ describe('opSize', () => {
 
 describe('reconcile', () => {
   it('replaces the optimistic row with what the server returned', () => {
-    const server = [entry({ id: 'a', amount: 1 })]
-    const saved = entry({ id: 'a', amount: 1, createdAt: '2026-01-01T00:00:00Z' })
+    const server = [bet({ id: 'a', amount: 1 })]
+    const saved = bet({ id: 'a', amount: 1, createdAt: '2026-01-01T00:00:00Z' })
     expect(reconcile(server, add('a'), saved)).toEqual([saved])
   })
 
   it('removes a deleted row', () => {
-    expect(reconcile([entry({ id: 'a' })], del('a'), null)).toEqual([])
+    expect(reconcile([bet({ id: 'a' })], del('a'), null)).toEqual([])
   })
 
-  it('leaves the server state alone when there is no returned row', () => {
-    const server = [entry({ id: 'a' })]
-    expect(reconcile(server, update('a', 5), null)).toEqual(server)
+  it('leaves the server state alone when an update was refused (lost the conflict)', () => {
+    // The refresh that follows the drain brings the winning version; nothing
+    // here may guess at it.
+    const server = [bet({ id: 'a', amount: 5, note: 'theirs' })]
+    expect(reconcile(server, update('a', 9), null)).toEqual(server)
   })
 
   it('folds an import in without waiting for a refetch', () => {
-    const rows = reconcile([entry({ id: 'old', date: '2026-01-01' })], bulk(['x', 'y']), null)
-    expect(rows.map((e) => e.id)).toEqual(['old', 'x', 'y'])
+    const rows = reconcile([bet({ id: 'old', date: '2026-01-01' })], bulk(['x', 'y']), null)
+    expect(rows.map((b) => b.id)).toEqual(['old', 'x', 'y'])
   })
 
   it('does not duplicate rows when an import is replayed', () => {

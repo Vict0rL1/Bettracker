@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import type { BetEntry } from '../../../shared/types'
+import type { Bet } from '../../../shared/types'
 import { humanDate, monthLabel, monthYearShort, shortDate, type MonthKey } from '../lib/dates'
 import { axisMoney, fmtMoney, fmtMoneyPlain } from '../lib/format'
 import { cumulativeSeries, forMonth, groupByDay, type BalancePoint, type Summary } from '../lib/stats'
 
 interface Props {
-  entries: BetEntry[]
+  bets: Bet[]
   /** All-time summary, already computed by the app — reused as the "all" series. */
   lifetime: Summary
   ym: MonthKey
@@ -14,14 +14,14 @@ interface Props {
 
 type Scope = 'all' | 'month'
 
-export default function BalanceChart({ entries, lifetime, ym }: Props) {
+export default function BalanceChart({ bets, lifetime, ym }: Props) {
   const [scope, setScope] = useState<Scope>('all')
 
   // In month scope the curve restarts at zero, answering "how did this month
   // go" rather than "where does this month sit in my all-time balance".
   const monthSeries = useMemo(
-    () => (scope === 'month' ? cumulativeSeries(groupByDay(forMonth(entries, ym))) : []),
-    [scope, entries, ym]
+    () => (scope === 'month' ? cumulativeSeries(groupByDay(forMonth(bets, ym))) : []),
+    [scope, bets, ym]
   )
   const data = scope === 'all' ? lifetime.series : monthSeries
 
