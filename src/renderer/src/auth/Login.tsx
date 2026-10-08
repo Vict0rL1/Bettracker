@@ -51,7 +51,7 @@ export default function Login() {
         </p>
 
         <label className="field">
-          <span>Email</span>
+          <span className="field-label">Email</span>
           <input
             type="email"
             autoComplete="email"
@@ -63,7 +63,7 @@ export default function Login() {
         </label>
 
         <label className="field">
-          <span>Password</span>
+          <span className="field-label">Password</span>
           <input
             type="password"
             autoComplete={mode === 'in' ? 'current-password' : 'new-password'}

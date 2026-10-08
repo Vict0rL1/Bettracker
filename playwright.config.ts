@@ -22,6 +22,8 @@ export default defineConfig({
   reporter: process.env.CI ? 'github' : 'list',
   use: {
     baseURL: `http://localhost:${PORT}`,
+    // The app follows the browser language; the specs assert English copy.
+    locale: 'en-US',
     launchOptions: chromium ? { executablePath: chromium } : {},
     trace: 'retain-on-failure'
   },

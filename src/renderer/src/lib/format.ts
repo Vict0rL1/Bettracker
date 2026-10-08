@@ -20,15 +20,18 @@ export function fmtMoneyPlain(n: number): string {
 
 const trimZero = (s: string): string => (s.endsWith('.0') ? s.slice(0, -2) : s)
 
-/** Compact signed amount for tight spots (calendar tiles): +$120, -$1.4k. */
+/**
+ * Compact signed amount for tight spots (calendar tiles): +$120, -$335, -$1.4k.
+ * Whole dollars only — a calendar cell is 46px wide on a phone and the exact
+ * figure is one tap away in the day dialog.
+ */
 export function fmtMoneyCompact(n: number): string {
   const a = Math.abs(n)
   const sign = n > 0 ? '+' : n < 0 ? '-' : ''
   let body: string
   if (a >= 100_000) body = `$${Math.round(a / 1000)}k`
   else if (a >= 1000) body = `$${trimZero((a / 1000).toFixed(1))}k`
-  else if (Number.isInteger(a)) body = `$${a}`
-  else body = `$${a.toFixed(2)}`
+  else body = `$${Math.round(a)}`
   return sign + body
 }
 
