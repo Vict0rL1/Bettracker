@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Bet, BetStatus } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
 import { fmtMoney, fmtOdds, fmtPctSigned, fmtStake } from '../lib/format'
+import { useLang } from '../lib/i18n'
 import { tagValues } from '../lib/stats'
 import { suggestedAmount } from '../lib/validate'
 import { toneOf } from './DayModal'
@@ -20,8 +21,7 @@ type SortDir = 'asc' | 'desc'
 type ResultFilter = 'all' | BetStatus
 
 const PAGE_SIZE = 25
-
-const KIND_LABEL: Record<BetStatus, string> = { won: 'WON', lost: 'LOST', push: 'PUSH', void: 'VOID', pending: 'PENDING' }
+const SETTLE: readonly BetStatus[] = ['won', 'lost', 'push', 'void']
 
 /** Nulls sort last in either direction: missing data, not the smallest value. */
 function compareNullable(a: number | null, b: number | null, dir: number): number {
@@ -33,6 +33,7 @@ function compareNullable(a: number | null, b: number | null, dir: number): numbe
 }
 
 export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props) {
+  const { t, tn } = useLang()
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -139,38 +140,34 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
   return (
     <article className="card history-card">
       <header className="card-head">
-        <h2>History</h2>
-        <span className="card-note">
-          {hasFilters
-            ? `${filtered.length} of ${bets.length} ${bets.length === 1 ? 'bet' : 'bets'}`
-            : `${bets.length} ${bets.length === 1 ? 'bet' : 'bets'}`}
-        </span>
+        <h2>{t('hist.title')}</h2>
+        <span className="card-note">{hasFilters ? t('hist.countOf', { m: filtered.length, bets: tn('bet', bets.length) }) : tn('bet', bets.length)}</span>
       </header>
 
       {bets.length === 0 ? (
-        <div className="empty-state">No bets logged yet. Hit “Log today” or click a day on the calendar.</div>
+        <div className="empty-state">{t('hist.empty')}</div>
       ) : (
         <>
           <div className="filters">
             <input
               type="search"
               className="filter-search"
-              placeholder="Search notes, tags, dates…"
-              aria-label="Search bets"
+              placeholder={t('hist.search')}
+              aria-label={t('hist.searchAria')}
               value={query}
               onChange={(e) => resetPage(setQuery)(e.target.value)}
             />
-            <select aria-label="Filter by result" value={result} onChange={(e) => resetPage(setResult)(e.target.value as ResultFilter)}>
-              <option value="all">All results</option>
-              <option value="won">Won</option>
-              <option value="lost">Lost</option>
-              <option value="push">Push</option>
-              <option value="void">Void</option>
-              <option value="pending">Pending</option>
+            <select aria-label={t('hist.filterResult')} value={result} onChange={(e) => resetPage(setResult)(e.target.value as ResultFilter)}>
+              <option value="all">{t('hist.allResults')}</option>
+              <option value="won">{t('statusName.won')}</option>
+              <option value="lost">{t('statusName.lost')}</option>
+              <option value="push">{t('statusName.push')}</option>
+              <option value="void">{t('statusName.void')}</option>
+              <option value="pending">{t('statusName.pending')}</option>
             </select>
             {sports.length > 0 && (
-              <select aria-label="Filter by sport" value={sport} onChange={(e) => resetPage(setSport)(e.target.value)}>
-                <option value="">All sports</option>
+              <select aria-label={t('hist.filterSport')} value={sport} onChange={(e) => resetPage(setSport)(e.target.value)}>
+                <option value="">{t('hist.allSports')}</option>
                 {sports.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -179,8 +176,8 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
               </select>
             )}
             {books.length > 0 && (
-              <select aria-label="Filter by book" value={book} onChange={(e) => resetPage(setBook)(e.target.value)}>
-                <option value="">All books</option>
+              <select aria-label={t('hist.filterBook')} value={book} onChange={(e) => resetPage(setBook)(e.target.value)}>
+                <option value="">{t('hist.allBooks')}</option>
                 {books.map((b) => (
                   <option key={b} value={b}>
                     {b}
@@ -190,28 +187,28 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
             )}
             {hasFilters && (
               <button type="button" className="chip" onClick={clearFilters}>
-                Clear
+                {t('hist.clear')}
               </button>
             )}
           </div>
 
           {sorted.length === 0 ? (
-            <div className="empty-state">No bets match these filters.</div>
+            <div className="empty-state">{t('hist.noMatch')}</div>
           ) : (
             <>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      {sortHeader('date', 'Date')}
-                      <th>Result</th>
-                      {sortHeader('stake', 'Stake', true)}
-                      {sortHeader('odds', 'Odds', true)}
-                      {sortHeader('amount', 'Amount', true)}
-                      <th className="th-right">Return</th>
-                      <th>Tags</th>
-                      <th>Note</th>
-                      <th className="th-right">Actions</th>
+                      {sortHeader('date', t('hist.date'))}
+                      <th>{t('hist.result')}</th>
+                      {sortHeader('stake', t('hist.stake'), true)}
+                      {sortHeader('odds', t('hist.odds'), true)}
+                      {sortHeader('amount', t('hist.amount'), true)}
+                      <th className="th-right">{t('hist.return')}</th>
+                      <th>{t('hist.tags')}</th>
+                      <th>{t('hist.note')}</th>
+                      <th className="th-right">{t('hist.actions')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -220,17 +217,16 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
                       const decided = b.status === 'won' || b.status === 'lost'
                       const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
                       const tags = [b.sport, b.book, b.betType].filter(Boolean)
+                      const when = humanDate(b.date)
                       return (
                         <tr key={b.id} className={b.status === 'pending' ? 'is-pending' : undefined}>
-                          <td className="td-date">{humanDate(b.date)}</td>
+                          <td className="td-date">{when}</td>
                           <td>
-                            <span className={`pill ${tone}`}>{KIND_LABEL[b.status]}</span>
+                            <span className={`pill ${tone}`}>{t(`status.${b.status}`)}</span>
                           </td>
                           <td className="td-stake">{b.stake === null ? <span className="td-none">—</span> : fmtStake(b.stake)}</td>
                           <td className="td-stake">{b.odds === null ? <span className="td-none">—</span> : fmtOdds(b.odds)}</td>
-                          <td className={`td-amt ${tone}`}>
-                            {b.amount === null ? <span className="td-none">—</span> : fmtMoney(b.amount)}
-                          </td>
+                          <td className={`td-amt ${tone}`}>{b.amount === null ? <span className="td-none">—</span> : fmtMoney(b.amount)}</td>
                           <td className={`td-roi ${ret === null ? '' : ret > 0 ? 'win' : ret < 0 ? 'loss' : ''}`}>
                             {ret === null ? <span className="td-none">—</span> : fmtPctSigned(ret)}
                           </td>
@@ -238,25 +234,25 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
                             {tags.length === 0 ? (
                               <span className="td-none">—</span>
                             ) : (
-                              tags.map((t) => (
-                                <span key={t} className="tag">
-                                  {t}
+                              tags.map((x) => (
+                                <span key={x} className="tag">
+                                  {x}
                                 </span>
                               ))
                             )}
                           </td>
                           <td className="td-note" title={b.note || undefined}>
                             {b.status === 'pending' ? (
-                              <span className="settle" role="group" aria-label={`Settle bet on ${b.date}`}>
-                                {(['won', 'lost', 'push', 'void'] as const).map((s) => (
+                              <span className="settle" role="group" aria-label={t('hist.settleAria', { date: b.date })}>
+                                {SETTLE.map((s) => (
                                   <button
                                     key={s}
                                     type="button"
                                     className={`settle-btn ${toneOf(s)}`}
-                                    title={`Mark as ${KIND_LABEL[s].toLowerCase()}`}
+                                    title={t('hist.markAs', { status: t(`statusWord.${s}`) })}
                                     onClick={() => onSettle(b, s, suggestedAmount(s, b.stake, b.odds))}
                                   >
-                                    {KIND_LABEL[s]}
+                                    {t(`status.${s}`)}
                                   </button>
                                 ))}
                               </span>
@@ -265,17 +261,17 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
                             )}
                           </td>
                           <td className="td-actions">
-                            <button type="button" className="btn-icon" aria-label={`Edit ${b.date}`} title="Edit this day" onClick={() => onEdit(b.date)}>
+                            <button type="button" className="btn-icon" aria-label={t('hist.editAria', { date: b.date })} title={t('hist.editDay')} onClick={() => onEdit(b.date)}>
                               <PencilIcon />
                             </button>
                             <button
                               type="button"
                               className={`btn-icon danger ${confirming === b.id ? 'confirming' : ''}`}
-                              aria-label={`Delete bet on ${b.date}`}
-                              title={confirming === b.id ? 'Click again to confirm' : 'Delete'}
+                              aria-label={t('hist.deleteAria', { date: b.date })}
+                              title={confirming === b.id ? t('common.clickAgain') : t('common.delete')}
                               onClick={() => handleDeleteClick(b.id)}
                             >
-                              {confirming === b.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
+                              {confirming === b.id ? <span className="confirm-text">{t('common.sure')}</span> : <TrashIcon />}
                             </button>
                           </td>
                         </tr>
@@ -287,16 +283,16 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
 
               {pageCount > 1 && (
                 <footer className="pager">
-                  <button type="button" className="nav-btn" aria-label="Previous page" disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                  <button type="button" className="nav-btn" aria-label={t('hist.prevPage')} disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
                     <ChevronLeftIcon />
                   </button>
                   <span className="pager-label">
-                    {safePage * PAGE_SIZE + 1}–{Math.min(sorted.length, (safePage + 1) * PAGE_SIZE)} of {sorted.length}
+                    {t('hist.pager', { from: safePage * PAGE_SIZE + 1, to: Math.min(sorted.length, (safePage + 1) * PAGE_SIZE), total: sorted.length })}
                   </span>
                   <button
                     type="button"
                     className="nav-btn"
-                    aria-label="Next page"
+                    aria-label={t('hist.nextPage')}
                     disabled={safePage >= pageCount - 1}
                     onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
                   >

@@ -42,14 +42,14 @@ const REALTIME_DEBOUNCE_MS = 400
  * remains the reconciliation anchor after the queue drains and on realtime
  * events from other devices.
  *
- * `onNotice` is for things that are not errors but the user should hear, such
- * as an edit losing to a newer one from another device.
+ * `onNotice` is for things that are not errors but the user should hear; it
+ * gets a code (not copy) so the app can phrase it in the user's language.
  */
 export function useBetSync(
   userId: string | null,
   canSync: boolean,
   onError: (err: unknown) => void,
-  onNotice?: (text: string) => void
+  onNotice?: (code: 'conflict') => void
 ): BetSync {
   const [server, setServerState] = useState<Bet[] | null>(null)
   const [outbox, setOutboxState] = useState<PendingOp[]>([])
@@ -112,7 +112,7 @@ export function useBetSync(
             // A refused update lost to a newer edit elsewhere (or the bet is
             // gone). Nothing to retry: the refresh after the drain shows the
             // version that won.
-            if (result === null) onNoticeRef.current?.('A newer edit from another device was kept')
+            if (result === null) onNoticeRef.current?.('conflict')
           } else if (op.kind === 'bulk-add') await addBets(op.entries)
           else await deleteBet(op.id)
 

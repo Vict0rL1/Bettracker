@@ -2,7 +2,8 @@ import { useMemo } from 'react'
 import type { Bet } from '../../../shared/types'
 import { monthLabel, monthYearShort, sameMonth, shortDate, currentMonth, type MonthKey } from '../lib/dates'
 import { fmtMoney, fmtMoneyCompact, fmtPct, fmtPctSigned, fmtProb, fmtStake } from '../lib/format'
-import { forMonth, isSmallSample, SMALL_SAMPLE, summarize, type Summary } from '../lib/stats'
+import { useLang } from '../lib/i18n'
+import { forMonth, isSmallSample, SMALL_SAMPLE, summarize, type Summary, type WinLoss } from '../lib/stats'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons'
 
 interface Props {
@@ -35,18 +36,20 @@ function Mini({ label, value, sub, toneClass = '', title }: MiniProps) {
   )
 }
 
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
-
 export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetMonth }: Props) {
+  const { t, tn } = useLang()
   const month = useMemo(() => summarize(forMonth(bets, ym)), [bets, ym])
+
+  /** "9W–8L" / "9G–8P", with pushes when there are any. */
+  const record = (wl: WinLoss): string =>
+    `${wl.wins}${t('record.w')}–${wl.losses}${t('record.l')}` + (wl.pushes > 0 ? `–${wl.pushes}${t('record.p')}` : '')
 
   const onCurrentMonth = sameMonth(ym, currentMonth())
   const monthSub =
     month.bets === 0
-      ? 'No bets logged this month'
-      : `${plural(month.dayCount, 'day')} · ${plural(month.bets, 'bet')} · ${month.dayWl.wins}W–${month.dayWl.losses}L` +
-        (month.dayWl.pushes > 0 ? `–${month.dayWl.pushes}P` : '') +
-        (month.pendingCount > 0 ? ` · ${month.pendingCount} pending` : '')
+      ? t('hero.noBetsMonth')
+      : `${tn('day', month.dayCount)} · ${tn('bet', month.bets)} · ${record(month.dayWl)}` +
+        (month.pendingCount > 0 ? t('hero.pendingSuffix', { n: month.pendingCount }) : '')
 
   const { roi, bonus, implied } = lifetime
   const smallSample = roi !== null && isSmallSample(roi.counted)
@@ -55,33 +58,42 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
   // its profit differs from lifetime P/L above — "63 of 79 bets" is what stops
   // the two numbers from looking like they contradict each other.
   const roiSub = roi
-    ? `${fmtMoney(roi.profit)} on ${fmtStake(roi.staked)} staked · ` +
-      (roi.missing > 0 ? `${roi.counted} of ${plural(roi.counted + roi.missing, 'bet')} with a stake` : plural(roi.counted, 'bet'))
+    ? t('hero.roiSub', {
+        profit: fmtMoney(roi.profit),
+        staked: fmtStake(roi.staked),
+        counted:
+          roi.missing > 0
+            ? t('hero.roiSubset', { counted: roi.counted, total: tn('bet', roi.counted + roi.missing) })
+            : tn('bet', roi.counted)
+      })
     : lifetime.bets === 0
-      ? 'Log a bet with its stake to see ROI'
-      : `No staked results yet — ROI needs a settled bet with a stake`
+      ? t('hero.roiNeedsStake')
+      : t('hero.roiNone')
 
   const lifetimeSub =
     lifetime.bets === 0
-      ? 'Log your first bet to get started'
-      : `${plural(lifetime.bets, 'bet')} over ${plural(lifetime.dayCount, 'day')} since ${monthYearShort(lifetime.first ?? '')}` +
-        (lifetime.pendingCount > 0 ? ` · ${lifetime.pendingCount} pending, ${fmtStake(lifetime.pendingStaked)} riding` : '')
+      ? t('hero.firstBet')
+      : t('hero.lifetimeSub', {
+          bets: tn('bet', lifetime.bets),
+          days: tn('day', lifetime.dayCount),
+          month: monthYearShort(lifetime.first ?? '')
+        }) + (lifetime.pendingCount > 0 ? t('hero.riding', { n: lifetime.pendingCount, amount: fmtStake(lifetime.pendingStaked) }) : '')
 
   return (
     <section className="hero">
       <article className="card stat-card">
         <div className="stat-head">
-          <span className="stat-label">{monthLabel(ym)} P/L</span>
+          <span className="stat-label">{t('hero.monthPL', { month: monthLabel(ym) })}</span>
           <div className="month-nav">
             {!onCurrentMonth && (
               <button type="button" className="chip" onClick={onResetMonth}>
-                today
+                {t('common.today')}
               </button>
             )}
-            <button type="button" className="nav-btn" aria-label="Previous month" onClick={onPrev}>
+            <button type="button" className="nav-btn" aria-label={t('hero.prevMonth')} onClick={onPrev}>
               <ChevronLeftIcon />
             </button>
-            <button type="button" className="nav-btn" aria-label="Next month" onClick={onNext}>
+            <button type="button" className="nav-btn" aria-label={t('hero.nextMonth')} onClick={onNext}>
               <ChevronRightIcon />
             </button>
           </div>
@@ -92,7 +104,7 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
 
       <article className="card stat-card">
         <div className="stat-head">
-          <span className="stat-label">Lifetime P/L</span>
+          <span className="stat-label">{t('hero.lifetimePL')}</span>
         </div>
         <div className={`life-value ${tone(lifetime.total)}`}>{fmtMoney(lifetime.total)}</div>
         <div className="stat-sub">{lifetimeSub}</div>
@@ -100,19 +112,16 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
 
       <article className="card stat-card roi-card">
         <div className="stat-head">
-          <span className="stat-label">ROI</span>
+          <span className="stat-label">{t('hero.roi')}</span>
           <span className="stat-chips">
             {smallSample && (
-              <span
-                className="chip chip-static chip-warn"
-                title={`${roi.counted} settled bets with a stake. Below ${SMALL_SAMPLE} the number is mostly noise.`}
-              >
-                small sample
+              <span className="chip chip-static chip-warn" title={t('hero.smallSampleTitle', { n: roi.counted, min: SMALL_SAMPLE })}>
+                {t('hero.smallSample')}
               </span>
             )}
             {lifetime.avgStake !== null && (
-              <span className="chip chip-static" title="Average stake across bets that recorded one">
-                avg {fmtStake(lifetime.avgStake)}
+              <span className="chip chip-static" title={t('hero.avgStakeTitle')}>
+                {t('hero.avgStake', { amount: fmtStake(lifetime.avgStake) })}
               </span>
             )}
           </span>
@@ -123,8 +132,8 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
           {bonus.count > 0 && (
             <>
               <br />
-              <span className="bonus" title="Free bets risk nothing, so they can't have a return — their profit is shown apart">
-                {fmtMoney(bonus.profit)} bonus from {plural(bonus.count, 'free bet')}
+              <span className="bonus" title={t('hero.bonusTitle')}>
+                {t('hero.bonus', { profit: fmtMoney(bonus.profit), freeBets: tn('freeBet', bonus.count) })}
               </span>
             </>
           )}
@@ -133,55 +142,51 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
 
       <article className="card mini-card">
         <Mini
-          label="Strike rate"
+          label={t('hero.strike')}
           value={lifetime.strike === null ? '—' : fmtPct(lifetime.strike)}
           sub={
             lifetime.strike === null
-              ? 'no decided bets yet'
-              : `${lifetime.betWl.wins}W–${lifetime.betWl.losses}L · n=${lifetime.strikeN}` +
-                (implied ? ` · implied ${fmtProb(implied.avg)}` : '') +
-                (isSmallSample(lifetime.strikeN) ? ' · small sample' : '')
+              ? t('hero.noDecided')
+              : t('hero.strikeSub', { w: lifetime.betWl.wins, l: lifetime.betWl.losses, n: lifetime.strikeN }) +
+                (implied ? t('hero.implied', { p: fmtProb(implied.avg) }) : '') +
+                (isSmallSample(lifetime.strikeN) ? t('hero.smallSampleSuffix') : '')
           }
-          title={
-            implied
-              ? `Share of decided bets that won. At your average odds the break-even strike rate is ${fmtProb(implied.avg)} (over the ${implied.n} with odds recorded).`
-              : 'Share of decided bets that won. Record the odds to see the break-even rate next to it.'
-          }
+          title={implied ? t('hero.strikeTitle', { p: fmtProb(implied.avg), n: implied.n }) : t('hero.strikeTitleNoOdds')}
         />
         <Mini
-          label="Green days"
+          label={t('hero.greenDays')}
           value={lifetime.dayRate === null ? '—' : fmtPct(lifetime.dayRate)}
-          sub={lifetime.dayRate === null ? 'no decisive days yet' : `${lifetime.dayWl.wins}W–${lifetime.dayWl.losses}L by day`}
-          title="Share of days that ended net positive"
+          sub={lifetime.dayRate === null ? t('hero.noDecisive') : t('hero.greenSub', { w: lifetime.dayWl.wins, l: lifetime.dayWl.losses })}
+          title={t('hero.greenTitle')}
         />
         <Mini
-          label="Streak"
+          label={t('hero.streak')}
           value={lifetime.streak ? `${lifetime.streak.kind}${lifetime.streak.count}` : '—'}
           toneClass={lifetime.streak ? (lifetime.streak.kind === 'W' ? 'win' : 'loss') : ''}
           sub={
             lifetime.streak
-              ? `${plural(lifetime.streak.count, 'day')} ${lifetime.streak.kind === 'W' ? 'green' : 'red'} running`
-              : 'no decisive days yet'
+              ? t(lifetime.streak.kind === 'W' ? 'hero.streakGreen' : 'hero.streakRed', { days: tn('day', lifetime.streak.count) })
+              : t('hero.noDecisive')
           }
         />
         <Mini
-          label="Best day"
+          label={t('hero.bestDay')}
           value={lifetime.best ? fmtMoneyCompact(lifetime.best.total) : '—'}
           toneClass={lifetime.best ? 'win' : ''}
-          sub={lifetime.best ? shortDate(lifetime.best.date) : 'nothing yet'}
+          sub={lifetime.best ? shortDate(lifetime.best.date) : t('hero.nothingYet')}
         />
         <Mini
-          label="Worst day"
+          label={t('hero.worstDay')}
           value={lifetime.worst ? fmtMoneyCompact(lifetime.worst.total) : '—'}
           toneClass={lifetime.worst ? 'loss' : ''}
-          sub={lifetime.worst ? shortDate(lifetime.worst.date) : 'nothing yet'}
+          sub={lifetime.worst ? shortDate(lifetime.worst.date) : t('hero.nothingYet')}
         />
         <Mini
-          label="Max drawdown"
+          label={t('hero.drawdown')}
           value={lifetime.drawdown > 0 ? `-${fmtStake(lifetime.drawdown)}` : '—'}
           toneClass={lifetime.drawdown > 0 ? 'loss' : ''}
-          sub={lifetime.drawdown > 0 ? 'largest peak-to-trough fall' : 'never below a previous peak'}
-          title="The deepest your balance has fallen from its highest point"
+          sub={lifetime.drawdown > 0 ? t('hero.drawdownSub') : t('hero.drawdownNone')}
+          title={t('hero.drawdownTitle')}
         />
       </article>
     </section>

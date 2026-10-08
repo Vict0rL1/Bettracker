@@ -12,6 +12,7 @@ import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
 import { useBetSync } from './data/useBetSync'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
+import { useLang } from './lib/i18n'
 import { summarize, tagValues, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
@@ -26,11 +27,10 @@ function Boot() {
   )
 }
 
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
-
 export default function App() {
   const { loading, session, userId, email, offlineUser, signOut } = useAuth()
   const { theme, toggle: toggleTheme } = useTheme()
+  const { t, tn } = useLang()
 
   // With a live session we sync; with only a cached identity (e.g. reopened
   // fully offline) the app still renders this device's copy of the data.
@@ -41,11 +41,14 @@ export default function App() {
   const [modalDate, setModalDate] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
-  const showError = useCallback((err: unknown) => {
-    const text = err instanceof Error ? err.message : 'Something went wrong'
-    setToast({ kind: 'error', text })
-  }, [])
-  const showNotice = useCallback((text: string) => setToast({ kind: 'ok', text }), [])
+  const showError = useCallback(
+    (err: unknown) => {
+      const text = err instanceof Error ? err.message : t('common.error')
+      setToast({ kind: 'error', text })
+    },
+    [t]
+  )
+  const showNotice = useCallback((code: 'conflict') => setToast({ kind: 'ok', text: t(`toast.${code}`) }), [t])
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice)
   const { bets, status, queuedCount, isOffline } = sync
@@ -90,13 +93,8 @@ export default function App() {
   }, [modalDate])
 
   const savedNote = useCallback(
-    (action: string, date?: string) =>
-      isOffline
-        ? `${action} — saved on this device, will sync when you’re back online`
-        : date
-          ? `${action} on ${humanDate(date)}`
-          : action,
-    [isOffline]
+    (action: string, date?: string) => (isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action),
+    [isOffline, t]
   )
 
   // Mutations apply instantly (optimistic) and sync in the background.
@@ -104,36 +102,36 @@ export default function App() {
     async (input: BetInput) => {
       try {
         sync.addBet(input)
-        setToast({ kind: 'ok', text: savedNote(input.status === 'pending' ? 'Logged a pending bet' : 'Added a bet', input.date) })
+        setToast({ kind: 'ok', text: savedNote(t(input.status === 'pending' ? 'toast.loggedPending' : 'toast.added'), input.date) })
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError]
+    [sync, savedNote, showError, t]
   )
 
   const handleUpdate = useCallback(
     async (id: string, input: BetInput) => {
       try {
         sync.updateBet(id, input)
-        setToast({ kind: 'ok', text: savedNote('Updated a bet', input.date) })
+        setToast({ kind: 'ok', text: savedNote(t('toast.updated'), input.date) })
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError]
+    [sync, savedNote, showError, t]
   )
 
   const handleDelete = useCallback(
     async (id: string) => {
       try {
         sync.deleteBet(id)
-        setToast({ kind: 'ok', text: savedNote('Deleted a bet') })
+        setToast({ kind: 'ok', text: savedNote(t('toast.deleted')) })
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError]
+    [sync, savedNote, showError, t]
   )
 
   // Settling from the history table: when the result follows from stake and
@@ -157,41 +155,38 @@ export default function App() {
           book: bet.book,
           betType: bet.betType
         })
-        setToast({ kind: 'ok', text: savedNote(`Settled as ${next}`, bet.date) })
+        setToast({ kind: 'ok', text: savedNote(t('toast.settled', { status: t(`statusWord.${next}`) }), bet.date) })
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError]
+    [sync, savedNote, showError, t]
   )
 
   const handleExport = useCallback(() => {
     if (!bets || bets.length === 0) return
     const count = downloadCsv(bets)
-    setToast({ kind: 'ok', text: `Exported ${plural(count, 'bet')} to your downloads` })
-  }, [bets])
+    setToast({ kind: 'ok', text: t('toast.exported', { bets: tn('bet', count) }) })
+  }, [bets, t, tn])
 
   const handleImport = useCallback(
     async (file: File) => {
       try {
         const { rows, errors, skipped, noStake } = parseBetsCsv(await file.text())
         if (rows.length === 0) {
-          setToast({ kind: 'error', text: errors[0] ?? 'Nothing to import from that file.' })
+          setToast({ kind: 'error', text: errors[0] ?? t('toast.importNothing') })
           return
         }
         const count = sync.importBets(rows)
         const notes: string[] = []
-        if (skipped > 0) notes.push(`skipped ${plural(skipped, 'line')}`)
-        if (noStake > 0) notes.push(`${noStake} without a stake`)
-        setToast({
-          kind: 'ok',
-          text: savedNote(`Imported ${plural(count, 'bet')}${notes.length ? ` · ${notes.join(' · ')}` : ''}`)
-        })
+        if (skipped > 0) notes.push(t('toast.skipped', { lines: tn('line', skipped) }))
+        if (noStake > 0) notes.push(t('toast.noStake', { n: noStake }))
+        setToast({ kind: 'ok', text: savedNote(t('toast.imported', { bets: tn('bet', count) }) + (notes.length ? ` · ${notes.join(' · ')}` : '')) })
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError]
+    [sync, savedNote, showError, t, tn]
   )
 
   if (loading) return <Boot />

@@ -1,24 +1,26 @@
 import { useMemo, useState } from 'react'
 import type { Bet } from '../../../shared/types'
 import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
+import { useLang } from '../lib/i18n'
 import { breakdown, type TagKey } from '../lib/stats'
 
 interface Props {
   bets: Bet[]
 }
 
-const TABS: { key: TagKey; label: string; empty: string }[] = [
-  { key: 'sport', label: 'Sport', empty: 'sport' },
-  { key: 'book', label: 'Book', empty: 'bookmaker' },
-  { key: 'betType', label: 'Bet type', empty: 'bet type' }
+const TABS: { key: TagKey; label: 'bd.sport' | 'bd.book' | 'bd.betType'; word: 'bd.sportWord' | 'bd.bookWord' | 'bd.betTypeWord' }[] = [
+  { key: 'sport', label: 'bd.sport', word: 'bd.sportWord' },
+  { key: 'book', label: 'bd.book', word: 'bd.bookWord' },
+  { key: 'betType', label: 'bd.betType', word: 'bd.betTypeWord' }
 ]
 
 const tone = (n: number): string => (n > 0 ? 'win' : n < 0 ? 'loss' : 'push')
 
 export default function Breakdown({ bets }: Props) {
+  const { t, tn } = useLang()
   const [tab, setTab] = useState<TagKey>('sport')
   const rows = useMemo(() => breakdown(bets, tab), [bets, tab])
-  const active = TABS.find((t) => t.key === tab) ?? TABS[0]
+  const active = TABS.find((x) => x.key === tab) ?? TABS[0]
 
   // The widest slice sets the bar scale, so the bars compare rows against each
   // other rather than against an arbitrary fixed maximum.
@@ -27,26 +29,18 @@ export default function Breakdown({ bets }: Props) {
   return (
     <article className="card breakdown-card">
       <header className="card-head">
-        <h2>Breakdown</h2>
-        <div className="scope-toggle" role="group" aria-label="Group breakdown by">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              className={`scope-btn ${tab === t.key ? 'active' : ''}`}
-              aria-pressed={tab === t.key}
-              onClick={() => setTab(t.key)}
-            >
-              {t.label}
+        <h2>{t('bd.title')}</h2>
+        <div className="scope-toggle" role="group" aria-label={t('bd.groupBy')}>
+          {TABS.map((x) => (
+            <button key={x.key} type="button" className={`scope-btn ${tab === x.key ? 'active' : ''}`} aria-pressed={tab === x.key} onClick={() => setTab(x.key)}>
+              {t(x.label)}
             </button>
           ))}
         </div>
       </header>
 
       {rows.length === 0 ? (
-        <div className="empty-state">
-          No bets tagged with a {active.empty} yet. Add one when you log a bet to see how each {active.empty} performs.
-        </div>
+        <div className="empty-state">{t('bd.empty', { what: t(active.word) })}</div>
       ) : (
         <ul className="bd-list">
           {rows.map((r) => (
@@ -62,23 +56,25 @@ export default function Breakdown({ bets }: Props) {
               </div>
               <div className="bd-meta">
                 <span>
-                  {r.bets} {r.bets === 1 ? 'bet' : 'bets'} · {r.wl.wins}W–{r.wl.losses}L
-                  {r.wl.pushes > 0 ? `–${r.wl.pushes}P` : ''}
-                  {r.pending > 0 ? ` · ${r.pending} pending` : ''}
+                  {tn('bet', r.bets)} · {r.wl.wins}
+                  {t('record.w')}–{r.wl.losses}
+                  {t('record.l')}
+                  {r.wl.pushes > 0 ? `–${r.wl.pushes}${t('record.p')}` : ''}
+                  {r.pending > 0 ? t('bd.pending', { n: r.pending }) : ''}
                 </span>
                 <span
                   className={r.roi === null ? '' : tone(r.roi)}
                   title={
                     r.roi === null
-                      ? 'No decided bet here has a real stake, so ROI cannot be computed'
+                      ? t('bd.noRoiTitle')
                       : r.roiBets < r.bets
-                        ? `ROI covers the ${r.roiBets} of ${r.bets} settled bets that put a stake at risk — the profit above covers all ${r.bets}`
-                        : `ROI across all ${r.bets} settled bets`
+                        ? t('bd.roiSubsetTitle', { roiBets: r.roiBets, bets: r.bets })
+                        : t('bd.roiAllTitle', { bets: r.bets })
                   }
                 >
                   {r.roi === null
-                    ? 'no ROI'
-                    : `${fmtPctSigned(r.roi)} on ${fmtStake(r.staked)}${r.roiBets < r.bets ? ` (${r.roiBets}/${r.bets})` : ''}`}
+                    ? t('bd.noRoi')
+                    : t('bd.roiOn', { pct: fmtPctSigned(r.roi), staked: fmtStake(r.staked) }) + (r.roiBets < r.bets ? ` (${r.roiBets}/${r.bets})` : '')}
                 </span>
               </div>
             </li>

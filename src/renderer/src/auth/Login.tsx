@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useAuth } from './AuthProvider'
 import { SparkIcon } from '../components/icons'
+import { useLang } from '../lib/i18n'
 
 type Mode = 'in' | 'up'
 
 export default function Login() {
+  const { t } = useLang()
   const { signIn, signUp } = useAuth()
   const [mode, setMode] = useState<Mode>('in')
   const [email, setEmail] = useState('')
@@ -24,12 +26,12 @@ export default function Login() {
       } else {
         const { needsConfirmation } = await signUp(email.trim(), password)
         if (needsConfirmation) {
-          setNotice('Account created. Check your email to confirm, then sign in.')
+          setNotice(t('login.created'))
           setMode('in')
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setError(err instanceof Error ? err.message : t('common.error'))
     } finally {
       setBusy(false)
     }
@@ -46,24 +48,15 @@ export default function Login() {
             Bet<span>Tracker</span>
           </h1>
         </div>
-        <p className="auth-tag">
-          {mode === 'in' ? 'Sign in to sync your bets across devices.' : 'Create an account to start tracking.'}
-        </p>
+        <p className="auth-tag">{mode === 'in' ? t('login.tagIn') : t('login.tagUp')}</p>
 
         <label className="field">
-          <span className="field-label">Email</span>
-          <input
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-          />
+          <span className="field-label">{t('login.email')}</span>
+          <input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
         </label>
 
         <label className="field">
-          <span className="field-label">Password</span>
+          <span className="field-label">{t('login.password')}</span>
           <input
             type="password"
             autoComplete={mode === 'in' ? 'current-password' : 'new-password'}
@@ -71,7 +64,7 @@ export default function Login() {
             minLength={6}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={mode === 'up' ? 'At least 6 characters' : '••••••••'}
+            placeholder={mode === 'up' ? t('login.passwordHint') : '••••••••'}
           />
         </label>
 
@@ -79,7 +72,7 @@ export default function Login() {
         {notice && <div className="auth-notice">{notice}</div>}
 
         <button type="submit" className="btn btn-primary auth-submit" disabled={busy}>
-          {busy ? 'Working…' : mode === 'in' ? 'Sign in' : 'Create account'}
+          {busy ? t('login.working') : mode === 'in' ? t('login.signIn') : t('login.create')}
         </button>
 
         <button
@@ -91,7 +84,7 @@ export default function Login() {
             setNotice(null)
           }}
         >
-          {mode === 'in' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
+          {mode === 'in' ? t('login.needAccount') : t('login.haveAccount')}
         </button>
       </form>
     </div>

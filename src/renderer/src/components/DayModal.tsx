@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { Bet, BetInput, BetStatus } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
 import { fmtMoney, fmtOdds, fmtPctSigned, fmtStake } from '../lib/format'
+import { useLang } from '../lib/i18n'
 import { round2, total as sumTotal } from '../lib/stats'
 import { MAX_AMOUNT, MAX_ODDS, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
@@ -23,7 +24,7 @@ interface Props {
 }
 
 const STATUSES: readonly BetStatus[] = ['won', 'lost', 'push', 'void', 'pending']
-const LABEL: Record<BetStatus, string> = { won: 'WON', lost: 'LOST', push: 'PUSH', void: 'VOID', pending: 'PENDING' }
+const SETTLE: readonly BetStatus[] = ['won', 'lost', 'push', 'void']
 /** CSS tone for a status (the stylesheet's older names, kept for the calendar's sake). */
 export const toneOf = (s: BetStatus): string => (s === 'won' ? 'win' : s === 'lost' ? 'loss' : s)
 
@@ -43,6 +44,7 @@ const toInput = (b: Bet): BetInput => ({
 })
 
 export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
+  const { t, tn } = useLang()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [status, setStatus] = useState<BetStatus>('won')
   const [amountStr, setAmountStr] = useState('')
@@ -167,32 +169,18 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
   const amount = parseFloat(amountStr)
   const needsAmount = status === 'won' || status === 'lost'
   const amountValid = !needsAmount || (Number.isFinite(amount) && amount > 0 && amount <= MAX_AMOUNT)
-  const stakeValid =
-    parsedStake === null
-      ? stakeOptional
-      : Number.isFinite(parsedStake) && parsedStake >= 0 && parsedStake <= MAX_AMOUNT
+  const stakeValid = parsedStake === null ? stakeOptional : Number.isFinite(parsedStake) && parsedStake >= 0 && parsedStake <= MAX_AMOUNT
   const oddsValid = parsedOdds === null || (Number.isFinite(parsedOdds) && parsedOdds > 1 && parsedOdds <= MAX_ODDS)
   const canSave = amountValid && stakeValid && oddsValid && !busy
 
-  const signedAmount: number | null =
-    status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
+  const signedAmount: number | null = status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!canSave) return
     setBusy(true)
     try {
-      const input: BetInput = {
-        date,
-        amount: signedAmount,
-        stake: parsedStake,
-        odds: parsedOdds,
-        status,
-        note: note.trim(),
-        sport,
-        book,
-        betType
-      }
+      const input: BetInput = { date, amount: signedAmount, stake: parsedStake, odds: parsedOdds, status, note: note.trim(), sport, book, betType }
       if (editingId) await onUpdate(editingId, input)
       else await onAdd(input)
       resetForm()
@@ -235,19 +223,19 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
     }
   }
 
-  const amountLabel = status === 'won' ? 'Profit' : status === 'lost' ? 'Amount lost' : 'Result'
+  const amountLabel = status === 'won' ? t('modal.profit') : status === 'lost' ? t('modal.amountLost') : t('modal.result')
   const hint =
     status === 'won'
       ? parsedOdds === null
-        ? 'Profit only — what you got back beyond the stake. Add the odds and it fills in.'
-        : 'Profit only — filled in from stake × (odds − 1). Edit it if the book paid differently.'
+        ? t('modal.hintWon')
+        : t('modal.hintWonOdds')
       : status === 'lost'
-        ? 'Defaults to the stake, since that is what a loss costs.'
+        ? t('modal.hintLost')
         : status === 'push'
-          ? 'A push returns the stake: counts as $0 and stays out of ROI.'
+          ? t('modal.hintPush')
           : status === 'void'
-            ? 'Cancelled by the book: stake returned, out of the record entirely.'
-            : 'No result yet. It stays out of P/L, ROI and streaks until you settle it.'
+            ? t('modal.hintVoid')
+            : t('modal.hintPending')
 
   return (
     <div
@@ -261,13 +249,10 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
           <div>
             <h2 id={titleId}>{humanDate(date)}</h2>
             <span className="day-sub">
-              {bets.length === 0
-                ? 'No bets yet'
-                : `${bets.length} ${bets.length === 1 ? 'bet' : 'bets'}` +
-                  (pendingHere > 0 ? ` · ${pendingHere} pending` : '')}
+              {bets.length === 0 ? t('modal.noBets') : tn('bet', bets.length) + (pendingHere > 0 ? t('modal.pendingSuffix', { n: pendingHere }) : '')}
             </span>
           </div>
-          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
+          <button type="button" className="btn-icon" aria-label={t('common.close')} onClick={onClose}>
             <CloseIcon />
           </button>
         </header>
@@ -275,10 +260,8 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
         {bets.length > 0 && (
           <>
             <div className="day-total-row">
-              <span className="day-total-label">Day total</span>
-              <span className={`day-total ${dayTotal > 0 ? 'win' : dayTotal < 0 ? 'loss' : 'push'}`}>
-                {fmtMoney(dayTotal)}
-              </span>
+              <span className="day-total-label">{t('modal.dayTotal')}</span>
+              <span className={`day-total ${dayTotal > 0 ? 'win' : dayTotal < 0 ? 'loss' : 'push'}`}>{fmtMoney(dayTotal)}</span>
             </div>
 
             <ul className="bet-list">
@@ -288,52 +271,46 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
                 return (
                   <li key={b.id} className={`bet-item ${editingId === b.id ? 'editing' : ''}`}>
                     <span className={`bet-amt ${toneOf(b.status)}`}>
-                      {b.status === 'pending' || b.amount === 0 ? LABEL[b.status] : fmtMoney(b.amount ?? 0)}
+                      {b.status === 'pending' || b.amount === 0 ? t(`status.${b.status}`) : fmtMoney(b.amount ?? 0)}
                     </span>
                     <span className="bet-body">
-                      <span className="bet-note">{b.note || <span className="td-none">no note</span>}</span>
+                      <span className="bet-note">{b.note || <span className="td-none">{t('modal.noNote')}</span>}</span>
                       <span className="bet-meta">
                         {b.stake !== null && (
                           <span className="bet-stake">
-                            {fmtStake(b.stake)} {b.status === 'pending' ? 'riding' : 'risked'}
+                            {t(b.status === 'pending' ? 'modal.riding' : 'modal.risked', { amount: fmtStake(b.stake) })}
                             {b.odds !== null && ` @ ${fmtOdds(b.odds)}`}
                             {ret !== null && (b.status === 'won' || b.status === 'lost') && ` · ${fmtPctSigned(ret)}`}
                           </span>
                         )}
-                        {tags.map((t) => (
-                          <span key={t} className="tag">
-                            {t}
+                        {tags.map((x) => (
+                          <span key={x} className="tag">
+                            {x}
                           </span>
                         ))}
                       </span>
                       {b.status === 'pending' && (
-                        <span className="settle" role="group" aria-label="Settle this bet">
-                          {(['won', 'lost', 'push', 'void'] as const).map((s) => (
-                            <button
-                              key={s}
-                              type="button"
-                              className={`settle-btn ${toneOf(s)}`}
-                              disabled={busy}
-                              onClick={() => quickSettle(b, s)}
-                            >
-                              {LABEL[s]}
+                        <span className="settle" role="group" aria-label={t('modal.settleGroup')}>
+                          {SETTLE.map((s) => (
+                            <button key={s} type="button" className={`settle-btn ${toneOf(s)}`} disabled={busy} onClick={() => quickSettle(b, s)}>
+                              {t(`status.${s}`)}
                             </button>
                           ))}
                         </span>
                       )}
                     </span>
                     <span className="bet-actions">
-                      <button type="button" className="btn-icon" aria-label="Edit bet" title="Edit" onClick={() => startEdit(b)}>
+                      <button type="button" className="btn-icon" aria-label={t('modal.editBet')} title={t('common.edit')} onClick={() => startEdit(b)}>
                         <PencilIcon />
                       </button>
                       <button
                         type="button"
                         className={`btn-icon danger ${confirmId === b.id ? 'confirming' : ''}`}
-                        aria-label="Delete bet"
-                        title={confirmId === b.id ? 'Click again to confirm' : 'Delete'}
+                        aria-label={t('modal.deleteBet')}
+                        title={confirmId === b.id ? t('common.clickAgain') : t('common.delete')}
                         onClick={() => handleDelete(b.id)}
                       >
-                        {confirmId === b.id ? <span className="confirm-text">Sure?</span> : <TrashIcon />}
+                        {confirmId === b.id ? <span className="confirm-text">{t('common.sure')}</span> : <TrashIcon />}
                       </button>
                     </span>
                   </li>
@@ -345,24 +322,18 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
 
         <form className="bet-form" onSubmit={submit}>
           <div className="bet-form-head">
-            <span>{editingId ? 'Edit bet' : 'Add a bet'}</span>
+            <span>{editingId ? t('modal.editTitle') : t('modal.addTitle')}</span>
             {editingId && (
               <button type="button" className="auth-toggle" onClick={resetForm}>
-                Cancel edit
+                {t('modal.cancelEdit')}
               </button>
             )}
           </div>
 
-          <div className="seg" role="group" aria-label="Result">
+          <div className="seg" role="group" aria-label={t('modal.resultGroup')}>
             {STATUSES.map((s) => (
-              <button
-                type="button"
-                key={s}
-                className={`seg-btn ${toneOf(s)} ${status === s ? 'active' : ''}`}
-                aria-pressed={status === s}
-                onClick={() => handleStatus(s)}
-              >
-                {LABEL[s]}
+              <button type="button" key={s} className={`seg-btn ${toneOf(s)} ${status === s ? 'active' : ''}`} aria-pressed={status === s} onClick={() => handleStatus(s)}>
+                {t(`status.${s}`)}
               </button>
             ))}
           </div>
@@ -370,7 +341,7 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
           <div className="bet-grid">
             <label className="field">
               <span className="field-label">
-                Stake {stakeOptional && <span className="field-opt">not recorded</span>}
+                {t('modal.stake')} {stakeOptional && <span className="field-opt">{t('modal.notRecorded')}</span>}
               </span>
               <div className="amount-wrap">
                 <span className="amount-cur">$</span>
@@ -391,17 +362,9 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
 
             <label className="field">
               <span className="field-label">
-                Odds <span className="field-opt">decimal, optional</span>
+                {t('modal.odds')} <span className="field-opt">{t('modal.oddsOpt')}</span>
               </span>
-              <input
-                type="number"
-                inputMode="decimal"
-                min="1.01"
-                step="0.01"
-                placeholder="1.91"
-                value={oddsStr}
-                onChange={(e) => handleOdds(e.target.value)}
-              />
+              <input type="number" inputMode="decimal" min="1.01" step="0.01" placeholder="1.91" value={oddsStr} onChange={(e) => handleOdds(e.target.value)} />
             </label>
 
             <label className="field">
@@ -414,7 +377,7 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
                   inputMode="decimal"
                   min="0.01"
                   step="0.01"
-                  placeholder={status === 'pending' ? 'not yet' : needsAmount ? '0.00' : '0.00 (stake returned)'}
+                  placeholder={status === 'pending' ? t('modal.notYet') : needsAmount ? '0.00' : t('modal.stakeReturned')}
                   value={needsAmount ? amountStr : ''}
                   disabled={!needsAmount}
                   onChange={(e) => {
@@ -427,30 +390,30 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
 
             <label className="field">
               <span className="field-label">
-                Sport <span className="field-opt">optional</span>
+                {t('modal.sport')} <span className="field-opt">{t('common.optional')}</span>
               </span>
               <input type="text" list={`${listId}-sport`} maxLength={40} placeholder="NBA" value={sport} onChange={(e) => setSport(e.target.value)} />
             </label>
 
             <label className="field">
               <span className="field-label">
-                Book <span className="field-opt">optional</span>
+                {t('modal.book')} <span className="field-opt">{t('common.optional')}</span>
               </span>
               <input type="text" list={`${listId}-book`} maxLength={40} placeholder="DraftKings" value={book} onChange={(e) => setBook(e.target.value)} />
             </label>
 
             <label className="field">
               <span className="field-label">
-                Bet type <span className="field-opt">optional</span>
+                {t('modal.betType')} <span className="field-opt">{t('common.optional')}</span>
               </span>
               <input type="text" list={`${listId}-type`} maxLength={40} placeholder="Parlay" value={betType} onChange={(e) => setBetType(e.target.value)} />
             </label>
 
             <label className="field field-wide">
               <span className="field-label">
-                Note <span className="field-opt">optional</span>
+                {t('modal.note')} <span className="field-opt">{t('common.optional')}</span>
               </span>
-              <input type="text" maxLength={200} placeholder="e.g. morning parlay" value={note} onChange={(e) => setNote(e.target.value)} />
+              <input type="text" maxLength={200} placeholder={t('modal.notePlaceholder')} value={note} onChange={(e) => setNote(e.target.value)} />
             </label>
           </div>
 
@@ -473,7 +436,7 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
           <div className="bet-submit">
             <p className="hint">{hint}</p>
             <button type="submit" className="btn btn-primary bet-add" disabled={!canSave}>
-              {editingId ? 'Save' : (<><PlusIcon /> Add</>)}
+              {editingId ? t('common.save') : (<><PlusIcon /> {t('common.add')}</>)}
             </button>
           </div>
         </form>
@@ -481,7 +444,7 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
         <footer className="modal-actions">
           <span className="spacer" />
           <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Done
+            {t('common.done')}
           </button>
         </footer>
       </div>

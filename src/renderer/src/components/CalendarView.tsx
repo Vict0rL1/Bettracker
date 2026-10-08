@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { daysInMonth, firstWeekday, humanDate, monthLabel, toDateStr, todayStr, type MonthKey } from '../lib/dates'
 import { fmtMoney, fmtMoneyCompact } from '../lib/format'
+import { useLang } from '../lib/i18n'
 import type { DaySummary } from '../lib/stats'
 
 interface Props {
@@ -8,8 +9,6 @@ interface Props {
   dayMap: Map<string, DaySummary>
   onDayClick: (date: string) => void
 }
-
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 /** How a day reads at a glance: by its settled result, or as open when nothing has settled yet. */
 function kindOf(day: DaySummary | undefined): 'win' | 'loss' | 'push' | 'pending' | 'none' {
@@ -19,6 +18,7 @@ function kindOf(day: DaySummary | undefined): 'win' | 'loss' | 'push' | 'pending
 }
 
 export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
+  const { t } = useLang()
   const cells = useMemo<(number | null)[]>(() => {
     const blanks: (number | null)[] = Array.from({ length: firstWeekday(ym) }, () => null)
     const days = Array.from({ length: daysInMonth(ym) }, (_, i) => i + 1)
@@ -26,16 +26,17 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
   }, [ym])
 
   const today = todayStr()
+  const weekdays = t('cal.weekdays').split(',')
 
   return (
     <article className="card calendar-card">
       <header className="card-head">
-        <h2>Calendar</h2>
+        <h2>{t('cal.title')}</h2>
         <span className="card-note">{monthLabel(ym)}</span>
       </header>
 
       <div className="cal-grid cal-weekdays">
-        {WEEKDAYS.map((d) => (
+        {weekdays.map((d) => (
           <span key={d}>{d}</span>
         ))}
       </div>
@@ -48,11 +49,11 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
           const kind = kindOf(summary)
           const parts: string[] = [humanDate(date)]
           if (summary) {
-            if (summary.scored > 0) parts.push(summary.total === 0 ? 'Push' : fmtMoney(summary.total))
-            if (summary.count > 1) parts.push(`${summary.count} bets`)
-            if (summary.pending > 0) parts.push(`${summary.pending} pending`)
+            if (summary.scored > 0) parts.push(summary.total === 0 ? t('cal.pushTip') : fmtMoney(summary.total))
+            if (summary.count > 1) parts.push(t('cal.betsTip', { n: summary.count }))
+            if (summary.pending > 0) parts.push(t('cal.pendingTip', { n: summary.pending }))
           } else {
-            parts.push('no bets — click to log')
+            parts.push(t('cal.emptyTip'))
           }
           const classes = ['cal-cell', kind, date === today ? 'is-today' : '', date > today ? 'is-future' : ''].filter(Boolean).join(' ')
           return (
@@ -60,15 +61,15 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
               <span className="cal-top">
                 <span className="cal-day">{day}</span>
                 {summary && summary.count > 1 && (
-                  <span className="cal-count" title={`${summary.count} bets`}>
+                  <span className="cal-count" title={t('cal.betsTip', { n: summary.count })}>
                     {summary.count}
                   </span>
                 )}
               </span>
               {summary && summary.scored > 0 && (
-                <span className="cal-amt">{summary.total === 0 ? 'PUSH' : fmtMoneyCompact(summary.total)}</span>
+                <span className="cal-amt">{summary.total === 0 ? t('cal.pushCell') : fmtMoneyCompact(summary.total)}</span>
               )}
-              {summary && summary.scored === 0 && summary.pending > 0 && <span className="cal-amt">OPEN</span>}
+              {summary && summary.scored === 0 && summary.pending > 0 && <span className="cal-amt">{t('cal.openCell')}</span>}
               {summary && summary.scored > 0 && summary.pending > 0 && <i className="cal-dot" aria-hidden="true" />}
             </button>
           )
@@ -77,19 +78,19 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
 
       <footer className="cal-legend">
         <span className="lg">
-          <i className="lg-swatch win" /> Win
+          <i className="lg-swatch win" /> {t('cal.win')}
         </span>
         <span className="lg">
-          <i className="lg-swatch loss" /> Loss
+          <i className="lg-swatch loss" /> {t('cal.loss')}
         </span>
         <span className="lg">
-          <i className="lg-swatch push" /> Push
+          <i className="lg-swatch push" /> {t('cal.push')}
         </span>
         <span className="lg">
-          <i className="lg-swatch pending" /> Pending
+          <i className="lg-swatch pending" /> {t('cal.pending')}
         </span>
         <span className="lg">
-          <i className="lg-swatch none" /> No bets
+          <i className="lg-swatch none" /> {t('cal.none')}
         </span>
       </footer>
     </article>

@@ -1,3 +1,5 @@
+import { getLang, LOCALE } from './i18n'
+
 export interface MonthKey {
   year: number
   /** 0-11, matching Date#getMonth. */
@@ -31,8 +33,14 @@ export const sameMonth = (a: MonthKey, b: MonthKey): boolean =>
 
 export const monthPrefix = (ym: MonthKey): string => `${ym.year}-${pad2(ym.month + 1)}`
 
+// Human-readable dates follow the interface language. Spanish month names are
+// lowercase by convention ("agosto 2026"); the first letter is raised where a
+// label starts with one, so headings read the same in both languages.
+const locale = (): string => LOCALE[getLang()]
+const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
 export const monthLabel = (ym: MonthKey): string =>
-  new Date(ym.year, ym.month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  cap(new Date(ym.year, ym.month, 1).toLocaleDateString(locale(), { month: 'long', year: 'numeric' }))
 
 export const daysInMonth = (ym: MonthKey): number => new Date(ym.year, ym.month + 1, 0).getDate()
 
@@ -45,10 +53,10 @@ function parseParts(dateStr: string): Date {
 }
 
 export const humanDate = (dateStr: string): string =>
-  parseParts(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  parseParts(dateStr).toLocaleDateString(locale(), { month: 'short', day: 'numeric', year: 'numeric' })
 
 export const shortDate = (dateStr: string): string =>
-  parseParts(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  parseParts(dateStr).toLocaleDateString(locale(), { month: 'short', day: 'numeric' })
 
 export const monthYearShort = (dateStr: string): string =>
-  parseParts(dateStr).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+  cap(parseParts(dateStr).toLocaleDateString(locale(), { month: 'short', year: 'numeric' }))

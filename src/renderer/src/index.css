@@ -2002,3 +2002,15 @@ tr.is-pending td {
 .bonus {
   color: var(--text-2);
 }
+
+/* Language toggle, next to the theme switch: the name of the other language. */
+.lang-btn {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--tint-1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}

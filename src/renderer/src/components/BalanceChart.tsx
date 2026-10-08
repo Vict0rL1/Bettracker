@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
 import type { Bet } from '../../../shared/types'
 import { monthLabel, type MonthKey } from '../lib/dates'
+import { useLang } from '../lib/i18n'
 import { cumulativeSeries, forMonth, groupByDay, type Summary } from '../lib/stats'
 
 // Recharts is most of the bundle and only the chart needs it. Loading it here,
@@ -18,6 +19,7 @@ interface Props {
 type Scope = 'all' | 'month'
 
 export default function BalanceChart({ bets, lifetime, ym }: Props) {
+  const { t } = useLang()
   const [scope, setScope] = useState<Scope>('all')
 
   // In month scope the curve restarts at zero, answering "how did this month
@@ -28,23 +30,15 @@ export default function BalanceChart({ bets, lifetime, ym }: Props) {
   )
   const data = scope === 'all' ? lifetime.series : monthSeries
 
-  const emptyText =
-    scope === 'month'
-      ? `Log at least two days in ${monthLabel(ym)} to draw a curve.`
-      : 'Log at least two days to draw your balance curve.'
+  const emptyText = scope === 'month' ? t('chart.emptyMonth', { month: monthLabel(ym) }) : t('chart.emptyAll')
 
   return (
     <article className="card chart-card">
       <header className="card-head">
-        <h2>Balance</h2>
-        <div className="scope-toggle" role="group" aria-label="Chart range">
-          <button
-            type="button"
-            className={`scope-btn ${scope === 'all' ? 'active' : ''}`}
-            aria-pressed={scope === 'all'}
-            onClick={() => setScope('all')}
-          >
-            All time
+        <h2>{t('chart.title')}</h2>
+        <div className="scope-toggle" role="group" aria-label={t('chart.range')}>
+          <button type="button" className={`scope-btn ${scope === 'all' ? 'active' : ''}`} aria-pressed={scope === 'all'} onClick={() => setScope('all')}>
+            {t('chart.all')}
           </button>
           <button
             type="button"
@@ -52,7 +46,7 @@ export default function BalanceChart({ bets, lifetime, ym }: Props) {
             aria-pressed={scope === 'month'}
             onClick={() => setScope('month')}
           >
-            This month
+            {t('chart.month')}
           </button>
         </div>
       </header>
@@ -61,8 +55,8 @@ export default function BalanceChart({ bets, lifetime, ym }: Props) {
         <div className="chart-empty">{emptyText}</div>
       ) : (
         <div className="chart-wrap">
-          <Suspense fallback={<div className="chart-empty chart-loading">Drawing the chart…</div>}>
-            <BalanceChartInner data={data} pushLabel="push" dayLabel="day" />
+          <Suspense fallback={<div className="chart-empty chart-loading">{t('chart.loading')}</div>}>
+            <BalanceChartInner data={data} pushLabel={t('chart.push')} dayLabel={t('chart.day')} />
           </Suspense>
         </div>
       )}
