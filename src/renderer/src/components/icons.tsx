@@ -77,6 +77,12 @@ export const MoonIcon = ({ size = 15 }: IconProps) => (
   </svg>
 )
 
+export const SlidersIcon = ({ size = 15 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />
+  </svg>
+)
+
 export const SparkIcon = ({ size = 20 }: IconProps) => (
   <svg {...svgProps(size)} strokeWidth={2.4}>
     <path d="M3 17l6-6 4 4 8-8" />

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { Bet, BetInput, BetStatus, Settings } from '../../../shared/types'
 import { humanDate, todayStr } from '../lib/dates'
 import { useLang } from '../lib/i18n'
-import { parseOdds } from '../lib/odds'
+import { ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
 import { quickDefaults } from '../lib/quick'
 import { MAX_AMOUNT, round2, suggestedAmount } from '../lib/validate'
 import { toneOf, type TagSuggestions } from './DayModal'
@@ -17,8 +17,6 @@ interface Props {
 }
 
 const RESULTS: readonly BetStatus[] = ['won', 'lost', 'push', 'pending']
-
-const ODDS_PLACEHOLDER = { american: '+150', decimal: '1.91', fractional: '3/2' } as const
 
 /**
  * The fast path: stake, odds, tap a result. Everything else is prefilled —

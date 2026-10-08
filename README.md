@@ -161,6 +161,18 @@ given OS's installer must be built on that OS.
 | `npm run dev:desktop` | Native desktop app (Electron) in dev |
 | `npm run build:desktop` | Package a native desktop installer → `release/` |
 | `npm run typecheck` | Type-check the web + desktop code |
+| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed) |
+
+## Settings
+
+The sliders button in the header opens per-user settings, stored in the
+`user_settings` table (migration 004) and cached on the device so they work
+offline and follow you to other devices:
+
+- **Odds format** — American (default), decimal or fractional. Odds are always
+  *stored* as decimal; this only changes how they are shown and typed. The odds
+  box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
+- **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
 
 ## How it's put together
 

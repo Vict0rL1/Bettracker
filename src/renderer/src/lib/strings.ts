@@ -207,7 +207,7 @@ export const en = {
   'modal.stake': 'Stake',
   'modal.notRecorded': 'not recorded',
   'modal.odds': 'Odds',
-  'modal.oddsOpt': 'decimal, optional',
+  'modal.oddsOpt': '{format}, optional',
   'modal.profit': 'Profit',
   'modal.amountLost': 'Amount lost',
   'modal.result': 'Result',
@@ -269,7 +269,19 @@ export const en = {
   'quick.odds': 'Odds',
   'quick.saveWon': 'Save as won',
   'quick.hint': 'Tap a result to log it for today. Pending logs it without one.',
-  'quick.hintProfit': 'No odds, so type the profit for this win.'
+  'quick.hintProfit': 'No odds, so type the profit for this win.',
+
+  // Settings
+  'header.settings': 'Settings',
+  'settings.title': 'Settings',
+  'settings.oddsFormat': 'Odds format',
+  'settings.oddsHint': 'Changes how odds are shown and typed. They are stored as decimal either way, so switching is free.',
+  'settings.defaultStake': 'Default stake',
+  'settings.defaultStakeHint': 'Prefilled in quick add. Leave it empty to reuse the last stake.',
+  'settings.pending': 'Saved on this device — syncs when you’re back online.',
+  'odds.american': 'American',
+  'odds.decimal': 'Decimal',
+  'odds.fractional': 'Fractional'
 } as const
 
 export type StringKey = keyof typeof en
@@ -463,7 +475,7 @@ export const es: Record<StringKey, string> = {
   'modal.stake': 'Stake',
   'modal.notRecorded': 'sin registrar',
   'modal.odds': 'Cuota',
-  'modal.oddsOpt': 'decimal, opcional',
+  'modal.oddsOpt': '{format}, opcional',
   'modal.profit': 'Ganancia',
   'modal.amountLost': 'Importe perdido',
   'modal.result': 'Resultado',
@@ -521,5 +533,16 @@ export const es: Record<StringKey, string> = {
   'quick.odds': 'Cuota',
   'quick.saveWon': 'Guardar como ganada',
   'quick.hint': 'Toca un resultado para registrarla hoy. Pendiente la registra sin resultado.',
-  'quick.hintProfit': 'Sin cuota, así que escribe la ganancia de esta apuesta.'
+  'quick.hintProfit': 'Sin cuota, así que escribe la ganancia de esta apuesta.',
+
+  'header.settings': 'Ajustes',
+  'settings.title': 'Ajustes',
+  'settings.oddsFormat': 'Formato de cuotas',
+  'settings.oddsHint': 'Cambia cómo se muestran y se escriben las cuotas. Se guardan siempre en decimal, así que cambiar no cuesta nada.',
+  'settings.defaultStake': 'Stake por defecto',
+  'settings.defaultStakeHint': 'Se rellena en el registro rápido. Déjalo vacío para repetir el último stake.',
+  'settings.pending': 'Guardado en este dispositivo: se sincronizará al volver la conexión.',
+  'odds.american': 'Americana',
+  'odds.decimal': 'Decimal',
+  'odds.fractional': 'Fraccionaria'
 }

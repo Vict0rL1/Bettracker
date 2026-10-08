@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import type { SyncStatus } from '../data/useBetSync'
 import { useLang } from '../lib/i18n'
 import type { Theme } from '../lib/theme'
-import { DownloadIcon, MoonIcon, PlusIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
+import { DownloadIcon, MoonIcon, PlusIcon, SlidersIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
 
 interface Props {
   email: string | null
@@ -14,6 +14,7 @@ interface Props {
   onExport: () => void
   onImport: (file: File) => void
   onToggleTheme: () => void
+  onOpenSettings: () => void
   onLogToday: () => void
   onSignOut: () => void
 }
@@ -27,6 +28,7 @@ export default function Header({
   onExport,
   onImport,
   onToggleTheme,
+  onOpenSettings,
   onLogToday,
   onSignOut
 }: Props) {
@@ -89,6 +91,9 @@ export default function Header({
         </button>
         <button type="button" className="btn-icon lang-btn" onClick={toggleLang} title={t('header.langTitle')} aria-label={t('header.langTitle')}>
           {t('header.lang')}
+        </button>
+        <button type="button" className="btn-icon theme-btn settings-btn" onClick={onOpenSettings} aria-label={t('header.settings')} title={t('header.settings')}>
+          <SlidersIcon />
         </button>
         <button type="button" className="btn btn-primary" onClick={onLogToday}>
           <PlusIcon /> {t('header.logToday')}

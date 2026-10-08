@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Bet, BetStatus } from '../../../shared/types'
+import type { Bet, BetStatus, OddsFormat } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
-import { fmtMoney, fmtOdds, fmtPctSigned, fmtStake } from '../lib/format'
+import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { formatOdds } from '../lib/odds'
 import { tagValues } from '../lib/stats'
 import { suggestedAmount } from '../lib/validate'
 import { toneOf } from './DayModal'
@@ -10,6 +11,7 @@ import { ChevronLeftIcon, ChevronRightIcon, PencilIcon, TrashIcon } from './icon
 
 interface Props {
   bets: Bet[]
+  oddsFormat: OddsFormat
   onEdit: (date: string) => void
   onDelete: (id: string) => void
   /** Settle a pending bet with the result its stake and odds imply, or open it when they can't. */
@@ -32,7 +34,7 @@ function compareNullable(a: number | null, b: number | null, dir: number): numbe
   return (a - b) * dir
 }
 
-export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props) {
+export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSettle }: Props) {
   const { t, tn } = useLang()
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -225,7 +227,7 @@ export default function HistoryTable({ bets, onEdit, onDelete, onSettle }: Props
                             <span className={`pill ${tone}`}>{t(`status.${b.status}`)}</span>
                           </td>
                           <td className="td-stake">{b.stake === null ? <span className="td-none">—</span> : fmtStake(b.stake)}</td>
-                          <td className="td-stake">{b.odds === null ? <span className="td-none">—</span> : fmtOdds(b.odds)}</td>
+                          <td className="td-stake td-odds">{b.odds === null ? <span className="td-none">—</span> : formatOdds(b.odds, oddsFormat)}</td>
                           <td className={`td-amt ${tone}`}>{b.amount === null ? <span className="td-none">—</span> : fmtMoney(b.amount)}</td>
                           <td className={`td-roi ${ret === null ? '' : ret > 0 ? 'win' : ret < 0 ? 'loss' : ''}`}>
                             {ret === null ? <span className="td-none">—</span> : fmtPctSigned(ret)}

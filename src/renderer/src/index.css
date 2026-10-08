@@ -2105,6 +2105,62 @@ tr.is-pending td {
   padding: 8px 16px;
 }
 
+/* Odds are typed as text (+150, 1.91, 3/2) — a plain box, no spinner. */
+.odds-input[aria-invalid='true'] {
+  border-color: var(--red);
+}
+
+/* ---- settings ---- */
+
+.settings-modal {
+  width: 440px;
+  gap: 18px;
+}
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-row .hint {
+  margin: 0;
+}
+
+.settings-seg .seg-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0;
+}
+
+.settings-seg .seg-btn.active {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.seg-sample {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-seg .seg-btn.active .seg-sample {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.settings-stake {
+  max-width: 200px;
+}
+
+.settings-sync {
+  font-size: var(--fs-sm);
+  color: var(--amber);
+}
+
 @media (max-width: 640px) {
   .fab {
     right: 16px;

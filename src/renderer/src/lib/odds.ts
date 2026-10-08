@@ -50,6 +50,9 @@ function gcd(a: number, b: number): number {
   return b === 0 ? a : gcd(b, a % b)
 }
 
+/** What an empty odds box shows, per format. */
+export const ODDS_PLACEHOLDER: Record<OddsFormat, string> = { american: '+150', decimal: '1.91', fractional: '3/2' }
+
 /** The user-facing text for a stored decimal price. */
 export function formatOdds(decimal: number, format: OddsFormat): string {
   switch (format) {

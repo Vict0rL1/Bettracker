@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import type { Bet, BetInput, BetStatus } from '../../../shared/types'
+import type { Bet, BetInput, BetStatus, OddsFormat } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
-import { fmtMoney, fmtOdds, fmtPctSigned, fmtStake } from '../lib/format'
+import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { formatOdds, ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
 import { round2, total as sumTotal } from '../lib/stats'
 import { MAX_AMOUNT, MAX_ODDS, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
@@ -16,6 +17,7 @@ export interface TagSuggestions {
 interface Props {
   date: string
   bets: Bet[]
+  oddsFormat: OddsFormat
   suggestions: TagSuggestions
   onAdd: (input: BetInput) => Promise<void>
   onUpdate: (id: string, input: BetInput) => Promise<void>
@@ -43,7 +45,7 @@ const toInput = (b: Bet): BetInput => ({
   betType: b.betType
 })
 
-export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
+export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
   const { t, tn } = useLang()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [status, setStatus] = useState<BetStatus>('won')
@@ -63,6 +65,9 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
   // Once the user types their own result we stop suggesting one from the stake
   // and odds, for the rest of this entry.
   const amountEdited = useRef(false)
+  // The odds box shows a stored price in the chosen format, which can round
+  // (1.91 reads as −110). Saving an untouched box keeps the exact stored price.
+  const shownOdds = useRef<{ text: string; value: number } | null>(null)
   // Legacy bets never recorded a stake; editing one shouldn't force it.
   const [stakeOptional, setStakeOptional] = useState(false)
   const titleId = useId()
@@ -108,7 +113,8 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
   const pendingHere = bets.filter((b) => b.status === 'pending').length
 
   const parsedStake = stakeStr.trim() === '' ? null : parseFloat(stakeStr)
-  const parsedOdds = oddsStr.trim() === '' ? null : parseFloat(oddsStr)
+  const readOdds = (text: string): number | null => (shownOdds.current && text === shownOdds.current.text ? shownOdds.current.value : parseOdds(text, oddsFormat))
+  const parsedOdds = readOdds(oddsStr)
 
   /** Put the result the stake and odds imply into the amount box, unless the user has typed one. */
   const suggest = (s: BetStatus, stake: number | null, odds: number | null): void => {
@@ -129,13 +135,15 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
     setBetType('')
     setStakeOptional(false)
     amountEdited.current = false
+    shownOdds.current = null
   }
 
   const startEdit = (b: Bet, as: BetStatus = b.status): void => {
     setEditingId(b.id)
     setStatus(as)
     setStakeStr(b.stake === null ? '' : String(b.stake))
-    setOddsStr(b.odds === null ? '' : String(b.odds))
+    shownOdds.current = b.odds === null ? null : { text: formatOdds(b.odds, oddsFormat), value: b.odds }
+    setOddsStr(shownOdds.current?.text ?? '')
     setNote(b.note)
     setSport(b.sport)
     setBook(b.book)
@@ -163,14 +171,14 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
   }
   const handleOdds = (value: string): void => {
     setOddsStr(value)
-    suggest(status, parsedStake, value.trim() === '' ? null : parseFloat(value))
+    suggest(status, parsedStake, readOdds(value))
   }
 
   const amount = parseFloat(amountStr)
   const needsAmount = status === 'won' || status === 'lost'
   const amountValid = !needsAmount || (Number.isFinite(amount) && amount > 0 && amount <= MAX_AMOUNT)
   const stakeValid = parsedStake === null ? stakeOptional : Number.isFinite(parsedStake) && parsedStake >= 0 && parsedStake <= MAX_AMOUNT
-  const oddsValid = parsedOdds === null || (Number.isFinite(parsedOdds) && parsedOdds > 1 && parsedOdds <= MAX_ODDS)
+  const oddsValid = oddsStr.trim() === '' || (parsedOdds !== null && parsedOdds <= MAX_ODDS)
   const canSave = amountValid && stakeValid && oddsValid && !busy
 
   const signedAmount: number | null = status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
@@ -279,7 +287,7 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
                         {b.stake !== null && (
                           <span className="bet-stake">
                             {t(b.status === 'pending' ? 'modal.riding' : 'modal.risked', { amount: fmtStake(b.stake) })}
-                            {b.odds !== null && ` @ ${fmtOdds(b.odds)}`}
+                            {b.odds !== null && ` @ ${formatOdds(b.odds, oddsFormat)}`}
                             {ret !== null && (b.status === 'won' || b.status === 'lost') && ` · ${fmtPctSigned(ret)}`}
                           </span>
                         )}
@@ -362,9 +370,17 @@ export default function DayModal({ date, bets, suggestions, onAdd, onUpdate, onD
 
             <label className="field">
               <span className="field-label">
-                {t('modal.odds')} <span className="field-opt">{t('modal.oddsOpt')}</span>
+                {t('modal.odds')} <span className="field-opt">{t('modal.oddsOpt', { format: t(`odds.${oddsFormat}`).toLowerCase() })}</span>
               </span>
-              <input type="number" inputMode="decimal" min="1.01" step="0.01" placeholder="1.91" value={oddsStr} onChange={(e) => handleOdds(e.target.value)} />
+              <input
+                type="text"
+                inputMode="decimal"
+                className="odds-input"
+                placeholder={ODDS_PLACEHOLDER[oddsFormat]}
+                value={oddsStr}
+                aria-invalid={!oddsValid}
+                onChange={(e) => handleOdds(e.target.value)}
+              />
             </label>
 
             <label className="field">

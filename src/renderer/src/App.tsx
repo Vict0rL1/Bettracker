@@ -8,6 +8,7 @@ import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
 import QuickAdd from './components/QuickAdd'
+import SettingsDialog from './components/SettingsDialog'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
@@ -43,6 +44,7 @@ export default function App() {
   const [ym, setYm] = useState<MonthKey>(currentMonth)
   const [modalDate, setModalDate] = useState<string | null>(null)
   const [quickOpen, setQuickOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
   const showError = useCallback(
@@ -56,7 +58,7 @@ export default function App() {
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice)
   const { bets, status, queuedCount, isOffline } = sync
-  const { settings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
+  const { settings, dirty: settingsDirty, update: updateSettings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
 
   useEffect(() => {
     if (!loading && (!activeUserId || bets !== null)) {
@@ -86,7 +88,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (modalDate !== null || quickOpen) return
+      if (modalDate !== null || quickOpen || settingsOpen) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
@@ -100,7 +102,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalDate, quickOpen])
+  }, [modalDate, quickOpen, settingsOpen])
 
   const savedNote = useCallback(
     (action: string, date?: string) => (isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action),
@@ -218,6 +220,7 @@ export default function App() {
         onExport={handleExport}
         onImport={handleImport}
         onToggleTheme={toggleTheme}
+        onOpenSettings={() => setSettingsOpen(true)}
         onLogToday={() => setModalDate(todayStr())}
         onSignOut={signOut}
       />
@@ -238,12 +241,13 @@ export default function App() {
 
       <Breakdown bets={shownBets} />
 
-      <HistoryTable bets={shownBets} onEdit={setModalDate} onDelete={handleDelete} onSettle={handleSettle} />
+      <HistoryTable bets={shownBets} oddsFormat={settings.oddsFormat} onEdit={setModalDate} onDelete={handleDelete} onSettle={handleSettle} />
 
       {modalDate !== null && (
         <DayModal
           date={modalDate}
           bets={modalBets}
+          oddsFormat={settings.oddsFormat}
           suggestions={suggestions}
           onAdd={handleAdd}
           onUpdate={handleUpdate}
@@ -255,6 +259,8 @@ export default function App() {
       {quickOpen && (
         <QuickAdd bets={shownBets} settings={settings} suggestions={suggestions} onAdd={handleAdd} onClose={() => setQuickOpen(false)} />
       )}
+
+      {settingsOpen && <SettingsDialog settings={settings} dirty={settingsDirty} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />}
 
       <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
         <PlusIcon size={22} />
