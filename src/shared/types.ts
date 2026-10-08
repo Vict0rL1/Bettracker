@@ -34,6 +34,8 @@ export interface Bet {
   stake: number | null
   /** Decimal odds (1.91, 2.50 …), > 1, or null when not recorded. */
   odds: number | null
+  /** The price when the market closed, for closing line value. Optional. */
+  closingOdds: number | null
   status: BetStatus
   note: string
   /** Free-text tags; empty string means "not tagged". */
@@ -54,6 +56,7 @@ export interface BetInput {
   amount?: number | null
   stake?: number | null
   odds?: number | null
+  closingOdds?: number | null
   /** Derived from the sign of `amount` when omitted. */
   status?: BetStatus
   note?: string
@@ -75,3 +78,40 @@ export const hasStake = (b: Bet): b is StakedBet => b.stake !== null
 /** The status a result implies: the rule the 003 migration backfilled with. */
 export const statusForAmount = (amount: number): Exclude<BetStatus, 'pending' | 'void'> =>
   amount > 0 ? 'won' : amount < 0 ? 'lost' : 'push'
+
+/** How odds are entered and shown. They are always stored as decimal. */
+export type OddsFormat = 'american' | 'decimal' | 'fractional'
+
+export const ODDS_FORMATS: readonly OddsFormat[] = ['american', 'decimal', 'fractional']
+
+export const isOddsFormat = (v: unknown): v is OddsFormat => ODDS_FORMATS.includes(v as OddsFormat)
+
+/**
+ * Per-user preferences, one row per user (`user_settings`). Every field is
+ * optional in the database; the app fills in these defaults when a row is
+ * missing or a field is null, so code never has to.
+ */
+export interface Settings {
+  oddsFormat: OddsFormat
+  /** Dollars per unit; null until the user sets one. */
+  unitSize: number | null
+  showUnits: boolean
+  startingBankroll: number | null
+  defaultStake: number | null
+  /** Monthly net loss at which the app warns. Never blocks. */
+  lossLimit: number | null
+  /** Set by the editing device; the conflict key, as with bets. */
+  updatedAt: string
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  oddsFormat: 'american',
+  unitSize: null,
+  showUnits: false,
+  startingBankroll: null,
+  defaultStake: null,
+  lossLimit: null,
+  updatedAt: ''
+}
+
+export type SettingsPatch = Partial<Omit<Settings, 'updatedAt'>>

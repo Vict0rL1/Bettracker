@@ -13,6 +13,7 @@ interface Row {
   amount: number | string | null
   stake?: number | string | null
   odds?: number | string | null
+  closing_odds?: number | string | null
   status?: string | null
   note: string | null
   sport?: string | null
@@ -37,6 +38,7 @@ function toBet(row: Row): Bet {
     amount: status === 'pending' ? null : (amount ?? 0),
     stake: num(row.stake),
     odds: num(row.odds),
+    closingOdds: num(row.closing_odds),
     status,
     note: row.note ?? '',
     sport: row.sport ?? '',
@@ -54,6 +56,7 @@ function toRowPayload(clean: CleanBet): Record<string, unknown> {
     amount: clean.amount,
     stake: clean.stake,
     odds: clean.odds,
+    closing_odds: clean.closingOdds,
     status: clean.status,
     note: clean.note,
     sport: clean.sport,
@@ -78,15 +81,15 @@ export function isNetworkError(err: unknown): boolean {
  */
 export function isMissingColumnError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
-  return /column .*(stake|sport|book|bet_type|odds|status).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status).* column/i.test(
+  return /column .*(stake|sport|book|bet_type|odds|status|closing_odds).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status|closing_odds).* column|relation .*user_settings.* does not exist|could not find the table .*user_settings/i.test(
     msg
   )
 }
 
 export const MIGRATION_HINT =
-  'Your database is behind the app. Run the files in supabase/migrations/ (002, then 003) in your Supabase SQL editor.'
+  'Your database is behind the app. Run the files in supabase/migrations/ (002, 003, then 004) in your Supabase SQL editor.'
 
-function describe(error: { message: string }): Error {
+export function describeError(error: { message: string }): Error {
   const err = new Error(error.message)
   return isMissingColumnError(err) ? new Error(MIGRATION_HINT) : err
 }
@@ -105,7 +108,7 @@ export async function getBets(): Promise<Bet[]> {
     .select('*')
     .order('date', { ascending: true })
     .order('created_at', { ascending: true })
-  if (error) throw describe(error)
+  if (error) throw describeError(error)
   return (data as Row[]).map(toBet)
 }
 
@@ -124,7 +127,7 @@ export async function addBet(input: BetInput, id?: string): Promise<Bet> {
       const { data: existing } = await supabase.from(TABLE).select('*').eq('id', id).single()
       if (existing) return toBet(existing as Row)
     }
-    throw describe(error)
+    throw describeError(error)
   }
   return toBet(data as Row)
 }
@@ -153,14 +156,14 @@ export async function updateBet(id: string, input: BetInput, editedAt: string): 
     .lte('updated_at', editedAt)
     .select()
     .maybeSingle()
-  if (error) throw describe(error)
+  if (error) throw describeError(error)
   return data ? toBet(data as Row) : null
 }
 
 /** Delete one bet by id. */
 export async function deleteBet(id: string): Promise<boolean> {
   const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
-  if (error) throw describe(error)
+  if (error) throw describeError(error)
   return (count ?? 0) > 0
 }
 
@@ -180,7 +183,7 @@ export async function addBets(inputs: readonly { id: string; input: BetInput }[]
     const chunk = rows.slice(i, i + CHUNK)
     // upsert (not insert) so re-running an interrupted import is idempotent.
     const { error, count } = await supabase.from(TABLE).upsert(chunk, { count: 'exact', onConflict: 'id' })
-    if (error) throw describe(error)
+    if (error) throw describeError(error)
     written += count ?? chunk.length
   }
   return written

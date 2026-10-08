@@ -19,6 +19,7 @@ export function bet(over: Partial<Bet> = {}): Bet {
     amount,
     stake: over.stake === undefined ? null : over.stake,
     odds: over.odds === undefined ? null : over.odds,
+    closingOdds: over.closingOdds === undefined ? null : over.closingOdds,
     status,
     note: over.note ?? '',
     sport: over.sport ?? '',

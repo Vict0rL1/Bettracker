@@ -16,6 +16,8 @@ create table if not exists public.entries (
   stake      numeric(12, 2),
   -- Decimal odds the bet was placed at. Nullable: older bets never recorded it.
   odds       numeric(8, 3),
+  -- The price when the market closed, for closing line value. Optional.
+  closing_odds numeric(8, 3),
   -- pending | won | lost | push | void. Names shared with the Sports Predictor
   -- where they overlap, so rows can move between the two apps later.
   status     text not null,
@@ -28,6 +30,7 @@ create table if not exists public.entries (
   updated_at timestamptz not null default now(),
   constraint entries_stake_nonneg check (stake is null or stake >= 0),
   constraint entries_odds_gt_one  check (odds is null or odds > 1),
+  constraint entries_closing_odds_gt_one check (closing_odds is null or closing_odds > 1),
   constraint entries_status_known check (status in ('pending', 'won', 'lost', 'push', 'void')),
   -- A pending bet has no amount; a settled one always does. Push and void give
   -- the stake back, so their net result is exactly 0.
@@ -41,7 +44,7 @@ create table if not exists public.entries (
 );
 
 -- Existing installs: pick up the columns added after the first release
--- (migrations 002 and 003, in order; each is a no-op once applied).
+-- (migrations 002, 003 and 004, in order; each is a no-op once applied).
 alter table public.entries add column if not exists stake    numeric(12, 2);
 alter table public.entries add column if not exists sport    text not null default '';
 alter table public.entries add column if not exists book     text not null default '';
@@ -64,6 +67,10 @@ alter table public.entries add  constraint entries_amount_matches_status check (
   or (status in ('won', 'lost') and amount is not null)
   or (status in ('push', 'void') and amount = 0)
 );
+alter table public.entries add column if not exists closing_odds numeric(8, 3);
+alter table public.entries drop constraint if exists entries_closing_odds_gt_one;
+alter table public.entries add  constraint entries_closing_odds_gt_one
+  check (closing_odds is null or closing_odds > 1);
 
 create index if not exists entries_user_date_idx  on public.entries (user_id, date);
 create index if not exists entries_user_sport_idx on public.entries (user_id, sport) where sport <> '';
@@ -104,6 +111,55 @@ create policy "entries are private - delete"
 do $$
 begin
   alter publication supabase_realtime add table public.entries;
+exception
+  when duplicate_object then null;
+end $$;
+
+-- Per-user settings: one row per user, cached offline like the bets. Odds are
+-- always stored as decimal; odds_format only decides how they are shown.
+-- A missing row means "all defaults".
+create table if not exists public.user_settings (
+  user_id           uuid primary key references auth.users (id) on delete cascade,
+  odds_format       text not null default 'american',
+  unit_size         numeric(12, 2),
+  show_units        boolean not null default false,
+  starting_bankroll numeric(12, 2),
+  default_stake     numeric(12, 2),
+  loss_limit        numeric(12, 2),
+  updated_at        timestamptz not null default now(),
+  constraint user_settings_odds_format check (odds_format in ('american', 'decimal', 'fractional')),
+  constraint user_settings_unit_size   check (unit_size is null or unit_size > 0),
+  constraint user_settings_bankroll    check (starting_bankroll is null or starting_bankroll >= 0),
+  constraint user_settings_stake       check (default_stake is null or default_stake >= 0),
+  constraint user_settings_loss_limit  check (loss_limit is null or loss_limit > 0)
+);
+
+alter table public.user_settings enable row level security;
+
+drop policy if exists "settings are private - select" on public.user_settings;
+create policy "settings are private - select"
+  on public.user_settings for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "settings are private - insert" on public.user_settings;
+create policy "settings are private - insert"
+  on public.user_settings for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "settings are private - update" on public.user_settings;
+create policy "settings are private - update"
+  on public.user_settings for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "settings are private - delete" on public.user_settings;
+create policy "settings are private - delete"
+  on public.user_settings for delete
+  using (auth.uid() = user_id);
+
+do $$
+begin
+  alter publication supabase_realtime add table public.user_settings;
 exception
   when duplicate_object then null;
 end $$;

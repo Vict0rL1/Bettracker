@@ -7,15 +7,18 @@ import DayModal, { type TagSuggestions } from './components/DayModal'
 import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
+import QuickAdd from './components/QuickAdd'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
 import { useBetSync } from './data/useBetSync'
+import { useSettings } from './data/useSettings'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
 import { useLang } from './lib/i18n'
 import { summarize, tagValues, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
+import { PlusIcon } from './components/icons'
 
 function Boot() {
   return (
@@ -39,6 +42,7 @@ export default function App() {
 
   const [ym, setYm] = useState<MonthKey>(currentMonth)
   const [modalDate, setModalDate] = useState<string | null>(null)
+  const [quickOpen, setQuickOpen] = useState(false)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
   const showError = useCallback(
@@ -52,6 +56,7 @@ export default function App() {
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice)
   const { bets, status, queuedCount, isOffline } = sync
+  const { settings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
 
   useEffect(() => {
     if (!loading && (!activeUserId || bets !== null)) {
@@ -81,16 +86,21 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (modalDate !== null) return
+      if (modalDate !== null || quickOpen) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
       if (e.key === 'ArrowRight') setYm((m) => addMonths(m, 1))
-      if (e.key === 't' || e.key === 'T') setModalDate(todayStr())
+      if (e.key === 't' || e.key === 'T') {
+        // The sheet focuses and selects the stake box as it opens; without this
+        // the same keystroke's character would land there and wipe the default.
+        e.preventDefault()
+        setQuickOpen(true)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalDate])
+  }, [modalDate, quickOpen])
 
   const savedNote = useCallback(
     (action: string, date?: string) => (isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action),
@@ -241,6 +251,14 @@ export default function App() {
           onClose={() => setModalDate(null)}
         />
       )}
+
+      {quickOpen && (
+        <QuickAdd bets={shownBets} settings={settings} suggestions={suggestions} onAdd={handleAdd} onClose={() => setQuickOpen(false)} />
+      )}
+
+      <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
+        <PlusIcon size={22} />
+      </button>
 
       {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
     </div>

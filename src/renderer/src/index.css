@@ -2014,3 +2014,115 @@ tr.is-pending td {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+
+/* ---------- quick add ---------- */
+.fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 55;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  display: grid;
+  place-items: center;
+  background: var(--green);
+  color: #04150c;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease;
+}
+
+.fab:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+/* Keep the toast clear of the button. */
+.toast {
+  right: 96px;
+}
+
+.quick-modal {
+  width: 440px;
+}
+
+.quick-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.quick-row .field input[type='text'] {
+  padding-left: 12px;
+}
+
+.quick-tags {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.quick-tags input {
+  min-width: 0;
+  background: var(--input-bg);
+  border: 1px solid var(--tint-3);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  padding: 8px 12px;
+}
+
+.quick-tags input:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.quick-results {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.quick-results .seg-btn {
+  padding: 12px 0;
+}
+
+.quick-results .seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.quick-profit {
+  grid-template-columns: 1fr auto auto;
+  align-items: end;
+}
+
+.quick-save {
+  padding: 8px 16px;
+}
+
+@media (max-width: 640px) {
+  .fab {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .toast {
+    right: 16px;
+    left: 16px;
+    bottom: 88px;
+    max-width: none;
+  }
+
+  .quick-results {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .quick-profit {
+    grid-template-columns: 1fr;
+  }
+}

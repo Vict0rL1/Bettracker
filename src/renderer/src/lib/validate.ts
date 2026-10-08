@@ -31,11 +31,20 @@ function cleanMoney(value: number | null | undefined, what: string, min: number)
   return round2(value)
 }
 
+function cleanOdds(value: number | null | undefined, what: string): number | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
+  if (value <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
+  if (value > MAX_ODDS) throw new Error(`${what} are out of range`)
+  return Math.round(value * 1000) / 1000
+}
+
 export interface CleanBet {
   date: string
   amount: number | null
   stake: number | null
   odds: number | null
+  closingOdds: number | null
   status: BetStatus
   note: string
   sport: string
@@ -101,19 +110,15 @@ export function normalizeInput(input: BetInput): CleanBet {
   // becomes a stake, so ROI is never computed against a value nobody entered.
   const stake = cleanMoney(input.stake, 'Stake', 0)
 
-  let odds: number | null = null
-  if (input.odds !== undefined && input.odds !== null) {
-    if (typeof input.odds !== 'number' || !Number.isFinite(input.odds)) throw new Error('Odds must be a finite number')
-    if (input.odds <= 1) throw new Error('Decimal odds must be greater than 1')
-    if (input.odds > MAX_ODDS) throw new Error('Odds are out of range')
-    odds = Math.round(input.odds * 1000) / 1000
-  }
+  const odds = cleanOdds(input.odds, 'Odds')
+  const closingOdds = cleanOdds(input.closingOdds, 'Closing odds')
 
   return {
     date: input.date,
     amount,
     stake,
     odds,
+    closingOdds,
     status,
     note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH),
     sport: cleanTag(input.sport),

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { Bet } from '../../../shared/types'
+import { DEFAULT_SETTINGS, type Bet } from '../../../shared/types'
 import { bet } from '../test-utils'
 import {
   applyOutbox,
@@ -8,10 +8,14 @@ import {
   hydrateBet,
   loadCache,
   loadOutbox,
+  loadSettingsCache,
+  loadSettingsOutbox,
   opSize,
   reconcile,
   saveCache,
   saveOutbox,
+  saveSettingsCache,
+  saveSettingsOutbox,
   sortBets,
   type PendingOp
 } from './offline'
@@ -55,6 +59,7 @@ describe('hydrateBet', () => {
       amount: 12,
       stake: null,
       odds: null,
+      closingOdds: null,
       status: 'won',
       note: 'x',
       sport: '',
@@ -118,6 +123,38 @@ describe('cache and outbox persistence', () => {
     clearUserData('u1')
     expect(loadCache('u1')).toBeNull()
     expect(loadOutbox('u1')).toEqual([])
+  })
+})
+
+describe('settings cache and outbox', () => {
+  const full = { ...DEFAULT_SETTINGS, oddsFormat: 'decimal' as const, defaultStake: 25, updatedAt: 'E' }
+
+  it('round-trips the settings row per user', () => {
+    saveSettingsCache('u1', full)
+    expect(loadSettingsCache('u1')).toEqual(full)
+    expect(loadSettingsCache('u2')).toBeNull()
+  })
+
+  it('fills in settings a cache from an older version never stored', () => {
+    localStorage.setItem('bettracker:settings:u1', JSON.stringify({ oddsFormat: 'fractional', updatedAt: 'E' }))
+    expect(loadSettingsCache('u1')).toEqual({ ...DEFAULT_SETTINGS, oddsFormat: 'fractional', updatedAt: 'E' })
+  })
+
+  it('holds at most one pending patch, and null clears it', () => {
+    expect(loadSettingsOutbox('u1')).toBeNull()
+    saveSettingsOutbox('u1', { patch: { defaultStake: 10 }, editedAt: 'E' })
+    expect(loadSettingsOutbox('u1')).toEqual({ patch: { defaultStake: 10 }, editedAt: 'E' })
+    saveSettingsOutbox('u1', null)
+    expect(loadSettingsOutbox('u1')).toBeNull()
+    expect(localStorage.getItem('bettracker:settings-outbox:u1')).toBeNull()
+  })
+
+  it('is wiped on sign-out with the rest', () => {
+    saveSettingsCache('u1', full)
+    saveSettingsOutbox('u1', { patch: { defaultStake: 10 }, editedAt: 'E' })
+    clearUserData('u1')
+    expect(loadSettingsCache('u1')).toBeNull()
+    expect(loadSettingsOutbox('u1')).toBeNull()
   })
 })
 

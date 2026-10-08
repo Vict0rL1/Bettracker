@@ -1,4 +1,4 @@
-import { isBetStatus, statusForAmount, type Bet, type BetInput } from '../../../shared/types'
+import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput, type Settings, type SettingsPatch } from '../../../shared/types'
 
 /**
  * Device-local persistence for offline support.
@@ -29,6 +29,8 @@ export interface OfflineUser {
 
 const cacheKey = (userId: string): string => `bettracker:cache:${userId}`
 const outboxKey = (userId: string): string => `bettracker:outbox:${userId}`
+const settingsKey = (userId: string): string => `bettracker:settings:${userId}`
+const settingsOutboxKey = (userId: string): string => `bettracker:settings-outbox:${userId}`
 const LAST_USER_KEY = 'bettracker:last-user'
 
 function readJson<T>(key: string): T | null {
@@ -66,6 +68,7 @@ export function hydrateBet(raw: Partial<Bet> & { id: string; date: string }): Be
     amount: status === 'pending' ? null : (amount ?? 0),
     stake: finiteOrNull(raw.stake),
     odds: finiteOrNull(raw.odds),
+    closingOdds: finiteOrNull(raw.closingOdds),
     status,
     note: raw.note ?? '',
     sport: raw.sport ?? '',
@@ -86,6 +89,28 @@ export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJs
 export const loadOutbox = (userId: string): PendingOp[] => readJson<PendingOp[]>(outboxKey(userId)) ?? []
 export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => writeJson(outboxKey(userId), outbox)
 
+/** Settings are one row; the cache holds the last-known row and the outbox at most one pending patch. */
+export const loadSettingsCache = (userId: string): Settings | null => {
+  const raw = readJson<Partial<Settings>>(settingsKey(userId))
+  return raw === null ? null : { ...DEFAULT_SETTINGS, ...raw }
+}
+export const saveSettingsCache = (userId: string, s: Settings): void => writeJson(settingsKey(userId), s)
+
+export interface PendingSettings {
+  patch: SettingsPatch
+  editedAt: string
+}
+export const loadSettingsOutbox = (userId: string): PendingSettings | null => readJson<PendingSettings>(settingsOutboxKey(userId))
+export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): void => {
+  if (p === null) {
+    try {
+      localStorage.removeItem(settingsOutboxKey(userId))
+    } catch {
+      // best effort
+    }
+  } else writeJson(settingsOutboxKey(userId), p)
+}
+
 export const loadLastUser = (): OfflineUser | null => readJson<OfflineUser>(LAST_USER_KEY)
 export const saveLastUser = (user: OfflineUser): void => writeJson(LAST_USER_KEY, user)
 
@@ -94,6 +119,8 @@ export function clearUserData(userId: string): void {
   try {
     localStorage.removeItem(cacheKey(userId))
     localStorage.removeItem(outboxKey(userId))
+    localStorage.removeItem(settingsKey(userId))
+    localStorage.removeItem(settingsOutboxKey(userId))
     localStorage.removeItem(LAST_USER_KEY)
   } catch {
     // best effort
@@ -112,7 +139,7 @@ export const sortBets = (bets: readonly Bet[]): Bet[] => [...bets].sort(byDateTh
 export const opSize = (op: PendingOp): number => (op.kind === 'bulk-add' ? op.entries.length : 1)
 
 /** The fields an input carries over onto a row, in the row's shape. */
-function fieldsFrom(input: BetInput): Pick<Bet, 'date' | 'amount' | 'stake' | 'odds' | 'status' | 'note' | 'sport' | 'book' | 'betType'> {
+function fieldsFrom(input: BetInput): Pick<Bet, 'date' | 'amount' | 'stake' | 'odds' | 'closingOdds' | 'status' | 'note' | 'sport' | 'book' | 'betType'> {
   const amount = input.amount ?? null
   const status = input.status ?? (amount === null ? 'pending' : statusForAmount(amount))
   return {
@@ -120,6 +147,7 @@ function fieldsFrom(input: BetInput): Pick<Bet, 'date' | 'amount' | 'stake' | 'o
     amount: status === 'pending' ? null : amount,
     stake: input.stake ?? null,
     odds: input.odds ?? null,
+    closingOdds: input.closingOdds ?? null,
     status,
     note: input.note ?? '',
     sport: input.sport ?? '',

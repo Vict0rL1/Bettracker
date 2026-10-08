@@ -259,7 +259,17 @@ export const en = {
   'setup.step2': "Run the SQL in {file} from the project's SQL editor.",
   'setup.step3': 'Copy {example} to {env} and fill in your project URL and anon key (Project Settings → API).',
   'setup.step4': 'Restart the app ({cmd}).',
-  'setup.foot': 'Full instructions are in the README.'
+  'setup.foot': 'Full instructions are in the README.',
+
+  // Quick add
+  'quick.fab': 'Quick add',
+  'quick.title': 'Quick add',
+  'quick.forDate': 'Logged for {date}',
+  'quick.stake': 'Stake',
+  'quick.odds': 'Odds',
+  'quick.saveWon': 'Save as won',
+  'quick.hint': 'Tap a result to log it for today. Pending logs it without one.',
+  'quick.hintProfit': 'No odds, so type the profit for this win.'
 } as const
 
 export type StringKey = keyof typeof en
@@ -502,5 +512,14 @@ export const es: Record<StringKey, string> = {
   'setup.step2': 'Ejecuta el SQL de {file} desde el editor SQL del proyecto.',
   'setup.step3': 'Copia {example} a {env} y rellena la URL del proyecto y la clave anon (Project Settings → API).',
   'setup.step4': 'Reinicia la app ({cmd}).',
-  'setup.foot': 'Las instrucciones completas están en el README.'
+  'setup.foot': 'Las instrucciones completas están en el README.',
+
+  'quick.fab': 'Registro rápido',
+  'quick.title': 'Registro rápido',
+  'quick.forDate': 'Se registra el {date}',
+  'quick.stake': 'Stake',
+  'quick.odds': 'Cuota',
+  'quick.saveWon': 'Guardar como ganada',
+  'quick.hint': 'Toca un resultado para registrarla hoy. Pendiente la registra sin resultado.',
+  'quick.hintProfit': 'Sin cuota, así que escribe la ganancia de esta apuesta.'
 }

@@ -68,11 +68,13 @@ window.__supabaseMock = {
 export interface BootOptions {
   entries?: SeedEntry[]
   theme?: 'dark' | 'light'
+  /** Cached user settings, as the app would have stored them. */
+  settings?: Record<string, unknown>
 }
 
 export async function install(context: BrowserContext, opts: BootOptions = {}): Promise<void> {
   await context.addInitScript(
-    ({ mock, user, entries, theme }) => {
+    ({ mock, user, entries, theme, settings }) => {
       // eslint-disable-next-line no-eval
       eval(mock)
       if (localStorage.getItem('e2e:seeded')) return
@@ -80,8 +82,9 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
       localStorage.setItem('bettracker:last-user', JSON.stringify(user))
       localStorage.setItem(`bettracker:cache:${user.id}`, JSON.stringify(entries))
       localStorage.setItem('bettracker:theme', theme)
+      if (settings) localStorage.setItem(`bettracker:settings:${user.id}`, JSON.stringify(settings))
     },
-    { mock: MOCK, user: USER, entries: opts.entries ?? SEED, theme: opts.theme ?? 'dark' }
+    { mock: MOCK, user: USER, entries: opts.entries ?? SEED, theme: opts.theme ?? 'dark', settings: opts.settings ?? null }
   )
 }
 
