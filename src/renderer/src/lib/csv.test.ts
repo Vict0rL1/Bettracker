@@ -19,6 +19,22 @@ describe('betsToCsv', () => {
     expect(csv).toContain('"a,b ""c""\nd"')
   })
 
+  it('defuses cells a spreadsheet would run as a formula', () => {
+    const csv = betsToCsv([
+      bet({ amount: 1, note: '=HYPERLINK("http://x")', sport: '+1', book: '-x', betType: '@cmd' }),
+      bet({ amount: 1, note: '\tlead tab', sport: "'quoted", book: 'plain', betType: '' })
+    ])
+    const lines = csv.slice(1).trim().split('\r\n')
+    expect(lines[1]).toContain(`'+1,'-x,'@cmd,"'=HYPERLINK(""http://x"")"`)
+    // A tab needs the guard but not quoting (only commas, quotes and newlines do).
+    expect(lines[2]).toMatch(/,'\tlead tab$/)
+    expect(lines[2]).toContain(`''quoted,plain,`)
+  })
+
+  it('leaves negative amounts alone — they are numbers, not text', () => {
+    expect(betsToCsv([bet({ amount: -40, stake: 40 })])).toContain(',40.00,,-40.00,')
+  })
+
   it('sorts by date', () => {
     const csv = betsToCsv([bet({ date: '2026-03-01', amount: 1 }), bet({ date: '2026-01-01', amount: 2 })])
     const dates = csv.slice(1).trim().split('\r\n').slice(1).map((l: string) => l.split(',')[0])
@@ -72,6 +88,20 @@ describe('parseBetsCsv', () => {
       { date: '2026-01-04', amount: null, stake: 30, odds: 1.8, status: 'pending', sport: '', book: '', betType: '', note: '' },
       { date: '2026-01-05', amount: 0, stake: 30, odds: null, status: 'void', sport: '', book: '', betType: '', note: '' }
     ])
+  })
+
+  it('round-trips formula-looking text without loss, stripping exactly one guard apostrophe', () => {
+    const notes = ['=SUM(A1:A9)', '+5 units', '-3 units', '@everyone', "'already quoted", "''two", 'normal', '']
+    const original = notes.map((note, i) => bet({ date: `2026-01-0${i + 1}`, amount: 1, note, sport: note }))
+    const { rows, errors } = parseBetsCsv(betsToCsv(original))
+    expect(errors).toEqual([])
+    expect(rows.map((r) => r.note)).toEqual(notes)
+    expect(rows.map((r) => r.sport)).toEqual(notes)
+  })
+
+  it('strips a guard apostrophe from files written by other tools too', () => {
+    const { rows } = parseBetsCsv("date,amount,note\n2026-04-01,1,'=1+1\n2026-04-02,1,'plain\n")
+    expect(rows.map((r) => r.note)).toEqual(['=1+1', 'plain'])
   })
 
   it('imports the very first export format (date, amount, note) unchanged', () => {

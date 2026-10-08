@@ -8,6 +8,21 @@ function escapeField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
+/**
+ * Spreadsheets read a cell that starts with one of these as a formula, so a
+ * note like "=HYPERLINK(...)" typed into the app would run when the export is
+ * opened in Excel. A leading apostrophe makes the cell plain text.
+ *
+ * The apostrophe itself is in the set, so a value that genuinely starts with
+ * one is written with two: `unguardCell` strips exactly one, and the round
+ * trip is lossless either way.
+ */
+const FORMULA_START = /^[=+\-@\t\r']/
+
+export const guardCell = (value: string): string => (FORMULA_START.test(value) ? `'${value}` : value)
+
+export const unguardCell = (value: string): string => (value.startsWith("'") ? value.slice(1) : value)
+
 const money = (n: number | null): string => (n === null ? '' : n.toFixed(2))
 const odds = (n: number | null): string => (n === null ? '' : String(n))
 
@@ -23,10 +38,10 @@ export function betsToCsv(bets: readonly Bet[]): string {
         money(b.stake),
         odds(b.odds),
         money(b.amount),
-        escapeField(b.sport),
-        escapeField(b.book),
-        escapeField(b.betType),
-        escapeField(b.note)
+        escapeField(guardCell(b.sport)),
+        escapeField(guardCell(b.book)),
+        escapeField(guardCell(b.betType)),
+        escapeField(guardCell(b.note))
       ].join(',')
     )
   ]
@@ -294,10 +309,10 @@ export function parseBetsCsv(text: string): ImportResult {
       stake,
       odds,
       ...(status !== undefined ? { status } : {}),
-      sport: at(row, 'sport').trim(),
-      book: at(row, 'book').trim(),
-      betType: at(row, 'bet_type').trim(),
-      note: at(row, 'note').trim()
+      sport: unguardCell(at(row, 'sport').trim()),
+      book: unguardCell(at(row, 'book').trim()),
+      betType: unguardCell(at(row, 'bet_type').trim()),
+      note: unguardCell(at(row, 'note').trim())
     }
 
     // The same checks the form and the writer apply, so a contradictory row
