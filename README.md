@@ -174,6 +174,14 @@ offline and follow you to other devices:
   box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
 - **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
 
+## Pending bets
+
+**Pending** in the header shows how many bets are still waiting for a result
+and opens a panel listing them, oldest first. Each settles in one tap
+(WON / LOST / PUSH / VOID — the result is worked out from the stake and odds),
+and a bet whose date has passed is flagged so it is not forgotten. Settling
+works offline like any other edit.
+
 ## How it's put together
 
 ```

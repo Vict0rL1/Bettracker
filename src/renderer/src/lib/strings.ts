@@ -281,7 +281,18 @@ export const en = {
   'settings.pending': 'Saved on this device — syncs when you’re back online.',
   'odds.american': 'American',
   'odds.decimal': 'Decimal',
-  'odds.fractional': 'Fractional'
+  'odds.fractional': 'Fractional',
+
+  // Pending panel
+  'header.pending': 'Pending',
+  'header.pendingTitle': '{n} waiting for a result',
+  'pend.title': 'Pending bets',
+  'pend.sub': '{bets} · {amount} riding',
+  'pend.pastSuffix': ' · {n} past due',
+  'pend.none': 'nothing waiting',
+  'pend.empty': 'Every bet has a result. Pending bets you log will show up here.',
+  'pend.past': 'past',
+  'pend.pastTitle': 'The date has passed and this bet still has no result'
 } as const
 
 export type StringKey = keyof typeof en
@@ -544,5 +555,15 @@ export const es: Record<StringKey, string> = {
   'settings.pending': 'Guardado en este dispositivo: se sincronizará al volver la conexión.',
   'odds.american': 'Americana',
   'odds.decimal': 'Decimal',
-  'odds.fractional': 'Fraccionaria'
+  'odds.fractional': 'Fraccionaria',
+
+  'header.pending': 'Pendientes',
+  'header.pendingTitle': '{n} esperando resultado',
+  'pend.title': 'Apuestas pendientes',
+  'pend.sub': '{bets} · {amount} en juego',
+  'pend.pastSuffix': ' · {n} con fecha pasada',
+  'pend.none': 'nada pendiente',
+  'pend.empty': 'Todas las apuestas tienen resultado. Las pendientes que registres aparecerán aquí.',
+  'pend.past': 'pasada',
+  'pend.pastTitle': 'La fecha ya pasó y esta apuesta sigue sin resultado'
 }

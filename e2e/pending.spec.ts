@@ -54,6 +54,32 @@ test.describe('pending bets', () => {
     await expect(row.locator('.td-amt')).toHaveText('-$20.00')
   })
 
+  test('the header counts open bets and the panel settles them in one tap, flagging past dates', async ({ page }) => {
+    const soon = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)
+    await boot(page, { entries: [...WITH_PENDING, entry({ id: 'p3', date: soon, amount: 0, status: 'pending', stake: 10, odds: 3 })] })
+    const btn = page.locator('.pending-btn')
+    await expect(btn.locator('.pending-badge')).toHaveText('3')
+    await btn.click()
+    const panel = page.locator('.pending-modal')
+    await expect(panel.locator('.pend-item')).toHaveCount(3)
+    // Oldest first; the two August bets are past due, the one three days out is not.
+    await expect(panel.locator('.pend-item').first()).toContainText('Aug 4, 2026')
+    await expect(panel.locator('.pend-item.is-past')).toHaveCount(2)
+    await expect(panel.locator('.pend-item').last()).not.toHaveClass(/is-past/)
+    await expect(panel.locator('.day-sub')).toHaveText('3 bets · $80.00 riding · 2 past due')
+
+    await panel.locator('.pend-item').first().locator('.settle-btn.win').click()
+    await expect(panel.locator('.pend-item')).toHaveCount(2)
+    await expect(btn.locator('.pending-badge')).toHaveText('2')
+    await expect(page.locator('.toast')).toContainText('Settled as won')
+    await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
+
+    // A win with no odds cannot be worked out: the day opens instead.
+    await panel.locator('.pend-item').first().locator('.settle-btn.win').click()
+    await expect(page.locator('.day-modal')).toBeVisible()
+    await expect(panel).toHaveCount(0)
+  })
+
   test('the form can log a pending bet, and requires a stake for a new one', async ({ page }) => {
     await boot(page)
     await page.click('text=Log today')

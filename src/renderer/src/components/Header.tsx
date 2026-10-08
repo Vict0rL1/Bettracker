@@ -2,19 +2,22 @@ import { useRef } from 'react'
 import type { SyncStatus } from '../data/useBetSync'
 import { useLang } from '../lib/i18n'
 import type { Theme } from '../lib/theme'
-import { DownloadIcon, MoonIcon, PlusIcon, SlidersIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
+import { ClockIcon, DownloadIcon, MoonIcon, PlusIcon, SlidersIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
 
 interface Props {
   email: string | null
   status: SyncStatus
   /** Rows waiting to reach the server (not bets awaiting a result). */
   queuedCount: number
+  /** Bets still waiting for a result. */
+  pendingCount: number
   canExport: boolean
   theme: Theme
   onExport: () => void
   onImport: (file: File) => void
   onToggleTheme: () => void
   onOpenSettings: () => void
+  onOpenPending: () => void
   onLogToday: () => void
   onSignOut: () => void
 }
@@ -23,12 +26,14 @@ export default function Header({
   email,
   status,
   queuedCount,
+  pendingCount,
   canExport,
   theme,
   onExport,
   onImport,
   onToggleTheme,
   onOpenSettings,
+  onOpenPending,
   onLogToday,
   onSignOut
 }: Props) {
@@ -79,6 +84,10 @@ export default function Header({
           title={canExport ? t('header.exportTitle') : t('header.exportEmpty')}
         >
           <DownloadIcon /> {t('header.export')}
+        </button>
+        <button type="button" className={`btn btn-ghost pending-btn ${pendingCount > 0 ? 'has-open' : ''}`} onClick={onOpenPending} title={t('header.pendingTitle', { n: pendingCount })}>
+          <ClockIcon /> {t('header.pending')}
+          {pendingCount > 0 && <span className="pending-badge">{pendingCount}</span>}
         </button>
         <button
           type="button"

@@ -7,6 +7,7 @@ import DayModal, { type TagSuggestions } from './components/DayModal'
 import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
+import PendingPanel from './components/PendingPanel'
 import QuickAdd from './components/QuickAdd'
 import SettingsDialog from './components/SettingsDialog'
 import Toast, { type ToastMsg } from './components/Toast'
@@ -16,6 +17,7 @@ import { useBetSync } from './data/useBetSync'
 import { useSettings } from './data/useSettings'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
 import { useLang } from './lib/i18n'
+import { openBets } from './lib/pending'
 import { summarize, tagValues, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
@@ -45,6 +47,7 @@ export default function App() {
   const [modalDate, setModalDate] = useState<string | null>(null)
   const [quickOpen, setQuickOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [pendingOpen, setPendingOpen] = useState(false)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
   const showError = useCallback(
@@ -85,10 +88,11 @@ export default function App() {
   )
 
   const modalBets = modalDate ? (dayMap.get(modalDate)?.bets ?? []) : []
+  const openList = useMemo(() => openBets(bets ?? [], todayStr()), [bets])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (modalDate !== null || quickOpen || settingsOpen) return
+      if (modalDate !== null || quickOpen || settingsOpen || pendingOpen) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
@@ -102,7 +106,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalDate, quickOpen, settingsOpen])
+  }, [modalDate, quickOpen, settingsOpen, pendingOpen])
 
   const savedNote = useCallback(
     (action: string, date?: string) => (isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action),
@@ -215,12 +219,14 @@ export default function App() {
         email={activeEmail}
         status={status}
         queuedCount={queuedCount}
+        pendingCount={openList.length}
         canExport={shownBets.length > 0}
         theme={theme}
         onExport={handleExport}
         onImport={handleImport}
         onToggleTheme={toggleTheme}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenPending={() => setPendingOpen(true)}
         onLogToday={() => setModalDate(todayStr())}
         onSignOut={signOut}
       />
@@ -261,6 +267,23 @@ export default function App() {
       )}
 
       {settingsOpen && <SettingsDialog settings={settings} dirty={settingsDirty} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />}
+
+      {pendingOpen && (
+        <PendingPanel
+          open={openList}
+          oddsFormat={settings.oddsFormat}
+          onSettle={(bet, next, amount) => {
+            // A win with no odds opens the day to type the profit; get out of its way.
+            if (next === 'won' && amount === null) setPendingOpen(false)
+            handleSettle(bet, next, amount)
+          }}
+          onOpenDay={(date) => {
+            setPendingOpen(false)
+            setModalDate(date)
+          }}
+          onClose={() => setPendingOpen(false)}
+        />
+      )}
 
       <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
         <PlusIcon size={22} />

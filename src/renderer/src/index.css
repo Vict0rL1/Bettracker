@@ -2161,6 +2161,74 @@ tr.is-pending td {
   color: var(--amber);
 }
 
+/* ---- pending panel ---- */
+
+.pending-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 2px;
+  border-radius: 999px;
+  background: var(--amber-dim);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.pending-modal {
+  width: 580px;
+  gap: 16px;
+}
+
+.pend-list {
+  max-height: min(60vh, 520px);
+}
+
+.pend-item {
+  align-items: flex-start;
+}
+
+.pend-date {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 104px;
+  padding-top: 2px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.pend-item.is-past {
+  background: var(--amber-dim);
+}
+
+.pend-item.is-past .pend-date {
+  color: var(--amber);
+}
+
+.pend-past {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pend-empty {
+  min-height: 120px;
+}
+
 @media (max-width: 640px) {
   .fab {
     right: 16px;
@@ -2180,5 +2248,17 @@ tr.is-pending td {
 
   .quick-profit {
     grid-template-columns: 1fr;
+  }
+
+  .pend-item {
+    flex-wrap: wrap;
+  }
+
+  .pend-date {
+    flex-direction: row;
+    align-items: center;
+    min-width: 0;
+    width: 100%;
+    gap: 8px;
   }
 }
