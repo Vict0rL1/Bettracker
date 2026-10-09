@@ -1,0 +1,69 @@
+# CI de BetTracker: en cada push y en cada PR.
+# - Secretos: gitleaks revisa el historial que llega, para que ninguna clave
+#   se cuele en un commit.
+# - Calidad: tests unitarios y build de la PWA.
+# - e2e: la suite de Playwright contra la app compilada, sin backend.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama cancela la corrida anterior.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secretos:
+    name: Secretos
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks mira el historial del push, no solo el último commit
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  calidad:
+    name: Tests y build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+  e2e:
+    name: e2e con Playwright
+    runs-on: ubuntu-24.04
+    needs: calidad
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Chromium
+        run: npx playwright install --with-deps chromium
+      # La suite compila la app con credenciales ficticias y sustituye el cliente de
+      # Supabase por un mock inyectado antes de arrancar: no hay backend real.
+      - run: npm run test:e2e
+        env:
+          CI: 'true'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 3

@@ -77,7 +77,8 @@ month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log toda
 ### 2. Point the app at your project
 
 ```bash
-cd bettracker
+git clone https://github.com/Vict0rL1/Bettracker.git
+cd Bettracker
 cp .env.example .env
 # edit .env and paste in your URL + anon key
 npm install

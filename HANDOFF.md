@@ -1,9 +1,17 @@
 # BetTracker · Handoff
 
-Estado del trabajo en `bettracker/` a fecha 2026-10-09, rama
-`claude/bettracker-deleted-knaa6m`, PR #10 contra `main`. Todo lo descrito
-está commiteado y pusheado; cada commit pasa typecheck, tests unitarios, build
-y la suite e2e. Nada fuera de `bettracker/` cambió salvo el workflow de CI.
+Estado a fecha 2026-10-09. Este repositorio contiene solo BetTracker: su
+código, sus migraciones, sus tests y su CI. Cada commit pasa typecheck,
+tests unitarios, build y la suite e2e.
+
+## Origen
+
+Hasta el 2026-10-09 BetTracker vivía en la carpeta `bettracker/` del
+repositorio `Vict0rL1/s`. Se movió aquí con todo su historial: los mismos
+commits, mensajes, fechas y autores, con el contenido idéntico al de la rama
+`claude/bettracker-deleted-knaa6m` de `s`. Al pasar de la carpeta a la raíz
+cambian los identificadores de los commits; los originales siguen en `s`, y
+la conversación de revisión sigue en el PR #10 de `s`, ya cerrado.
 
 ## Qué hay que hacer a mano
 
@@ -16,26 +24,26 @@ y la suite e2e. Nada fuera de `bettracker/` cambió salvo el workflow de CI.
    aplicada antes de este trabajo. Hasta que corras la 004, al guardar un
    ajuste la app mostrará "Your database is behind the app…" con la lista de
    archivos; las apuestas siguen funcionando.
-2. **Revisar y fusionar PR #10.** CI corre dos jobs propios (`BetTracker ·
-   tests y build` y `BetTracker · e2e con Playwright`) solo cuando cambia
-   `bettracker/**`.
-3. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
-4. **Rama por defecto de `s`.** En GitHub es `claude/budget-app-j968ek`, no
-   `main`, y por eso las tareas programadas (datos diarios y backtests del
-   Sports Predictor, reloj de TaskFlow) nunca se han ejecutado. Ver "PRs".
-5. Desplegar la PWA (`npm run build` → `dist/`) o el instalador de escritorio
-   cuando el PR entre en `main`.
+2. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
+3. **Despliegue.** Si la PWA está en Vercel, en el proyecto que ya existe:
+   Settings → Git, conectar este repositorio y poner el directorio raíz en
+   `/`. Así se conservan el dominio y las variables. Un dominio nuevo dejaría
+   la app instalada en el móvil apuntando al viejo, con lo guardado sin
+   conexión allí, y obligaría a cambiar las URL de redirección en Supabase
+   Auth. El instalador de escritorio se construye con `npm run build:desktop`.
 
 ## Cómo probar
 
 ```bash
-cd bettracker
 npm ci
 npm test            # 212 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
-npm run build       # PWA en ../../dist
+npm run build       # PWA en dist/
 npm run test:e2e    # 33 comprobaciones Playwright, sin backend
 ```
+
+CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
+con gitleaks, tests y build, y la suite e2e.
 
 La suite e2e construye a `dist-e2e/`, sirve con `vite preview` e inyecta un
 mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
@@ -46,7 +54,8 @@ app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
 ## Qué cambió, por fases
 
 ### Fase 1 · red de seguridad
-- `.github/workflows/bettracker.yml`: jobs `calidad` (ci/test/build) y `e2e`.
+- Workflow de CI con jobs `calidad` (ci/test/build) y `e2e`; hoy es
+  `.github/workflows/ci.yml` y añade el escaneo de secretos.
 - Suite Playwright en `e2e/` con harness (`e2e/harness.ts`): usuario falso,
   semilla de tres apuestas, mock de Supabase, opción `settings` para sembrar
   ajustes.
@@ -159,28 +168,6 @@ apuestas resueltas. Pendientes se muestran como "en juego". Unidades:
 La capa offline sería un tercer par caché/outbox con los mismos helpers.
 La alternativa sin tabla (solo `starting_bankroll`) no cumple el punto de
 ingresos y retiradas; por eso la recomendación es la tabla.
-
-## PRs
-
-Las apps en uso son cuatro, cada una con su PR abierto:
-
-- **#3** `claude/tennis-prediction-app-jlhgxh`: el Sports Predictor en
-  desarrollo (paquete `tennis-predictor`); `main` tiene una copia anterior.
-  Se cerró por error el 2026-10-09 y se reabrió el mismo día; la rama no
-  sufrió cambios.
-- **#5** `claude/stock-analysis-app-nt3ge9`: análisis bursátil.
-- **#8** `claude/taskflow-app-t97qt5`: TaskFlow.
-- **#10** esta rama: BetTracker.
-
-Cerrados el 2026-10-09 a petición del dueño, sin borrar ramas: **#2**
-(primera versión de BetTracker, superada por #10) y **#6** (esta misma rama
-contra `claude/budget-app-j968ek`, duplicado de #10).
-
-La rama por defecto de `s` en GitHub es `claude/budget-app-j968ek`, la
-antigua app de presupuesto, que no tiene workflows. GitHub solo lanza tareas
-programadas desde la rama por defecto, así que `data.yml` y `nightly.yml`
-del Sports Predictor y el reloj de TaskFlow no se han ejecutado nunca.
-#3, #5 y #8 apuntan a esa rama; #10 apunta a `main`.
 
 ## Decisiones tomadas y por qué
 
