@@ -20,10 +20,9 @@ y la suite e2e. Nada fuera de `bettracker/` cambió salvo el workflow de CI.
    tests y build` y `BetTracker · e2e con Playwright`) solo cuando cambia
    `bettracker/**`.
 3. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
-4. **PRs #5 y #8** (análisis bursátil, TaskFlow) siguen abiertos contra
-   `claude/budget-app-j968ek`, que ya no es la rama principal; si han de
-   llegar a `main`, necesitan rebase o PR nuevo. #2, #3 y #6 se cerraron el
-   2026-10-09 a petición tuya (ver "PRs").
+4. **Rama por defecto de `s`.** En GitHub es `claude/budget-app-j968ek`, no
+   `main`, y por eso las tareas programadas (datos diarios y backtests del
+   Sports Predictor, reloj de TaskFlow) nunca se han ejecutado. Ver "PRs".
 5. Desplegar la PWA (`npm run build` → `dist/`) o el instalador de escritorio
    cuando el PR entre en `main`.
 
@@ -163,21 +162,25 @@ ingresos y retiradas; por eso la recomendación es la tabla.
 
 ## PRs
 
-Las apps en uso son cuatro: Sports Predictor (`main`), análisis bursátil
-(#5), TaskFlow (#8) y BetTracker (#10). Cerrados el 2026-10-09 a petición
-del dueño, con un comentario explicando el motivo y sin borrar ramas:
+Las apps en uso son cuatro, cada una con su PR abierto:
 
-- **#2** `claude/bettracker-desktop-app-9hsds8`: primera versión de
-  BetTracker (Electron). Superada por #10.
-- **#3** `claude/tennis-prediction-app-jlhgxh`: app de predicción de tenis,
-  ya no en uso.
-- **#6** `claude/bettracker-deleted-knaa6m` → `claude/budget-app-j968ek`: la
-  misma rama que #10 contra la base antigua; duplicado.
+- **#3** `claude/tennis-prediction-app-jlhgxh`: el Sports Predictor en
+  desarrollo (paquete `tennis-predictor`); `main` tiene una copia anterior.
+  Se cerró por error el 2026-10-09 y se reabrió el mismo día; la rama no
+  sufrió cambios.
+- **#5** `claude/stock-analysis-app-nt3ge9`: análisis bursátil.
+- **#8** `claude/taskflow-app-t97qt5`: TaskFlow.
+- **#10** esta rama: BetTracker.
 
-Siguen abiertos **#5** y **#8**, pero apuntan a `claude/budget-app-j968ek`,
-que ya no es la rama principal (`main` es el Sports Predictor). Fusionarlos
-ahí no cambiaría nada visible: si han de llegar a `main`, necesitan rebase o
-un PR nuevo.
+Cerrados el 2026-10-09 a petición del dueño, sin borrar ramas: **#2**
+(primera versión de BetTracker, superada por #10) y **#6** (esta misma rama
+contra `claude/budget-app-j968ek`, duplicado de #10).
+
+La rama por defecto de `s` en GitHub es `claude/budget-app-j968ek`, la
+antigua app de presupuesto, que no tiene workflows. GitHub solo lanza tareas
+programadas desde la rama por defecto, así que `data.yml` y `nightly.yml`
+del Sports Predictor y el reloj de TaskFlow no se han ejecutado nunca.
+#3, #5 y #8 apuntan a esa rama; #10 apunta a `main`.
 
 ## Decisiones tomadas y por qué
 
