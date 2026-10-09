@@ -20,8 +20,10 @@ y la suite e2e. Nada fuera de `bettracker/` cambió salvo el workflow de CI.
    tests y build` y `BetTracker · e2e con Playwright`) solo cuando cambia
    `bettracker/**`.
 3. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
-4. **Decidir qué hacer con los PRs antiguos** (#2, #3, #5, #6, #8). Ver
-   "PRs que parecen obsoletos". No he cerrado ninguno.
+4. **PRs #5 y #8** (análisis bursátil, TaskFlow) siguen abiertos contra
+   `claude/budget-app-j968ek`, que ya no es la rama principal; si han de
+   llegar a `main`, necesitan rebase o PR nuevo. #2, #3 y #6 se cerraron el
+   2026-10-09 a petición tuya (ver "PRs").
 5. Desplegar la PWA (`npm run build` → `dist/`) o el instalador de escritorio
    cuando el PR entre en `main`.
 
@@ -159,23 +161,23 @@ La capa offline sería un tercer par caché/outbox con los mismos helpers.
 La alternativa sin tabla (solo `starting_bankroll`) no cumple el punto de
 ingresos y retiradas; por eso la recomendación es la tabla.
 
-## PRs que parecen obsoletos (no cerrados)
+## PRs
 
-Todos menos #10 apuntan a `claude/budget-app-j968ek`, no a `main`; `main` es
-hoy el Sports Predictor, así que fusionarlos ahí no cambiaría nada visible.
+Las apps en uso son cuatro: Sports Predictor (`main`), análisis bursátil
+(#5), TaskFlow (#8) y BetTracker (#10). Cerrados el 2026-10-09 a petición
+del dueño, con un comentario explicando el motivo y sin borrar ramas:
 
-- **#2** `claude/bettracker-desktop-app-9hsds8` → budget-app: primera versión
-  de BetTracker (Electron). Superada por #10.
-- **#3** `claude/tennis-prediction-app-jlhgxh` → budget-app (julio, 999
-  archivos): app de predicción de tenis. Si quieres conservarla, necesita un
-  PR nuevo contra `main`.
-- **#5** `claude/stock-analysis-app-nt3ge9` → budget-app (agosto): análisis
-  bursátil. Misma situación.
-- **#6** `claude/bettracker-deleted-knaa6m` → budget-app: es **esta misma
-  rama** apuntando a la rama antigua, abierto en agosto; cada push a #10
-  también lo actualiza. Duplicado de #10 con base equivocada.
-- **#8** `claude/taskflow-app-t97qt5` → budget-app (septiembre): TaskFlow.
-  Misma situación que #3 y #5.
+- **#2** `claude/bettracker-desktop-app-9hsds8`: primera versión de
+  BetTracker (Electron). Superada por #10.
+- **#3** `claude/tennis-prediction-app-jlhgxh`: app de predicción de tenis,
+  ya no en uso.
+- **#6** `claude/bettracker-deleted-knaa6m` → `claude/budget-app-j968ek`: la
+  misma rama que #10 contra la base antigua; duplicado.
+
+Siguen abiertos **#5** y **#8**, pero apuntan a `claude/budget-app-j968ek`,
+que ya no es la rama principal (`main` es el Sports Predictor). Fusionarlos
+ahí no cambiaría nada visible: si han de llegar a `main`, necesitan rebase o
+un PR nuevo.
 
 ## Decisiones tomadas y por qué
 
