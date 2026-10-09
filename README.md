@@ -340,7 +340,16 @@ from before odds and statuses existed import unchanged — the status is what
 the amount implies. The import reports how many rows came without a stake,
 since those stay out of ROI. Values may
 carry currency symbols, thousands separators, or parenthesised negatives
-(`"$1,234.50"`, `(45.00)`). Lines that can't be read are skipped and reported
+(`"$1,234.50"`, `(45.00)`). Odds and closing odds may be decimal (`1.91`,
+`2,50`), American (`+150`, `-110`) or fractional (`3/2`, `10:11`, `100-1`);
+they are stored as decimal either way. A whole number from 100 up, like
+`150`, could be +150 with its plus sign dropped (spreadsheets do that) or a
+decimal longshot, so the file decides: a header that names the format
+(`american odds`, `decimal odds`) settles it; otherwise signed prices
+elsewhere in the file make it American, decimals make it decimal (every
+export from this app included), a file with both kinds reports that line
+instead of guessing, and a file with neither follows your odds format
+setting, like the odds box. Lines that can't be read are skipped and reported
 rather than half-guessed, and the import queues through the same offline outbox
 as everything else — so it works with no connection and can't create duplicate
 rows if it's retried.

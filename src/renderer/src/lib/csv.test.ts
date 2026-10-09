@@ -228,3 +228,88 @@ describe('parseBetsCsv', () => {
     expect(parseBetsCsv('').errors[0]).toMatch(/empty/i)
   })
 })
+
+describe('parseBetsCsv — odds in any format', () => {
+  const oddsOf = (text: string, format?: 'american' | 'decimal' | 'fractional') => {
+    const { rows, errors } = parseBetsCsv(text, format)
+    return { odds: rows.map((r) => r.odds), closing: rows.map((r) => r.closingOdds), errors }
+  }
+
+  it('reads signed American prices, instead of taking +150 for a decimal 150', () => {
+    const { odds, errors } = oddsOf('date,amount,odds\n2026-04-01,15,+150\n2026-04-02,-11,-110\n2026-04-03,-12,-120\n')
+    expect(errors).toEqual([])
+    expect(odds).toEqual([2.5, 1 + 100 / 110, 1 + 100 / 120])
+  })
+
+  it('reads fractions, with a slash, a colon or a dash', () => {
+    const { odds, errors } = oddsOf('date,amount,odds\n2026-04-01,15,3/2\n2026-04-02,-6,5/6\n2026-04-03,10,10:11\n2026-04-04,1,100-1\n2026-04-05,1,3-2\n')
+    expect(errors).toEqual([])
+    expect(odds).toEqual([2.5, 1 + 5 / 6, 1 + 10 / 11, 101, 2.5])
+  })
+
+  it('reads the closing odds column the same way', () => {
+    const { closing, errors } = oddsOf('date,amount,odds,closing\n2026-04-01,15,+150,+140\n2026-04-02,-11,-110,-115\n2026-04-03,10,3/2,6/4\n')
+    expect(errors).toEqual([])
+    expect(closing).toEqual([2.4, 1 + 100 / 115, 2.5])
+  })
+
+  it('reads a whole number from 100 up as American when the file\'s other odds are American (a spreadsheet dropped the plus sign)', () => {
+    const { odds, errors } = oddsOf('date,amount,odds\n2026-04-01,15,150\n2026-04-02,-11,-110\n', 'decimal')
+    expect(errors).toEqual([])
+    expect(odds).toEqual([2.5, 1 + 100 / 110])
+  })
+
+  it('keeps reading decimal files exactly as before, a 150.0 longshot included', () => {
+    const { odds, errors } = oddsOf('date,amount,odds\n2026-04-01,1490,150\n2026-04-02,-10,1.91\n2026-04-03,20,3\n', 'american')
+    expect(errors).toEqual([])
+    expect(odds).toEqual([150, 1.91, 3])
+  })
+
+  it('round-trips its own export, whatever the user\'s odds format', () => {
+    const csv = betsToCsv([
+      bet({ date: '2026-01-02', amount: 1490, stake: 10, odds: 150, closingOdds: 120 }),
+      bet({ date: '2026-01-03', amount: -10, stake: 10, odds: 1.909, closingOdds: 1.87 })
+    ])
+    for (const format of ['american', 'decimal', 'fractional'] as const) {
+      const { odds, closing } = oddsOf(csv, format)
+      expect(odds).toEqual([150, 1.909])
+      expect(closing).toEqual([120, 1.87])
+    }
+  })
+
+  it('follows the user\'s odds format when a file gives no other clue, like the odds box', () => {
+    const text = 'date,amount,odds\n2026-04-01,15,150\n2026-04-02,20,200\n'
+    expect(oddsOf(text, 'american').odds).toEqual([2.5, 3])
+    expect(oddsOf(text, 'decimal').odds).toEqual([150, 200])
+    expect(oddsOf(text, 'fractional').odds).toEqual([150, 200])
+    // Without a format (older callers) a bare number stays decimal, as it always was.
+    expect(oddsOf(text).odds).toEqual([150, 200])
+  })
+
+  it('lets a header that names the format decide', () => {
+    expect(oddsOf('date,amount,american odds\n2026-04-01,15,150\n2026-04-02,-10,1.91\n', 'decimal').odds).toEqual([2.5, 1.91])
+    expect(oddsOf('date,amount,decimal odds\n2026-04-01,15,150\n2026-04-02,-11,-110\n', 'american').odds).toEqual([150, 1 + 100 / 110])
+    expect(oddsOf('date,amount,us odds\n2026-04-01,15,150\n').odds).toEqual([2.5])
+    expect(oddsOf('date,amount,fractional odds\n2026-04-01,15,3/2\n').odds).toEqual([2.5])
+  })
+
+  it('reports a whole number it cannot place when the file mixes American and decimal odds', () => {
+    const { odds, errors, skipped } = (() => {
+      const r = parseBetsCsv('date,amount,odds\n2026-04-01,15,150\n2026-04-02,-11,-110\n2026-04-03,-10,1.91\n', 'american')
+      return { odds: r.rows.map((x) => x.odds), errors: r.errors, skipped: r.skipped }
+    })()
+    expect(odds).toEqual([1 + 100 / 110, 1.91])
+    expect(skipped).toBe(1)
+    expect(errors[0]).toMatch(/Line 2: "150" could be American \(\+150\) or decimal/)
+  })
+
+  it('rejects what is no price at all', () => {
+    const { odds, errors, skipped } = (() => {
+      const r = parseBetsCsv('date,amount,odds\n2026-04-01,15,+50\n2026-04-02,15,-1.5\n2026-04-03,15,abc\n2026-04-04,15,0/2\n2026-04-05,15,0.9\n2026-04-06,15,2.5\n')
+      return { odds: r.rows.map((x) => x.odds), errors: r.errors, skipped: r.skipped }
+    })()
+    expect(odds).toEqual([2.5])
+    expect(skipped).toBe(5)
+    expect(errors[0]).toMatch(/"\+50" is not a price/)
+  })
+})

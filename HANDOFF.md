@@ -160,7 +160,8 @@ Playwright llegara a `localhost`; en CI no.
   compatibilidad de `status`); se confían los relojes de los dispositivos.
 - CSV: columnas `date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note`,
   alias de otros trackers, columna `result` numérica detectada como importe.
-  Exportaciones antiguas (sin estas columnas) importan sin cambios.
+  Exportaciones antiguas (sin estas columnas) importan sin cambios. Las
+  cuotas se leen en decimal, americano o fraccionario (ver "Decisiones").
 - `hydrateBet` rellena cachés antiguas (sin stake/odds/status/closingOdds).
 
 ### Fase 3 · seguridad
@@ -264,6 +265,15 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   borrado de una apuesta restaurada conserva su `delete` en cola (bug
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
+- Import CSV de cuotas: las fracciones (`3/2`) y los precios con signo
+  (`+150`, `-110`) dicen su formato; un número sin signo es decimal, salvo un
+  entero desde 100, que es ambiguo (`150` puede ser +150 sin el `+`, que
+  Excel quita, o una cuota decimal de 150, y así la escriben nuestras propias
+  exportaciones). Se decide una vez por archivo: una cabecera que nombra el
+  formato manda; si no, precios con signo y ningún decimal → americano;
+  decimales y ningún signo → decimal (cualquier export nuestro); ambos → esa
+  línea se informa en vez de adivinar; ninguno → el formato de cuota del
+  usuario, como la caja de cuota.
 - La cola quita cada operación enviada por su `opId`, nunca por posición.
   Una operación que ya salió una vez queda marcada `sent` (guardado con la
   cola): haya respondido o no, puede estar en el servidor, así que nadie la
