@@ -174,6 +174,14 @@ offline and follow you to other devices:
   box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
 - **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
 
+## Date ranges
+
+The row above the stat cards picks the range the stats, the balance chart and
+the breakdown are computed over: all time, this week (Sunday to Saturday),
+this month, the last 30 days, this year, or custom dates (inclusive at both
+ends). The calendar, its month card, the history and the pending count always
+show everything. The choice is remembered on the device.
+
 ## Pending bets
 
 **Pending** in the header shows how many bets are still waiting for a result

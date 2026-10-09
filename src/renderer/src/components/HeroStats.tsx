@@ -8,8 +8,10 @@ import { ChevronLeftIcon, ChevronRightIcon } from './icons'
 
 interface Props {
   bets: Bet[]
-  /** All-time summary, computed once by the app and shared with the chart. */
+  /** Summary over the chosen date range (all time by default), shared with the chart. */
   lifetime: Summary
+  /** The range's name when one is chosen, null for all time. */
+  rangeName: string | null
   ym: MonthKey
   onPrev: () => void
   onNext: () => void
@@ -36,7 +38,7 @@ function Mini({ label, value, sub, toneClass = '', title }: MiniProps) {
   )
 }
 
-export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetMonth }: Props) {
+export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNext, onResetMonth }: Props) {
   const { t, tn } = useLang()
   const month = useMemo(() => summarize(forMonth(bets, ym)), [bets, ym])
 
@@ -104,7 +106,7 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
 
       <article className="card stat-card">
         <div className="stat-head">
-          <span className="stat-label">{t('hero.lifetimePL')}</span>
+          <span className="stat-label">{rangeName ? t('hero.rangePL', { range: rangeName }) : t('hero.lifetimePL')}</span>
         </div>
         <div className={`life-value ${tone(lifetime.total)}`}>{fmtMoney(lifetime.total)}</div>
         <div className="stat-sub">{lifetimeSub}</div>

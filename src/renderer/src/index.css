@@ -2164,6 +2164,57 @@ tr.is-pending td {
   color: var(--amber);
 }
 
+/* ---- date range ---- */
+
+.range-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.range-toggle {
+  flex-wrap: wrap;
+}
+
+.range-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.range-custom label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.range-custom input[type='date'] {
+  height: 30px;
+  padding: 0 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--tint-3);
+  border-radius: 999px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] .range-custom input[type='date'] {
+  color-scheme: light;
+}
+
+.range-custom input[type='date']:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 /* ---- pending panel ---- */
 
 .pending-badge {

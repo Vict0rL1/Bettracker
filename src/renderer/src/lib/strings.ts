@@ -304,7 +304,19 @@ export const en = {
   'bd.clv': 'CLV {pct}',
   'bd.clvTitle': 'Average closing line value over the {n} bets here with a closing price',
   'modal.closingOdds': 'Closing odds',
-  'modal.clv': 'CLV {pct}'
+  'modal.clv': 'CLV {pct}',
+
+  // Date range
+  'range.aria': 'Date range for the stats',
+  'range.all': 'All time',
+  'range.week': 'This week',
+  'range.month': 'This month',
+  'range.30d': 'Last 30 days',
+  'range.year': 'This year',
+  'range.custom': 'Custom',
+  'range.from': 'From',
+  'range.to': 'To',
+  'hero.rangePL': '{range} P/L'
 } as const
 
 export type StringKey = keyof typeof en
@@ -588,5 +600,16 @@ export const es: Record<StringKey, string> = {
   'bd.clv': 'CLV {pct}',
   'bd.clvTitle': 'CLV medio sobre las {n} apuestas de este grupo con cuota de cierre',
   'modal.closingOdds': 'Cuota de cierre',
-  'modal.clv': 'CLV {pct}'
+  'modal.clv': 'CLV {pct}',
+
+  'range.aria': 'Rango de fechas de las estadísticas',
+  'range.all': 'Todo',
+  'range.week': 'Esta semana',
+  'range.month': 'Este mes',
+  'range.30d': 'Últimos 30 días',
+  'range.year': 'Este año',
+  'range.custom': 'Personalizado',
+  'range.from': 'Desde',
+  'range.to': 'Hasta',
+  'hero.rangePL': 'P/L · {range}'
 }

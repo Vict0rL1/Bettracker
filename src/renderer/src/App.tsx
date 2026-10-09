@@ -9,6 +9,7 @@ import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
 import PendingPanel from './components/PendingPanel'
 import QuickAdd from './components/QuickAdd'
+import RangeBar from './components/RangeBar'
 import SettingsDialog from './components/SettingsDialog'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
@@ -18,7 +19,8 @@ import { useSettings } from './data/useSettings'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
 import { useLang } from './lib/i18n'
 import { openBets } from './lib/pending'
-import { summarize, tagValues, type DaySummary } from './lib/stats'
+import { filterRange, loadRange, saveRange, type DateRange } from './lib/range'
+import { groupByDay, summarize, tagValues, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
 import { PlusIcon } from './components/icons'
@@ -69,14 +71,23 @@ export default function App() {
     }
   }, [loading, activeUserId, bets])
 
-  // One grouping pass feeds the calendar, the stat cards and the chart.
-  const lifetime = useMemo(() => summarize(bets ?? []), [bets])
+  // The stat cards, the chart and the breakdown follow the chosen date range;
+  // the calendar, the month card, the history and the pending count always
+  // see everything.
+  const [range, setRange] = useState<DateRange>(loadRange)
+  const changeRange = useCallback((next: DateRange) => {
+    setRange(next)
+    saveRange(next)
+  }, [])
+  const ranged = useMemo(() => filterRange(bets ?? [], range, todayStr()), [bets, range])
+  const scoped = useMemo(() => summarize(ranged), [ranged])
+  const rangeName = range.kind === 'all' ? null : t(`range.${range.kind}`)
 
   const dayMap = useMemo(() => {
     const map = new Map<string, DaySummary>()
-    for (const day of lifetime.days) map.set(day.date, day)
+    for (const day of groupByDay(bets ?? [])) map.set(day.date, day)
     return map
-  }, [lifetime])
+  }, [bets])
 
   const suggestions = useMemo<TagSuggestions>(
     () => ({
@@ -232,9 +243,12 @@ export default function App() {
         onSignOut={signOut}
       />
 
+      <RangeBar range={range} onChange={changeRange} />
+
       <HeroStats
         bets={shownBets}
-        lifetime={lifetime}
+        lifetime={scoped}
+        rangeName={rangeName}
         ym={ym}
         onPrev={() => setYm((m) => addMonths(m, -1))}
         onNext={() => setYm((m) => addMonths(m, 1))}
@@ -243,10 +257,10 @@ export default function App() {
 
       <div className="grid-mid">
         <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
-        <BalanceChart bets={shownBets} lifetime={lifetime} ym={ym} />
+        <BalanceChart bets={shownBets} lifetime={scoped} rangeName={rangeName} rangeKind={range.kind} ym={ym} />
       </div>
 
-      <Breakdown bets={shownBets} />
+      <Breakdown bets={ranged} />
 
       <HistoryTable bets={shownBets} oddsFormat={settings.oddsFormat} onEdit={setModalDate} onDelete={handleDelete} onSettle={handleSettle} />
 
