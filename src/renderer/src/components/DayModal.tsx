@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Bet, BetInput, BetStatus, OddsFormat } from '../../../shared/types'
+import { toInput } from '../lib/bulk'
 import { humanDate } from '../lib/dates'
 import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
@@ -32,19 +33,6 @@ export const toneOf = (s: BetStatus): string => (s === 'won' ? 'win' : s === 'lo
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-const toInput = (b: Bet): BetInput => ({
-  date: b.date,
-  amount: b.amount,
-  stake: b.stake,
-  odds: b.odds,
-  closingOdds: b.closingOdds,
-  status: b.status,
-  note: b.note,
-  sport: b.sport,
-  book: b.book,
-  betType: b.betType
-})
 
 export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
   const { t, tn } = useLang()

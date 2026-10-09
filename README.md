@@ -192,6 +192,17 @@ this month, the last 30 days, this year, or custom dates (inclusive at both
 ends). The calendar, its month card, the history and the pending count always
 show everything. The choice is remembered on the device.
 
+## Editing the history in bulk, and Undo
+
+Tick rows in the history (the header box ticks the page) and a bar appears
+to **retag** them (empty boxes keep a bet's current tag), **settle** the
+pending ones as won / lost / push / void (a win with no odds is skipped, since
+its profit cannot be worked out) or **delete** them (click twice). Every delete
+— single or bulk — and every bulk edit shows an **Undo** in its toast. Undo
+writes the previous values back through the same outbox, so it works offline
+and syncs like any other change; a restored bet keeps its id but gets a new
+"logged at" time.
+
 ## Pending bets
 
 **Pending** in the header shows how many bets are still waiting for a result

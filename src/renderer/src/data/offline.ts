@@ -204,8 +204,12 @@ export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp): PendingO
   }
   if (op.kind === 'delete') {
     const hadPendingAdd = outbox.some((o) => o.kind === 'add' && o.id === op.id)
+    // A queued delete means the row exists on the server: a later add for the
+    // same id is an Undo re-adding it, and deleting again must still reach the
+    // server. Only an add with no delete before it can be cancelled outright.
+    const hadQueuedDelete = outbox.some((o) => o.kind === 'delete' && o.id === op.id)
     const filtered = outbox.filter((o) => o.kind === 'bulk-add' || o.id !== op.id)
-    return hadPendingAdd ? filtered : [...filtered, op]
+    return hadPendingAdd && !hadQueuedDelete ? filtered : [...filtered, op]
   }
   return [...outbox, op]
 }

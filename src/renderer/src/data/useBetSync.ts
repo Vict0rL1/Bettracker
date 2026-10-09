@@ -28,6 +28,11 @@ export interface BetSync {
   deleteBet: (id: string) => void
   /** Queue an imported batch as a single op. Returns how many rows were queued. */
   importBets: (inputs: readonly BetInput[]) => number
+  /** Several edits at once (bulk retag/settle, and Undo of either): one state update, one op per bet. */
+  updateBets: (changes: readonly { id: string; input: BetInput }[]) => void
+  deleteBets: (ids: readonly string[]) => void
+  /** Undo of a delete: re-add the rows with their original ids, through the outbox like everything else. */
+  restoreBets: (bets: readonly Bet[]) => void
 }
 
 const RETRY_INTERVAL_MS = 20_000
@@ -200,13 +205,18 @@ export function useBetSync(
     }
   }, [userId, syncNow, refresh])
 
-  const mutate = useCallback(
-    (op: PendingOp) => {
-      setOutbox(enqueueOp(outboxRef.current, op))
+  const mutateMany = useCallback(
+    (ops: readonly PendingOp[]) => {
+      if (ops.length === 0) return
+      let next = outboxRef.current
+      for (const op of ops) next = enqueueOp(next, op)
+      setOutbox(next)
       setTimeout(() => void syncNow(), 0)
     },
     [setOutbox, syncNow]
   )
+
+  const mutate = useCallback((op: PendingOp) => mutateMany([op]), [mutateMany])
 
   const add = useCallback(
     (input: BetInput) => {
@@ -249,6 +259,50 @@ export function useBetSync(
     [mutate]
   )
 
+  const updateBets = useCallback(
+    (changes: readonly { id: string; input: BetInput }[]) => {
+      const editedAt = new Date().toISOString()
+      // Validate the whole batch first so a bad row fails the edit instead of half-applying it.
+      const ops: PendingOp[] = changes.map(({ id, input }) => ({ opId: crypto.randomUUID(), kind: 'update', id, input: normalizeInput(input), editedAt }))
+      mutateMany(ops)
+    },
+    [mutateMany]
+  )
+
+  const deleteBets = useCallback(
+    (ids: readonly string[]) => {
+      mutateMany(ids.map((id) => ({ opId: crypto.randomUUID(), kind: 'delete', id })))
+    },
+    [mutateMany]
+  )
+
+  const restoreBets = useCallback(
+    (rows: readonly Bet[]) => {
+      const queuedAt = new Date().toISOString()
+      mutateMany(
+        rows.map((b) => ({
+          opId: crypto.randomUUID(),
+          kind: 'add',
+          id: b.id,
+          input: normalizeInput({
+            date: b.date,
+            amount: b.amount,
+            stake: b.stake,
+            odds: b.odds,
+            closingOdds: b.closingOdds,
+            status: b.status,
+            note: b.note,
+            sport: b.sport,
+            book: b.book,
+            betType: b.betType
+          }),
+          queuedAt
+        }))
+      )
+    },
+    [mutateMany]
+  )
+
   const bets = useMemo(() => {
     if (server === null && outbox.length === 0) return null
     return applyOutbox(server ?? [], outbox)
@@ -267,6 +321,9 @@ export function useBetSync(
     addBet: add,
     updateBet: update,
     deleteBet: remove,
-    importBets
+    importBets,
+    updateBets,
+    deleteBets,
+    restoreBets
   }
 }

@@ -265,6 +265,23 @@ describe('enqueueOp', () => {
     const out = enqueueOp([bulk(['x', 'y'])], del('x'))
     expect(out.map((o) => o.kind)).toEqual(['bulk-add', 'delete'])
   })
+
+  it('restores a deleted bet by re-adding it after the queued delete (Undo, offline)', () => {
+    const server = [bet({ id: 'a', amount: 7 })]
+    const out = enqueueOp([del('a')], add('a', { amount: 7 }))
+    expect(out.map((o) => o.kind)).toEqual(['delete', 'add'])
+    expect(applyOutbox(server, out).map((b) => [b.id, b.amount])).toEqual([['a', 7]])
+    // Undoing the deletion of a bet that never reached the server simply adds it again.
+    expect(enqueueOp(enqueueOp([add('a')], del('a')), add('a')).map((o) => o.kind)).toEqual(['add'])
+  })
+
+  it('deleting a restored bet again keeps a delete for the server, rather than cancelling the whole pair', () => {
+    const out = enqueueOp([del('a'), add('a', { amount: 7 })], del('a'))
+    expect(out).toEqual([del('a')])
+    expect(applyOutbox([bet({ id: 'a', amount: 7 })], out)).toEqual([])
+    // A second delete of the same synced bet is not queued twice.
+    expect(enqueueOp([del('a')], del('a'))).toEqual([del('a')])
+  })
 })
 
 describe('opSize', () => {

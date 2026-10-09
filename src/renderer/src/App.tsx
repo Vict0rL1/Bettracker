@@ -16,6 +16,7 @@ import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
 import { useBetSync } from './data/useBetSync'
 import { useSettings } from './data/useSettings'
+import { retagPlan, settlePlan, type TagPatch } from './lib/bulk'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
 import { useLang } from './lib/i18n'
 import { openBets } from './lib/pending'
@@ -149,16 +150,91 @@ export default function App() {
     [sync, savedNote, showError, t]
   )
 
+  /** A toast that offers to put things back. The undo goes through the outbox too, so it works offline. */
+  const undoable = useCallback(
+    (text: string, undo: () => void) =>
+      setToast({
+        kind: 'ok',
+        text,
+        action: {
+          label: t('toast.undo'),
+          onClick: () => {
+            try {
+              undo()
+              setToast({ kind: 'ok', text: savedNote(t('toast.undone')) })
+            } catch (err) {
+              showError(err)
+            }
+          }
+        }
+      }),
+    [savedNote, showError, t]
+  )
+
   const handleDelete = useCallback(
     async (id: string) => {
       try {
+        const gone = (bets ?? []).find((b) => b.id === id)
         sync.deleteBet(id)
-        setToast({ kind: 'ok', text: savedNote(t('toast.deleted')) })
+        if (gone) undoable(savedNote(t('toast.deleted')), () => sync.restoreBets([gone]))
+        else setToast({ kind: 'ok', text: savedNote(t('toast.deleted')) })
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError, t]
+    [bets, sync, savedNote, showError, undoable, t]
+  )
+
+  const handleBulkDelete = useCallback(
+    (ids: string[]) => {
+      try {
+        const wanted = new Set(ids)
+        const gone = (bets ?? []).filter((b) => wanted.has(b.id))
+        if (gone.length === 0) return
+        sync.deleteBets(gone.map((b) => b.id))
+        undoable(savedNote(t('toast.deletedN', { bets: tn('bet', gone.length) })), () => sync.restoreBets(gone))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [bets, sync, savedNote, showError, undoable, t, tn]
+  )
+
+  const handleBulkRetag = useCallback(
+    (ids: string[], patch: TagPatch) => {
+      try {
+        const wanted = new Set(ids)
+        const plan = retagPlan((bets ?? []).filter((b) => wanted.has(b.id)), patch)
+        if (plan.next.length === 0) {
+          setToast({ kind: 'ok', text: t('toast.retagNothing') })
+          return
+        }
+        sync.updateBets(plan.next)
+        undoable(savedNote(t('toast.retagged', { bets: tn('bet', plan.next.length) })), () => sync.updateBets(plan.prev))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [bets, sync, savedNote, showError, undoable, t, tn]
+  )
+
+  const handleBulkSettle = useCallback(
+    (ids: string[], status: Exclude<BetStatus, 'pending'>) => {
+      try {
+        const wanted = new Set(ids)
+        const plan = settlePlan((bets ?? []).filter((b) => wanted.has(b.id)), status)
+        const skipped = plan.skipped > 0 ? t('toast.settleSkipped', { n: plan.skipped }) : ''
+        if (plan.next.length === 0) {
+          setToast({ kind: 'ok', text: t('toast.settleNone') + skipped })
+          return
+        }
+        sync.updateBets(plan.next)
+        undoable(savedNote(t('toast.settledN', { bets: tn('bet', plan.next.length), status: t(`statusWord.${status}`) }) + skipped), () => sync.updateBets(plan.prev))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [bets, sync, savedNote, showError, undoable, t, tn]
   )
 
   // Settling from the history table: when the result follows from stake and
@@ -262,7 +338,16 @@ export default function App() {
 
       <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
 
-      <HistoryTable bets={shownBets} oddsFormat={settings.oddsFormat} onEdit={setModalDate} onDelete={handleDelete} onSettle={handleSettle} />
+      <HistoryTable
+        bets={shownBets}
+        oddsFormat={settings.oddsFormat}
+        onEdit={setModalDate}
+        onDelete={handleDelete}
+        onSettle={handleSettle}
+        onBulkRetag={handleBulkRetag}
+        onBulkSettle={handleBulkSettle}
+        onBulkDelete={handleBulkDelete}
+      />
 
       {modalDate !== null && (
         <DayModal

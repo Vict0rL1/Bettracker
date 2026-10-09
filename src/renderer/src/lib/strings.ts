@@ -330,7 +330,25 @@ export const en = {
   'band.fav': 'Favorite',
   'band.even': 'Even',
   'band.dog': 'Underdog',
-  'band.longshot': 'Longshot'
+  'band.longshot': 'Longshot',
+
+  // Bulk editing + undo
+  'toast.undo': 'Undo',
+  'toast.undone': 'Undone',
+  'toast.deletedN': 'Deleted {bets}',
+  'toast.retagged': 'Retagged {bets}',
+  'toast.retagNothing': 'Nothing to change — those tags are already set',
+  'toast.settledN': 'Settled {bets} as {status}',
+  'toast.settleSkipped': ' · {n} skipped: a win needs odds to work out the profit',
+  'toast.settleNone': 'No pending bet among the selected',
+  'hist.selectRow': 'Select the bet on {date}',
+  'hist.selectPage': 'Select every bet on this page',
+  'hist.selected': '{n} selected',
+  'hist.retag': 'Retag',
+  'hist.retagHint': 'Empty boxes keep the tag a bet already has',
+  'hist.settleAs': 'Settle pending as',
+  'hist.deleteSel': 'Delete',
+  'hist.clearSel': 'Clear'
 } as const
 
 export type StringKey = keyof typeof en
@@ -638,5 +656,22 @@ export const es: Record<StringKey, string> = {
   'band.fav': 'Favorito',
   'band.even': 'Parejo',
   'band.dog': 'Underdog',
-  'band.longshot': 'Sorpresa'
+  'band.longshot': 'Sorpresa',
+
+  'toast.undo': 'Deshacer',
+  'toast.undone': 'Deshecho',
+  'toast.deletedN': '{bets} eliminadas',
+  'toast.retagged': '{bets} reetiquetadas',
+  'toast.retagNothing': 'Nada que cambiar: esas etiquetas ya están puestas',
+  'toast.settledN': '{bets} resueltas como {status}',
+  'toast.settleSkipped': ' · {n} omitidas: una ganada necesita cuota para calcular la ganancia',
+  'toast.settleNone': 'No hay apuestas pendientes entre las seleccionadas',
+  'hist.selectRow': 'Seleccionar la apuesta del {date}',
+  'hist.selectPage': 'Seleccionar todas las apuestas de esta página',
+  'hist.selected': '{n} seleccionadas',
+  'hist.retag': 'Reetiquetar',
+  'hist.retagHint': 'Las casillas vacías conservan la etiqueta que ya tiene cada apuesta',
+  'hist.settleAs': 'Resolver pendientes como',
+  'hist.deleteSel': 'Eliminar',
+  'hist.clearSel': 'Quitar selección'
 }

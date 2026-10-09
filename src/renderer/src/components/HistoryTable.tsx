@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Bet, BetStatus, OddsFormat } from '../../../shared/types'
+import type { TagPatch } from '../lib/bulk'
 import { humanDate } from '../lib/dates'
 import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
@@ -16,6 +17,10 @@ interface Props {
   onDelete: (id: string) => void
   /** Settle a pending bet with the result its stake and odds imply, or open it when they can't. */
   onSettle: (bet: Bet, status: BetStatus, amount: number | null) => void
+  /** Bulk actions on the selected rows; the app plans them, applies them and offers Undo. */
+  onBulkRetag: (ids: string[], patch: TagPatch) => void
+  onBulkSettle: (ids: string[], status: Exclude<BetStatus, 'pending'>) => void
+  onBulkDelete: (ids: string[]) => void
 }
 
 type SortKey = 'date' | 'amount' | 'stake' | 'odds'
@@ -34,8 +39,9 @@ function compareNullable(a: number | null, b: number | null, dir: number): numbe
   return (a - b) * dir
 }
 
-export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSettle }: Props) {
+export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSettle, onBulkRetag, onBulkSettle, onBulkDelete }: Props) {
   const { t, tn } = useLang()
+  const listId = useId()
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -45,10 +51,16 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
   const [book, setBook] = useState('')
   const [page, setPage] = useState(0)
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Multi-select: ids survive filtering and paging; rows that vanish (deleted) just stop counting.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [retag, setRetag] = useState({ sport: '', book: '', betType: '' })
+  const [confirmBulk, setConfirmBulk] = useState(false)
+  const bulkTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(
     () => () => {
       if (confirmTimer.current) clearTimeout(confirmTimer.current)
+      if (bulkTimer.current) clearTimeout(bulkTimer.current)
     },
     []
   )
@@ -123,6 +135,49 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
 
   const arrow = (key: SortKey): string => (sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')
 
+  const selectedBets = useMemo(() => bets.filter((b) => selected.has(b.id)), [bets, selected])
+  const selectedIds = selectedBets.map((b) => b.id)
+  const pendingSelected = selectedBets.filter((b) => b.status === 'pending').length
+  const allVisibleSelected = visible.length > 0 && visible.every((b) => selected.has(b.id))
+
+  const toggleOne = (id: string): void =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  const togglePage = (): void =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (allVisibleSelected) for (const b of visible) next.delete(b.id)
+      else for (const b of visible) next.add(b.id)
+      return next
+    })
+  const clearSelection = (): void => setSelected(new Set())
+
+  const retagPatch: TagPatch = {
+    ...(retag.sport.trim() ? { sport: retag.sport.trim() } : {}),
+    ...(retag.book.trim() ? { book: retag.book.trim() } : {}),
+    ...(retag.betType.trim() ? { betType: retag.betType.trim() } : {})
+  }
+  const applyRetag = (): void => {
+    onBulkRetag(selectedIds, retagPatch)
+    setRetag({ sport: '', book: '', betType: '' })
+  }
+  const bulkDeleteClick = (): void => {
+    if (confirmBulk) {
+      setConfirmBulk(false)
+      if (bulkTimer.current) clearTimeout(bulkTimer.current)
+      onBulkDelete(selectedIds)
+      clearSelection()
+      return
+    }
+    setConfirmBulk(true)
+    if (bulkTimer.current) clearTimeout(bulkTimer.current)
+    bulkTimer.current = setTimeout(() => setConfirmBulk(false), 3000)
+  }
+
   const hasFilters = query !== '' || result !== 'all' || sport !== '' || book !== ''
   const clearFilters = (): void => {
     setQuery('')
@@ -196,6 +251,46 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
             )}
           </div>
 
+          {selectedIds.length > 0 && (
+            <div className="bulk-bar" role="region" aria-label={t('hist.selected', { n: selectedIds.length })}>
+              <span className="bulk-count">{t('hist.selected', { n: selectedIds.length })}</span>
+              <span className="bulk-group" title={t('hist.retagHint')}>
+                <input type="text" list={`${listId}-sport`} maxLength={40} placeholder={t('modal.sport')} aria-label={t('modal.sport')} value={retag.sport} onChange={(e) => setRetag({ ...retag, sport: e.target.value })} />
+                <input type="text" list={`${listId}-book`} maxLength={40} placeholder={t('modal.book')} aria-label={t('modal.book')} value={retag.book} onChange={(e) => setRetag({ ...retag, book: e.target.value })} />
+                <input type="text" maxLength={40} placeholder={t('modal.betType')} aria-label={t('modal.betType')} value={retag.betType} onChange={(e) => setRetag({ ...retag, betType: e.target.value })} />
+                <button type="button" className="btn btn-ghost bulk-apply" disabled={Object.keys(retagPatch).length === 0} onClick={applyRetag}>
+                  {t('hist.retag')}
+                </button>
+                <datalist id={`${listId}-sport`}>
+                  {sports.map((v) => (
+                    <option key={v} value={v} />
+                  ))}
+                </datalist>
+                <datalist id={`${listId}-book`}>
+                  {books.map((v) => (
+                    <option key={v} value={v} />
+                  ))}
+                </datalist>
+              </span>
+              {pendingSelected > 0 && (
+                <span className="bulk-group settle" role="group" aria-label={t('hist.settleAs')}>
+                  <span className="bulk-label">{t('hist.settleAs')}</span>
+                  {SETTLE.map((s) => (
+                    <button key={s} type="button" className={`settle-btn ${toneOf(s)}`} onClick={() => onBulkSettle(selectedIds, s as Exclude<BetStatus, 'pending'>)}>
+                      {t(`status.${s}`)}
+                    </button>
+                  ))}
+                </span>
+              )}
+              <button type="button" className={`btn btn-ghost bulk-delete ${confirmBulk ? 'confirming' : ''}`} onClick={bulkDeleteClick}>
+                {confirmBulk ? t('common.clickAgain') : t('hist.deleteSel')}
+              </button>
+              <button type="button" className="chip" onClick={clearSelection}>
+                {t('hist.clearSel')}
+              </button>
+            </div>
+          )}
+
           {sorted.length === 0 ? (
             <div className="empty-state">{t('hist.noMatch')}</div>
           ) : (
@@ -204,6 +299,9 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                 <table>
                   <thead>
                     <tr>
+                      <th className="td-sel">
+                        <input type="checkbox" aria-label={t('hist.selectPage')} checked={allVisibleSelected} onChange={togglePage} />
+                      </th>
                       {sortHeader('date', t('hist.date'))}
                       <th>{t('hist.result')}</th>
                       {sortHeader('stake', t('hist.stake'), true)}
@@ -224,8 +322,12 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                       const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
                       const tags = [b.sport, b.book, b.betType].filter(Boolean)
                       const when = humanDate(b.date)
+                      const rowClass = [b.status === 'pending' ? 'is-pending' : '', selected.has(b.id) ? 'is-selected' : ''].filter(Boolean).join(' ')
                       return (
-                        <tr key={b.id} className={b.status === 'pending' ? 'is-pending' : undefined}>
+                        <tr key={b.id} className={rowClass || undefined}>
+                          <td className="td-sel">
+                            <input type="checkbox" aria-label={t('hist.selectRow', { date: when })} checked={selected.has(b.id)} onChange={() => toggleOne(b.id)} />
+                          </td>
                           <td className="td-date">{when}</td>
                           <td>
                             <span className={`pill ${tone}`}>{t(`status.${b.status}`)}</span>
