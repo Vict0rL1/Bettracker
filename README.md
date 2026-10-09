@@ -283,7 +283,7 @@ One row per bet, per user (`supabase/schema.sql`, table `entries`):
 | `stake` | numeric | amount risked; `null` = not recorded (excluded from ROI), `0` = free bet (bonus profit) |
 | `odds` | numeric | decimal price, `> 1`; optional |
 | `closing_odds` | numeric | the price when the market closed, `> 1`; optional. CLV = odds / closing_odds − 1 (migration 004) |
-| `status` | text | `pending` · `won` · `lost` · `push` · `void` — names shared with the Sports Predictor |
+| `status` | text | `pending` · `won` · `lost` · `push` · `void` |
 | `note` | text | optional (e.g. "morning parlay") |
 | `sport` | text | optional tag (e.g. "NBA") |
 | `book` | text | optional tag (e.g. "DraftKings") |

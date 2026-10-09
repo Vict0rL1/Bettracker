@@ -8,8 +8,7 @@ export { round2 }
 /**
  * Only won and lost bets put money at risk for ROI purposes. A push or a void
  * returns the stake, so counting it in the denominator would drag ROI toward
- * zero on every tie; a pending bet has no result yet. Mirrors `riskedOf` in the
- * Sports Predictor's bets table.
+ * zero on every tie; a pending bet has no result yet.
  */
 export const riskedOf = (b: Bet): number => (b.status === 'won' || b.status === 'lost' ? (b.stake ?? 0) : 0)
 

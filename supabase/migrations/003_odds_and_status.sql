@@ -12,10 +12,8 @@
 --           settled has no result yet, and storing 0 would make an open week
 --           read as break-even. The check below ties the two together.
 --
--- The status names match the Sports Predictor's bets table where they
--- overlap (pending / won / lost / void), so rows can move between the two
--- later without a translation step. `push` is BetTracker's own: a tie where
--- the stake comes back, kept distinct from a cancelled bet.
+-- Statuses: pending / won / lost / push / void. `push` is a tie where the
+-- stake comes back, kept distinct from a bet the book cancelled (void).
 --
 -- CONFLICTS BETWEEN DEVICES
 -- No new column is needed. `updated_at` is now set by the client to the

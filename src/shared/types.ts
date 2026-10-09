@@ -5,9 +5,7 @@
  */
 
 /**
- * Where a bet stands. The names match the Sports Predictor's bets table where
- * they overlap (pending / won / lost / void) so rows can move between the two
- * apps without translation. `push` is a tie: the stake comes back, which is
+ * Where a bet stands. `push` is a tie: the stake comes back, which is
  * financially the same as `void` but a different thing happened.
  */
 export type BetStatus = 'pending' | 'won' | 'lost' | 'push' | 'void'

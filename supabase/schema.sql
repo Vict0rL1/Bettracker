@@ -18,8 +18,8 @@ create table if not exists public.entries (
   odds       numeric(8, 3),
   -- The price when the market closed, for closing line value. Optional.
   closing_odds numeric(8, 3),
-  -- pending | won | lost | push | void. Names shared with the Sports Predictor
-  -- where they overlap, so rows can move between the two apps later.
+  -- pending | won | lost | push | void. `push` is a tie (stake returned),
+  -- kept distinct from a bet the book cancelled (void).
   status     text not null,
   note       text not null default '',
   -- Optional tags, all free text so you are not boxed into a fixed list.
