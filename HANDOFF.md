@@ -38,35 +38,75 @@ Las fijó el dueño del proyecto y siguen vigentes:
 
 ## Qué hay que hacer a mano
 
-1. **Migraciones en Supabase**, en este orden, en el SQL editor del proyecto:
+Por este orden (ver "Orden de despliegue seguro" justo debajo):
+
+1. **Migraciones en Supabase**, en el SQL editor del proyecto:
    `supabase/migrations/002_stake_and_tags.sql` → `003_odds_and_status.sql`
    → `004_user_settings_and_closing_odds.sql`. Las tres son aditivas y
    re-ejecutables (`if not exists`, `drop … if exists` antes de cada
-   constraint y policy). `supabase/schema.sql` contiene lo mismo acumulado
-   por si prefieres ejecutar un solo archivo desde cero. La 001 ya estaba
-   aplicada antes de este trabajo. Hasta que corras la 004, al guardar un
-   ajuste la app mostrará "Your database is behind the app…" con la lista de
-   archivos; las apuestas siguen funcionando.
-2. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
-3. **Despliegue.** Si la PWA está en Vercel, en el proyecto que ya existe:
-   Settings → Git, conectar este repositorio y poner el directorio raíz en
-   `/`. Así se conservan el dominio y las variables. Un dominio nuevo dejaría
-   la app instalada en el móvil apuntando al viejo, con lo guardado sin
-   conexión allí, y obligaría a cambiar las URL de redirección en Supabase
-   Auth. El instalador de escritorio se construye con `npm run build:desktop`.
+   constraint, policy y trigger). `supabase/schema.sql` contiene lo mismo
+   acumulado por si prefieres ejecutar un solo archivo. La 001 ya estaba
+   aplicada antes de este trabajo.
+2. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
+   el proyecto que ya existe: Settings → Git, conectar este repositorio y
+   poner el directorio raíz en `/`. Así se conservan el dominio y las
+   variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
+   al viejo, con lo guardado sin conexión allí, y obligaría a cambiar las URL
+   de redirección en Supabase Auth. El instalador de escritorio se construye
+   con `npm run build:desktop`.
+3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
+   conexión (una recarga basta); el escritorio hay que reinstalarlo.
+4. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
+
+### Orden de despliegue seguro
+
+- **Migrar antes de desplegar.** La versión desplegada hoy no conoce
+  `status` y la 003 lo hace obligatorio. Para que siga funcionando, la 003
+  crea un trigger (`entries_status_from_amount`): a un alta sin `status` le
+  pone el que implica su importe (la misma regla del backfill), y a una
+  edición que cambia el importe sin tocar un `status` que ya no encaja se lo
+  recalcula. Lo que envía la versión nueva siempre encaja, así que no lo
+  toca. Así, entre las migraciones y el despliegue, los dispositivos con la
+  versión antigua siguen guardando sin perder nada.
+- **Si se invierte el orden, tampoco se pierde nada.** La versión nueva
+  contra una base sin migrar no puede guardar (cada escritura lleva
+  `closing_odds`, de la 004), pero ya no tira esas operaciones: las deja en
+  la cola del dispositivo, como sin conexión, con la insignia "Falta
+  actualizar · n en cola" y un aviso, y las envía solas en cuanto corren las
+  migraciones (reintenta cada 20 s, al volver la conexión y al volver a la
+  app). Mientras tanto, no cerrar sesión en ese dispositivo: cerrar sesión
+  borra su cola.
+- **Mientras convivan versiones**, una versión antigua ve una apuesta
+  pendiente (creada desde la nueva) como $0, y si la edita queda resuelta
+  con el importe que escriba. Por eso, actualizar todos los dispositivos
+  pronto.
+- Las comprobaciones de esto contra un Postgres real están en
+  `supabase/tests/` (ver "Cómo probar").
 
 ## Cómo probar
 
 ```bash
 npm ci
-npm test            # 212 tests unitarios (vitest)
+npm test            # 233 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 33 comprobaciones Playwright, sin backend
+npm run test:e2e    # 34 comprobaciones Playwright, sin backend
+bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
 CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
-con gitleaks, tests y build, y la suite e2e.
+con gitleaks, tests y build, el esquema SQL contra un Postgres de usar y
+tirar, y la suite e2e.
+
+`supabase/tests/run.sh` parte del esquema con el que se publicó la app
+(`supabase/tests/original_schema.sql`) y lo sube de tres formas: con las
+migraciones 001→004 (cada una dos veces), con `schema.sql` (dos veces) y
+desde cero con `schema.sql` más todas las migraciones encima. En cada caso
+comprueba el backfill, las escrituras de versiones antiguas y nuevas y las
+constraints, y que las tres estructuras resultantes son idénticas. Necesita
+`psql`, `createdb`, `dropdb` y `pg_dump` con las variables `PG*` apuntando a
+un servidor donde pueda crear bases (todas se llaman `bettracker_test_*`).
+En local, como root: `su postgres -c 'bash supabase/tests/run.sh'`.
 
 La suite e2e construye a `dist-e2e/`, sirve con `vite preview` e inyecta un
 mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
@@ -89,7 +129,8 @@ app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
 - Migración 003: `odds` (decimal, > 1), `status`
   (`pending|won|lost|push|void`) con backfill desde el signo de `amount`,
   `amount` nullable (solo `null` mientras está pendiente), constraints que
-  atan importe y estado, índice de pendientes.
+  atan importe y estado, índice de pendientes, y un trigger que da a las
+  escrituras de versiones antiguas (sin `status`) el que implica su importe.
 - `amount` sigue siendo el **resultado neto**, nunca el pago; `stake`
   `null` sigue siendo "sin registrar" (fuera del ROI), `0` es apuesta gratis
   (ganancia reportada aparte como *bonus*).
@@ -206,6 +247,15 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   borrado de una apuesta restaurada conserva su `delete` en cola (bug
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
+- Una operación que la base rechaza porque le falta una migración se queda
+  en la cola (como sin conexión) en vez de descartarse; el aviso sale una
+  vez, no en cada reintento. `data/drain.ts` decide qué sale de la cola y
+  qué se queda; los hooks solo guardan el estado.
+- La 003 se editó en su sitio (en vez de añadir una 005) para meter el
+  trigger de compatibilidad, porque aún no se había ejecutado en ningún
+  sitio; así el trigger existe desde el momento en que `status` pasa a ser
+  obligatorio. La regla de "migraciones nuevas para cada cambio" sigue
+  valiendo para todo lo ya aplicado.
 
 ## Mapa de archivos nuevos o muy cambiados
 
@@ -225,10 +275,13 @@ src/renderer/src/lib/
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
+  drain.ts                                vaciar la cola: qué sale y qué se queda
+  errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       33 comprobaciones
+e2e/*.spec.ts                       34 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
+supabase/tests/                     el esquema contra un Postgres real
 ```

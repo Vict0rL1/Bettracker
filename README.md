@@ -36,6 +36,7 @@ moment you're back online. The header badge tells you where you stand:
 | 🟢 **Synced** | Everything is saved to the cloud and shared with your other devices |
 | 🟡 **Syncing n…** | Queued changes are being pushed right now |
 | ⚪ **Offline · n queued** | No connection — changes are safe on this device and will sync automatically |
+| 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
 Signing out removes that device's local copy (cache and queued changes);
 anything already synced stays safe in your Supabase project.
@@ -59,18 +60,28 @@ month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log toda
    (the free tier is plenty).
 2. Open **SQL Editor → New query**, paste the contents of
    [`supabase/schema.sql`](supabase/schema.sql), and **Run**. That creates the
-   `entries` table, locks it to each user with row-level security, and enables
-   realtime sync.
+   `entries` and `user_settings` tables, locks them to each user with
+   row-level security, and enables realtime sync.
    - *Already set up an earlier version?* Re-run `schema.sql` (it's safe to run
      again) or apply just the migrations you're missing, in order:
      [`001_multiple_sessions_per_day.sql`](supabase/migrations/001_multiple_sessions_per_day.sql)
-     (several bets per day) and
+     (several bets per day),
      [`002_stake_and_tags.sql`](supabase/migrations/002_stake_and_tags.sql)
-     (stake, sport, book, bet type) and
+     (stake, sport, book, bet type),
      [`003_odds_and_status.sql`](supabase/migrations/003_odds_and_status.sql)
-     (odds, pending bets). Your existing bets are untouched — old ones simply
-     have no stake or odds recorded, and 003 gives each the status its result
-     implies.
+     (odds, pending bets) and
+     [`004_user_settings_and_closing_odds.sql`](supabase/migrations/004_user_settings_and_closing_odds.sql)
+     (settings, closing odds). Your existing bets are untouched — old ones
+     simply have no stake or odds recorded, and 003 gives each the status its
+     result implies.
+   - *Upgrading an install people are using?* Run the migrations **before**
+     you deploy the new version. Devices still on the old version keep
+     working in between: their writes carry no status, and 003 gives them the
+     one their amount implies. Then deploy, and update every device. If you
+     deploy first, nothing is lost: the new version keeps each change queued
+     on the device, shows **Update needed · n queued**, and sends them as soon
+     as the migrations have run. Don't sign out on that device until then —
+     signing out clears its queue.
 3. Go to **Project Settings → API** and copy your **Project URL** and the
    **anon public** key.
 
@@ -284,7 +295,7 @@ One row per bet, per user (`supabase/schema.sql`, table `entries`):
 | `stake` | numeric | amount risked; `null` = not recorded (excluded from ROI), `0` = free bet (bonus profit) |
 | `odds` | numeric | decimal price, `> 1`; optional |
 | `closing_odds` | numeric | the price when the market closed, `> 1`; optional. CLV = odds / closing_odds − 1 (migration 004) |
-| `status` | text | `pending` · `won` · `lost` · `push` · `void` |
+| `status` | text | `pending` · `won` · `lost` · `push` · `void`; a write without one (from a version older than migration 003) gets the one its amount implies |
 | `note` | text | optional (e.g. "morning parlay") |
 | `sport` | text | optional tag (e.g. "NBA") |
 | `book` | text | optional tag (e.g. "DraftKings") |

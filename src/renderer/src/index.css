@@ -282,6 +282,17 @@ h2 {
   animation: none;
 }
 
+/* Waiting on a migration: amber like syncing, but still — nothing is moving. */
+.sync-badge.behind {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+.sync-badge.behind .sync-dot {
+  box-shadow: none;
+  animation: none;
+}
+
 @keyframes pulse {
   0%,
   100% {

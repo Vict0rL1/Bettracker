@@ -71,6 +71,8 @@ export const en = {
   'sync.offline': 'Offline',
   'sync.offlineN': 'Offline · {n} queued',
   'sync.offlineTitle': 'No connection — changes are saved on this device and will sync automatically when you are back online',
+  'sync.behindN': 'Update needed · {n} queued',
+  'sync.behindTitle': 'Your Supabase database is missing a migration — changes are kept on this device and will sync as soon as it is updated',
 
   // Hero stats
   'hero.monthPL': '{month} P/L',
@@ -420,6 +422,8 @@ export const es: Record<StringKey, string> = {
   'sync.offline': 'Sin conexión',
   'sync.offlineN': 'Sin conexión · {n} en cola',
   'sync.offlineTitle': 'Sin conexión: los cambios se guardan en este dispositivo y se sincronizarán solos al volver la conexión',
+  'sync.behindN': 'Falta actualizar · {n} en cola',
+  'sync.behindTitle': 'A tu base de datos de Supabase le falta una migración: los cambios se guardan en este dispositivo y se sincronizarán en cuanto se actualice',
 
   'hero.monthPL': 'P/L de {month}',
   'hero.lifetimePL': 'P/L total',

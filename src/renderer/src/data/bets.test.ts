@@ -27,7 +27,8 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { addBet, getBets, isMissingColumnError, MIGRATION_HINT, updateBet } from './bets'
+import { addBet, getBets, updateBet } from './bets'
+import { MigrationNeededError } from './errors'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
 
@@ -85,13 +86,12 @@ describe('reading rows', () => {
 describe('missing migration', () => {
   it('turns a PostgREST unknown-column error into the migration hint', async () => {
     state.result = { data: null, error: { message: "Could not find the 'odds' column of 'entries' in the schema cache", code: 'PGRST204' }, count: null }
-    await expect(addBet({ date: '2026-03-01', amount: 5 }, 'id-1')).rejects.toThrow(MIGRATION_HINT)
+    await expect(addBet({ date: '2026-03-01', amount: 5 }, 'id-1')).rejects.toBeInstanceOf(MigrationNeededError)
   })
 
-  it('recognises both wordings Postgres and PostgREST use', () => {
-    expect(isMissingColumnError(new Error('column entries.status does not exist'))).toBe(true)
-    expect(isMissingColumnError(new Error("Could not find the 'stake' column of 'entries' in the schema cache"))).toBe(true)
-    expect(isMissingColumnError(new Error('permission denied for table entries'))).toBe(false)
+  it('reads a second bet on one day, before migration 001, as a missing migration', async () => {
+    state.result = { data: null, error: { message: 'duplicate key value violates unique constraint "entries_user_id_date_key"', code: '23505' }, count: null }
+    await expect(addBet({ date: '2026-03-01', amount: 5 }, 'id-1')).rejects.toBeInstanceOf(MigrationNeededError)
   })
 
   it('sends odds and status on insert', async () => {
