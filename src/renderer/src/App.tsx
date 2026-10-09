@@ -7,6 +7,7 @@ import DayModal, { type TagSuggestions } from './components/DayModal'
 import Header from './components/Header'
 import HeroStats from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
+import LossBanner from './components/LossBanner'
 import PendingPanel from './components/PendingPanel'
 import QuickAdd from './components/QuickAdd'
 import RangeBar from './components/RangeBar'
@@ -19,9 +20,10 @@ import { useSettings } from './data/useSettings'
 import { retagPlan, settlePlan, type TagPatch } from './lib/bulk'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
 import { useLang } from './lib/i18n'
+import { dismissKey, loadLossDismissed, lossState, saveLossDismissed } from './lib/lossLimit'
 import { openBets } from './lib/pending'
 import { filterRange, loadRange, saveRange, type DateRange } from './lib/range'
-import { groupByDay, summarize, tagValues, type DaySummary } from './lib/stats'
+import { forMonth, groupByDay, summarize, tagValues, total, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
 import { PlusIcon } from './components/icons'
@@ -101,6 +103,17 @@ export default function App() {
 
   const modalBets = modalDate ? (dayMap.get(modalDate)?.bets ?? []) : []
   const openList = useMemo(() => openBets(bets ?? [], todayStr()), [bets])
+
+  // The monthly loss limit watches the current calendar month, whatever the
+  // range or the calendar page. A dismissal is per month and level.
+  const [lossDismissed, setLossDismissed] = useState<string | null>(loadLossDismissed)
+  const thisMonth = currentMonth()
+  const loss = useMemo(() => lossState(total(forMonth(bets ?? [], thisMonth)), settings.lossLimit), [bets, settings.lossLimit, thisMonth])
+  const lossKey = dismissKey(thisMonth, loss.level)
+  const dismissLoss = useCallback(() => {
+    saveLossDismissed(lossKey)
+    setLossDismissed(lossKey)
+  }, [lossKey])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -318,6 +331,8 @@ export default function App() {
         onLogToday={() => setModalDate(todayStr())}
         onSignOut={signOut}
       />
+
+      {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}
 
       <RangeBar range={range} onChange={changeRange} />
 

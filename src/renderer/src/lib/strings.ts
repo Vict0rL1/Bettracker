@@ -348,7 +348,15 @@ export const en = {
   'hist.retagHint': 'Empty boxes keep the tag a bet already has',
   'hist.settleAs': 'Settle pending as',
   'hist.deleteSel': 'Delete',
-  'hist.clearSel': 'Clear'
+  'hist.clearSel': 'Clear',
+
+  // Monthly loss limit
+  'settings.lossLimit': 'Monthly loss limit',
+  'settings.lossLimitHint': 'A banner warns at 80% of it and again once past it. Logging a bet is never blocked.',
+  'loss.near': 'Heads up: this month’s losses are {loss}, {pct} of your {limit} limit.',
+  'loss.over': 'Over your monthly loss limit: {loss} lost this month against a {limit} limit.',
+  'loss.change': 'Change limit',
+  'loss.dismiss': 'Dismiss'
 } as const
 
 export type StringKey = keyof typeof en
@@ -673,5 +681,12 @@ export const es: Record<StringKey, string> = {
   'hist.retagHint': 'Las casillas vacías conservan la etiqueta que ya tiene cada apuesta',
   'hist.settleAs': 'Resolver pendientes como',
   'hist.deleteSel': 'Eliminar',
-  'hist.clearSel': 'Quitar selección'
+  'hist.clearSel': 'Quitar selección',
+
+  'settings.lossLimit': 'Límite mensual de pérdidas',
+  'settings.lossLimitHint': 'Un aviso aparece al 80 % y otro al superarlo. Nunca bloquea registrar una apuesta.',
+  'loss.near': 'Ojo: este mes llevas {loss} perdidos, el {pct} de tu límite de {limit}.',
+  'loss.over': 'Has superado tu límite mensual de pérdidas: {loss} perdidos este mes frente a un límite de {limit}.',
+  'loss.change': 'Cambiar límite',
+  'loss.dismiss': 'Cerrar'
 }

@@ -2155,13 +2155,51 @@ tr.is-pending td {
   opacity: 0.85;
 }
 
-.settings-stake {
+.settings-stake,
+.settings-loss {
   max-width: 200px;
 }
 
 .settings-sync {
   font-size: var(--fs-sm);
   color: var(--amber);
+}
+
+/* ---- monthly loss limit banner ---- */
+
+.loss-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--amber);
+  background: var(--amber-dim);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.loss-banner.over {
+  border-color: var(--red);
+  background: var(--red-dim);
+}
+
+.loss-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.loss-banner.near .loss-text {
+  color: var(--amber);
+}
+
+.loss-banner.over .loss-text {
+  color: var(--red);
+}
+
+.loss-change {
+  white-space: nowrap;
 }
 
 /* ---- history: selection + bulk bar ---- */

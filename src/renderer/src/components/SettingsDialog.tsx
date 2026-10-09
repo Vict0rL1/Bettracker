@@ -25,7 +25,9 @@ export default function SettingsDialog({ settings, dirty, onChange, onClose }: P
   const { t } = useLang()
   const titleId = useId()
   const stakeId = useId()
+  const lossId = useId()
   const [stakeStr, setStakeStr] = useState(settings.defaultStake === null ? '' : String(settings.defaultStake))
+  const [lossStr, setLossStr] = useState(settings.lossLimit === null ? '' : String(settings.lossLimit))
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -53,6 +55,19 @@ export default function SettingsDialog({ settings, dirty, onChange, onClose }: P
       if (r !== settings.defaultStake) onChange({ defaultStake: r })
     } else {
       setStakeStr(settings.defaultStake === null ? '' : String(settings.defaultStake))
+    }
+  }
+
+  /** Same for the loss limit; zero or empty means no limit. */
+  const commitLoss = (): void => {
+    const text = lossStr.trim()
+    const n = text === '' ? 0 : parseFloat(text)
+    if (Number.isFinite(n) && n >= 0 && n <= MAX_AMOUNT) {
+      const next = n === 0 ? null : round2(n)
+      setLossStr(next === null ? '' : String(next))
+      if (next !== settings.lossLimit) onChange({ lossLimit: next })
+    } else {
+      setLossStr(settings.lossLimit === null ? '' : String(settings.lossLimit))
     }
   }
 
@@ -111,6 +126,35 @@ export default function SettingsDialog({ settings, dirty, onChange, onClose }: P
             </div>
           </label>
           <p className="hint">{t('settings.defaultStakeHint')}</p>
+        </div>
+
+        <div className="settings-row">
+          <label className="field settings-loss" htmlFor={lossId}>
+            <span className="field-label">
+              {t('settings.lossLimit')} <span className="field-opt">{t('common.optional')}</span>
+            </span>
+            <div className="amount-wrap">
+              <span className="amount-cur">$</span>
+              <input
+                id={lossId}
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="1"
+                placeholder="0"
+                value={lossStr}
+                onChange={(e) => setLossStr(e.target.value)}
+                onBlur={commitLoss}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitLoss()
+                  }
+                }}
+              />
+            </div>
+          </label>
+          <p className="hint">{t('settings.lossLimitHint')}</p>
         </div>
 
         <footer className="modal-actions">

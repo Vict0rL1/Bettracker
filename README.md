@@ -173,6 +173,10 @@ offline and follow you to other devices:
   *stored* as decimal; this only changes how they are shown and typed. The odds
   box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
 - **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
+- **Monthly loss limit** — a banner appears when the current month's net loss
+  reaches 80% of it (amber) and again once it passes it (red). It never blocks
+  logging a bet; dismissing it hides it until the next line is crossed or the
+  month turns.
 
 ## Breakdown
 
