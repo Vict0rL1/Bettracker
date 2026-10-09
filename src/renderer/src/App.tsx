@@ -260,7 +260,7 @@ export default function App() {
         <BalanceChart bets={shownBets} lifetime={scoped} rangeName={rangeName} rangeKind={range.kind} ym={ym} />
       </div>
 
-      <Breakdown bets={ranged} />
+      <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
 
       <HistoryTable bets={shownBets} oddsFormat={settings.oddsFormat} onEdit={setModalDate} onDelete={handleDelete} onSettle={handleSettle} />
 

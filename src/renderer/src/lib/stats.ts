@@ -1,5 +1,6 @@
 import type { Bet } from '../../../shared/types'
-import { monthPrefix, type MonthKey } from './dates'
+import { bandIndex, bandOf } from './bands'
+import { monthPrefix, weekdayOf, type MonthKey } from './dates'
 import { round2 } from './validate'
 
 export { round2 }
@@ -310,8 +311,16 @@ export function extremeDays(days: readonly DaySummary[]): { best: DaySummary | n
 /** Which tag a breakdown groups by. */
 export type TagKey = 'sport' | 'book' | 'betType'
 
+/** Everything the breakdown can group by: a tag, the odds band, the weekday or the month. */
+export type Grouping = TagKey | 'odds' | 'weekday' | 'month'
+
+export const GROUPINGS: readonly Grouping[] = ['sport', 'book', 'betType', 'odds', 'weekday', 'month']
+
 export interface BreakdownRow {
-  /** The tag value, e.g. "NBA" or "DraftKings". */
+  /**
+   * The group's key: the tag value ("NBA"), the band ("dog"), the weekday
+   * ("0" = Sunday) or the month ("2026-08"). The UI turns it into words.
+   */
   label: string
   /** Settled bets in this slice. */
   bets: number
@@ -332,16 +341,44 @@ export interface BreakdownRow {
   clvBets: number
 }
 
+/** The group a bet belongs to, or null when it can't be placed (no tag, no odds). */
+export function groupKeyOf(b: Bet, grouping: Grouping): string | null {
+  switch (grouping) {
+    case 'odds':
+      return bandOf(b.odds)
+    case 'weekday':
+      return String(weekdayOf(b.date))
+    case 'month':
+      return b.date.slice(0, 7)
+    default:
+      return b[grouping] || null
+  }
+}
+
+type RowOrder = (a: BreakdownRow, b: BreakdownRow) => number
+
+/** Tags read best-first; bands, weekdays and months read in their natural order. */
+const byProfit: RowOrder = (a, b) => b.profit - a.profit || a.label.localeCompare(b.label)
+const ORDER: Record<Grouping, RowOrder> = {
+  sport: byProfit,
+  book: byProfit,
+  betType: byProfit,
+  odds: (a, b) => bandIndex(a.label) - bandIndex(b.label),
+  weekday: (a, b) => Number(a.label) - Number(b.label),
+  month: (a, b) => a.label.localeCompare(b.label)
+}
+
 /**
- * Performance grouped by one tag, best profit first. Untagged bets are left out
- * — an empty tag is missing data, not a category, and bundling them under
- * "(none)" would invite comparing a real book against a bucket of leftovers.
+ * Performance grouped by a tag, odds band, weekday or month. Bets that can't
+ * be placed are left out — an empty tag or a missing price is missing data,
+ * not a category, and bundling them under "(none)" would invite comparing a
+ * real book against a bucket of leftovers.
  */
-export function breakdown(bets: readonly Bet[], key: TagKey): BreakdownRow[] {
+export function breakdown(bets: readonly Bet[], grouping: Grouping): BreakdownRow[] {
   const groups = new Map<string, Bet[]>()
   for (const b of bets) {
-    const label = b[key]
-    if (!label) continue
+    const label = groupKeyOf(b, grouping)
+    if (label === null) continue
     const list = groups.get(label)
     if (list) list.push(b)
     else groups.set(label, [b])
@@ -364,7 +401,7 @@ export function breakdown(bets: readonly Bet[], key: TagKey): BreakdownRow[] {
         clvBets: c ? c.n : 0
       }
     })
-    .sort((a, b) => b.profit - a.profit || a.label.localeCompare(b.label))
+    .sort(ORDER[grouping])
 }
 
 /** Every distinct value a tag takes, sorted — used to populate filter menus. */

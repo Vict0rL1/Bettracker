@@ -174,6 +174,16 @@ offline and follow you to other devices:
   box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
 - **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
 
+## Breakdown
+
+The breakdown card groups P/L, record, ROI and CLV by sport, book, bet type,
+**odds band**, **weekday** or **month**. The bands are defined once, in
+`src/renderer/src/lib/bands.ts`: heavy favorite (≤ 1.50, i.e. −200 and
+shorter), favorite (to 1.90 / −111), even (to 2.10 / +110), underdog (to 3.50 /
++250) and longshot (longer). Bets that cannot be placed — no tag, or no odds —
+are left out rather than lumped into a "none" bucket, and every row shows its
+sample size.
+
 ## Date ranges
 
 The row above the stat cards picks the range the stats, the balance chart and

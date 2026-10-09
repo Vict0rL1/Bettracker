@@ -52,6 +52,9 @@ function parseParts(dateStr: string): Date {
   return new Date(y, m - 1, d)
 }
 
+/** Weekday of a date string, 0 = Sunday. */
+export const weekdayOf = (dateStr: string): number => parseParts(dateStr).getDay()
+
 export const humanDate = (dateStr: string): string =>
   parseParts(dateStr).toLocaleDateString(locale(), { month: 'short', day: 'numeric', year: 'numeric' })
 

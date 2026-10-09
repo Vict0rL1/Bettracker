@@ -316,7 +316,21 @@ export const en = {
   'range.custom': 'Custom',
   'range.from': 'From',
   'range.to': 'To',
-  'hero.rangePL': '{range} P/L'
+  'hero.rangePL': '{range} P/L',
+
+  // Deeper breakdowns
+  'bd.odds': 'Odds',
+  'bd.weekday': 'Weekday',
+  'bd.month': 'Month',
+  'bd.emptyOdds': 'No bets with odds yet. Record the price when you log a bet to see how favorites and underdogs do for you.',
+  'bd.emptyDates': 'No bets in this range yet.',
+  'bd.bandTitle': 'Decimal odds {range}',
+  'bd.weekdayNames': 'Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday',
+  'band.heavyFav': 'Heavy favorite',
+  'band.fav': 'Favorite',
+  'band.even': 'Even',
+  'band.dog': 'Underdog',
+  'band.longshot': 'Longshot'
 } as const
 
 export type StringKey = keyof typeof en
@@ -611,5 +625,18 @@ export const es: Record<StringKey, string> = {
   'range.custom': 'Personalizado',
   'range.from': 'Desde',
   'range.to': 'Hasta',
-  'hero.rangePL': 'P/L · {range}'
+  'hero.rangePL': 'P/L · {range}',
+
+  'bd.odds': 'Cuota',
+  'bd.weekday': 'Día',
+  'bd.month': 'Mes',
+  'bd.emptyOdds': 'Aún no hay apuestas con cuota. Registra el precio al apuntar una apuesta para ver cómo te va con favoritos y underdogs.',
+  'bd.emptyDates': 'Aún no hay apuestas en este rango.',
+  'bd.bandTitle': 'Cuota decimal {range}',
+  'bd.weekdayNames': 'Domingo,Lunes,Martes,Miércoles,Jueves,Viernes,Sábado',
+  'band.heavyFav': 'Favorito claro',
+  'band.fav': 'Favorito',
+  'band.even': 'Parejo',
+  'band.dog': 'Underdog',
+  'band.longshot': 'Sorpresa'
 }

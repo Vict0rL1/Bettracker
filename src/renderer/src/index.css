@@ -2164,6 +2164,16 @@ tr.is-pending td {
   color: var(--amber);
 }
 
+/* Six tabs: let the row wrap under the title on narrow cards. */
+.breakdown-card .card-head {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bd-tabs {
+  flex-wrap: wrap;
+}
+
 /* ---- date range ---- */
 
 .range-bar {
