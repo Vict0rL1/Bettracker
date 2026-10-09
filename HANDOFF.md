@@ -13,6 +13,29 @@ commits, mensajes, fechas y autores, con el contenido idéntico al de la rama
 cambian los identificadores de los commits; los originales siguen en `s`, y
 la conversación de revisión sigue en el PR #10 de `s`, ya cerrado.
 
+## Reglas del proyecto
+
+Las fijó el dueño del proyecto y siguen vigentes:
+
+- Sin acceso a Supabase desde el código de trabajo. Cada cambio de esquema
+  va en una migración nueva (`supabase/migrations/005_…`, `006_…`) y
+  `supabase/schema.sql` se actualiza a la par, siempre re-ejecutable. Las
+  migraciones las corre el dueño. Nunca pedir la clave `service_role`.
+- Migraciones solo aditivas. Las filas antiguas, las cachés offline antiguas
+  (`hydrateBet`) y los CSV exportados antes deben seguir funcionando.
+- Mantener intacto el modo offline (escrituras optimistas, outbox,
+  reconcile) y añadir tests para cada rama nueva de esa lógica.
+- Semántica que no cambia: `amount` es el resultado neto, no el pago, y un
+  `stake` nulo significa "no registrado".
+- Cada feature funciona offline vía outbox, tiene sus textos en en y es,
+  tests unitarios y al menos una comprobación e2e. Los ajustes por usuario
+  viven en la tabla `user_settings` y se cachean offline.
+- Preguntar antes de: quitar Electron, cerrar o fusionar cualquier PR, o
+  cualquier cambio que pueda perder datos.
+- Tras cada bloque de trabajo: `npm test`, `npm run build` y la suite e2e en
+  verde, commit con mensaje claro y un informe corto (qué cambió, cómo se
+  probó, dudas).
+
 ## Qué hay que hacer a mano
 
 1. **Migraciones en Supabase**, en este orden, en el SQL editor del proyecto:
