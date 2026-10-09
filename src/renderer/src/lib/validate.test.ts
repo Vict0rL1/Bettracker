@@ -130,6 +130,10 @@ describe('normalizeInput', () => {
       expect(() => normalizeInput({ ...base, odds: 1 })).toThrow(/greater than 1/i)
       expect(() => normalizeInput({ ...base, odds: 0.5 })).toThrow(/greater than 1/i)
       expect(() => normalizeInput({ ...base, odds: -2 })).toThrow(/greater than 1/i)
+      // What the database would store (3 decimals) must be above 1 too.
+      expect(() => normalizeInput({ ...base, odds: 1.0004 })).toThrow(/greater than 1/i)
+      expect(() => normalizeInput({ ...base, closingOdds: 1.0004 })).toThrow(/greater than 1/i)
+      expect(normalizeInput({ ...base, odds: 1.0006 }).odds).toBe(1.001)
     })
 
     it('rejects a typo-sized price', () => {

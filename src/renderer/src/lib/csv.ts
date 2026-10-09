@@ -219,68 +219,138 @@ function parseMoney(raw: string): number | null {
 }
 
 /*
- * Odds cells. Fractions ("3/2", "10:11", "100-1") and signed American prices
- * ("+150", "-110") say what they are. A plain number is decimal ("1.91",
- * "2,50", "3") — except a whole number from 100 up, which is ambiguous: "150"
- * is +150 with its plus sign dropped (spreadsheets do that) or a 150.0
- * longshot in decimal (and this app's own exports write it just like that).
+ * Odds cells. Each is read into a shape before anything is decided:
+ *  - a fraction ("3/2", "10:11", "100-1");
+ *  - a signed price ("+150", "-110", "-110.00", "+2,500"): American, or a
+ *    decimal written with a plus when it can't be American ("+2.5");
+ *  - a plain number: decimal ("1.91", "2,50", "3", "2."), except when its
+ *    value is a whole number from 100 up ("150", "150.00"), which is
+ *    ambiguous: +150 whose plus sign a spreadsheet dropped, or a 150.0
+ *    longshot in decimal, which is how this app's own exports write one;
+ *  - "1,200": a thousands separator (American +1200) or a decimal comma
+ *    (1.2), ambiguous the same way.
+ * The ambiguous ones are settled once per file (see oddsReading).
  */
+type OddsShape =
+  | { kind: 'blank' }
+  | { kind: 'bad' }
+  /** Says its own format; `value` is null when it is no valid price. */
+  | { kind: 'price'; value: number | null; evidence: 'american' | 'decimal' | null }
+  | { kind: 'whole'; n: number }
+  | { kind: 'grouped'; thousands: number; decimalComma: number }
+
 const FRACTION = /^\d+(\.\d+)?\s*[/:-]\s*\d+(\.\d+)?$/
-const SIGNED = /^[+-]\d+(\.\d+)?$/
-const PLAIN = /^\d+(\.\d+)?$/
-const WHOLE_FROM_100 = (s: string): boolean => /^\d+$/.test(s) && Number(s) >= 100
 
-const oddsText = (raw: string): string => raw.trim().replace(',', '.')
+/** The unsigned part of a number as written: "1.91", "2,50", "2.", "1,234.5". NaN when it is none. */
+function unsignedValue(t: string): number {
+  if (/^\d+(\.\d*)?$/.test(t)) return Number(t)
+  if (/^\d{1,3}(,\d{3})+(\.\d*)?$/.test(t)) return Number(t.replace(/,/g, ''))
+  if (/^\d+,\d+$/.test(t)) return Number(t.replace(',', '.'))
+  return NaN
+}
 
-/** How to read an ambiguous whole number; null when the file can't say. */
-type WholeReading = 'american' | 'decimal' | null
+function oddsShape(raw: string): OddsShape {
+  // Sportsbook pages write minus as U+2212 (or an en dash); a copy keeps it.
+  const s = raw.trim().replace(/[\u2212\u2013]/g, '-')
+  if (s === '') return { kind: 'blank' }
+  if (FRACTION.test(s)) return { kind: 'price', value: fromFractional(s), evidence: null }
+
+  const sign = s[0] === '+' || s[0] === '-' ? s[0] : ''
+  const body = sign ? s.slice(1) : s
+  if (sign) {
+    // With a sign there is no doubt: "+2,500" is grouped, "+2,5" a decimal comma.
+    const n = unsignedValue(body)
+    if (!Number.isFinite(n)) return { kind: 'bad' }
+    if (n >= 100) {
+      const value = fromAmerican(sign === '-' ? -n : n)
+      return { kind: 'price', value, evidence: value === null ? null : 'american' }
+    }
+    // No American price lies between -100 and +100: "+2.5" can only be decimal.
+    if (sign === '+' && !Number.isInteger(n) && n > 1) return { kind: 'price', value: n, evidence: 'decimal' }
+    return { kind: 'price', value: null, evidence: null }
+  }
+
+  if (/^\d{1,3},\d{3}$/.test(body)) {
+    return { kind: 'grouped', thousands: Number(body.replace(',', '')), decimalComma: Number(body.replace(',', '.')) }
+  }
+  const n = unsignedValue(body)
+  if (!Number.isFinite(n)) return { kind: 'bad' }
+  if (Number.isInteger(n) && n >= 100) return { kind: 'whole', n }
+  return { kind: 'price', value: n > 1 ? n : null, evidence: n > 1 ? 'decimal' : null }
+}
+
+/**
+ * How a file's ambiguous odds read: 'american' or 'decimal'; null when the
+ * file mixes both and can't say; 'unknown' when nothing in it says either.
+ */
+type OddsReading = 'american' | 'decimal' | null | 'unknown'
 
 /** The format a header names, if it names one ("American odds", "decimal_odds", "US odds"). */
-function headerFormat(name: string): WholeReading {
+function headerFormat(name: string | undefined): 'american' | 'decimal' | null {
+  if (name === undefined) return null
   if (/american|^us[ _]/.test(name)) return 'american'
   if (/decimal/.test(name)) return 'decimal'
   return null
 }
 
+/** Every header this app's exports have had that carries odds. They always write decimal. */
+const OWN_EXPORT_HEADERS = new Set([
+  'date,status,stake,odds,amount,sport,book,bet_type,note',
+  'date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note'
+])
+
 /**
- * How this file writes a whole number from 100 up, decided once from all of
- * its odds cells: signed prices and no decimals mean American; decimals and
- * no signed prices mean decimal (every file this app ever exported); both
- * mean the file mixes formats and such a number can't be read; neither falls
- * back to the user's odds format, as the odds box does.
+ * Settle the ambiguous odds of a file, once for both odds columns: one of
+ * this app's own exports is decimal; a header that names a format decides;
+ * otherwise valid signed prices and no decimals mean American, valid decimals
+ * and no signed prices mean decimal, both mean the file mixes formats.
  */
-function wholeReading(cells: readonly string[], fallback: OddsFormat): WholeReading {
-  const texts = cells.map(oddsText).filter(Boolean)
-  const signed = texts.some((t) => SIGNED.test(t))
-  const decimal = texts.some((t) => PLAIN.test(t) && !WHOLE_FROM_100(t))
-  if (signed && decimal) return null
-  if (signed) return 'american'
+function oddsReading(header: readonly string[], oddsHeaders: readonly (string | undefined)[], shapes: readonly OddsShape[]): OddsReading {
+  if (OWN_EXPORT_HEADERS.has(header.join(','))) return 'decimal'
+  const named = oddsHeaders.map(headerFormat).find((f) => f !== null)
+  if (named) return named
+  const american = shapes.some((x) => x.kind === 'price' && x.evidence === 'american')
+  const decimal = shapes.some((x) => x.kind === 'price' && x.evidence === 'decimal')
+  if (american && decimal) return null
+  if (american) return 'american'
   if (decimal) return 'decimal'
-  return fallback === 'american' ? 'american' : 'decimal'
+  return 'unknown'
 }
 
 type OddsCell = { ok: true; value: number | null } | { ok: false; why: string }
 
 /**
- * Read one odds cell as a decimal price. Blank is no odds; anything else must
- * be a real price. `what` names it in a message: "price" or "closing price".
+ * One odds cell as a decimal price. Blank is no odds; anything else must be
+ * a real price. A whole number from 100 up with nothing in the file to place
+ * it follows the user's odds format, like the odds box; "1,200" with nothing
+ * to place it is a decimal comma, also like the odds box. `what` names the
+ * cell in a message: "price" or "closing price".
  */
-function readOdds(raw: string, whole: WholeReading, what: string): OddsCell {
-  const s = oddsText(raw)
-  if (s === '') return { ok: true, value: null }
-  let value: number | null = null
-  if (FRACTION.test(s)) value = fromFractional(s)
-  else if (SIGNED.test(s)) value = fromAmerican(Number(s))
-  else if (WHOLE_FROM_100(s)) {
-    if (whole === null) {
-      return { ok: false, why: `"${raw.trim()}" could be American (+${s}) or decimal (${s}.0) — this file has both kinds of odds; write it with a sign or a decimal point.` }
+function readOdds(raw: string, shape: OddsShape, reading: OddsReading, fallback: OddsFormat, what: string): OddsCell {
+  const cell = raw.trim()
+  const notAPrice: OddsCell = { ok: false, why: `"${cell}" is not a ${what} (decimal above 1, American like +150 or -110, or a fraction like 3/2).` }
+  const mixed = (american: string, decimal: string): OddsCell => ({
+    ok: false,
+    why: `"${cell}" could be American (${american}) or decimal (${decimal}) — this file has both kinds of odds; write it with a sign, or name the format in the header ("american odds" or "decimal odds").`
+  })
+  switch (shape.kind) {
+    case 'blank':
+      return { ok: true, value: null }
+    case 'bad':
+      return notAPrice
+    case 'price':
+      return shape.value === null ? notAPrice : { ok: true, value: shape.value }
+    case 'whole': {
+      if (reading === null) return mixed(`+${shape.n}`, `${shape.n}.0`)
+      const american = reading === 'american' || (reading === 'unknown' && fallback === 'american')
+      return { ok: true, value: american ? (fromAmerican(shape.n) as number) : shape.n }
     }
-    value = whole === 'american' ? fromAmerican(Number(s)) : Number(s)
-  } else if (PLAIN.test(s)) value = Number(s)
-  if (value === null || !(value > 1)) {
-    return { ok: false, why: `"${raw.trim()}" is not a ${what} (decimal above 1, American like +150 or -110, or a fraction like 3/2).` }
+    case 'grouped': {
+      if (reading === null) return mixed(`+${shape.thousands}`, String(shape.decimalComma))
+      if (reading === 'american') return { ok: true, value: fromAmerican(shape.thousands) as number }
+      return shape.decimalComma > 1 ? { ok: true, value: shape.decimalComma } : notAPrice
+    }
   }
-  return { ok: true, value }
 }
 
 /**
@@ -292,7 +362,7 @@ function readOdds(raw: string, whole: WholeReading, what: string): OddsCell {
  * whatever the amount implies, as it always was. Bad lines are reported rather
  * than silently dropped or half-guessed.
  *
- * Odds may be decimal, American or fractional (see readOdds); `oddsFormat`
+ * Odds may be decimal, American or fractional (see oddsShape); `oddsFormat`
  * is the user's setting, used only when a file gives no other clue.
  */
 export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): ImportResult {
@@ -333,13 +403,13 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
   }
 
   const body = rows.slice(1)
-  const fileWhole = wholeReading([...body.map((r) => at(r, 'odds')), ...body.map((r) => at(r, 'closing_odds'))], oddsFormat)
-  const columnWhole = (key: Column): WholeReading => {
-    const i = index[key]
-    return (i === undefined ? null : headerFormat(header[i])) ?? fileWhole
-  }
-  const oddsWhole = columnWhole('odds')
-  const closingWhole = columnWhole('closing_odds')
+  const oddsShapes = body.map((r) => oddsShape(at(r, 'odds')))
+  const closingShapes = body.map((r) => oddsShape(at(r, 'closing_odds')))
+  const reading = oddsReading(
+    header,
+    [index.odds, index.closing_odds].map((i) => (i === undefined ? undefined : header[i])),
+    [...oddsShapes, ...closingShapes]
+  )
 
   const out: BetInput[] = []
   const errors: string[] = []
@@ -382,13 +452,13 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
       continue
     }
 
-    const odds = readOdds(at(row, 'odds'), oddsWhole, 'price')
+    const odds = readOdds(at(row, 'odds'), oddsShapes[r - 1], reading, oddsFormat, 'price')
     if (!odds.ok) {
       reject(line, odds.why)
       continue
     }
 
-    const closing = readOdds(at(row, 'closing_odds'), closingWhole, 'closing price')
+    const closing = readOdds(at(row, 'closing_odds'), closingShapes[r - 1], reading, oddsFormat, 'closing price')
     if (!closing.ok) {
       reject(line, closing.why)
       continue

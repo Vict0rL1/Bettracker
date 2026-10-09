@@ -41,3 +41,15 @@ test('CSV import reads American and fractional odds, and a whole number by the f
   // Newest first, shown in the user's format (decimal).
   await expect(page.locator('.history-card tbody tr .td-odds')).toHaveText(['2.50', '3.00', '1.91', '2.50'])
 })
+
+test('CSV import reads a bare whole number by the odds format the user has just chosen', async ({ page }) => {
+  await boot(page, { entries: [], settings: { oddsFormat: 'decimal' } })
+  // Switch to American in the settings dialog: the import must use the new choice.
+  await page.click('.settings-btn')
+  await page.locator('.settings-modal .settings-seg .seg-btn', { hasText: 'American' }).click()
+  await page.keyboard.press('Escape')
+  const csv = ['date,stake,amount,odds', '2026-08-10,10,15,150', '2026-08-11,10,20,200'].join('\r\n')
+  await page.setInputFiles('input[type=file]', { name: 'bare.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(page.locator('.toast')).toContainText('Imported 2 bets')
+  await expect(page.locator('.history-card tbody tr .td-odds')).toHaveText(['+200', '+150'])
+})

@@ -34,9 +34,12 @@ function cleanMoney(value: number | null | undefined, what: string, min: number)
 function cleanOdds(value: number | null | undefined, what: string): number | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
-  if (value <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
-  if (value > MAX_ODDS) throw new Error(`${what} are out of range`)
-  return Math.round(value * 1000) / 1000
+  // Checked after rounding to what the database stores (3 decimals): 1.0004
+  // would otherwise pass here and be refused there as 1.000.
+  const rounded = Math.round(value * 1000) / 1000
+  if (rounded <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
+  if (rounded > MAX_ODDS) throw new Error(`${what} are out of range`)
+  return rounded
 }
 
 export interface CleanBet {

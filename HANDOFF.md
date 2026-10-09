@@ -95,10 +95,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 265 tests unitarios (vitest)
+npm test            # 282 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 39 comprobaciones Playwright, sin backend
+npm run test:e2e    # 41 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -266,14 +266,20 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
 - Import CSV de cuotas: las fracciones (`3/2`) y los precios con signo
-  (`+150`, `-110`) dicen su formato; un número sin signo es decimal, salvo un
-  entero desde 100, que es ambiguo (`150` puede ser +150 sin el `+`, que
-  Excel quita, o una cuota decimal de 150, y así la escriben nuestras propias
-  exportaciones). Se decide una vez por archivo: una cabecera que nombra el
-  formato manda; si no, precios con signo y ningún decimal → americano;
-  decimales y ningún signo → decimal (cualquier export nuestro); ambos → esa
-  línea se informa en vez de adivinar; ninguno → el formato de cuota del
-  usuario, como la caja de cuota.
+  (`+150`, `-110`, `-110.00`, `+2,500`) dicen su formato; un número sin signo
+  es decimal, salvo dos casos ambiguos: un valor entero desde 100 (`150` o
+  `150.00` puede ser +150 sin el `+`, que Excel quita, o una cuota decimal de
+  150, y así la escriben nuestras propias exportaciones) y `1,200` (miles o
+  coma decimal). Se decide una vez por archivo y para las dos columnas de
+  cuota: un export nuestro (se reconoce por su cabecera) es decimal; una
+  cabecera que nombra el formato manda; si no, precios con signo válidos y
+  ningún decimal → americano; decimales válidos y ningún signo → decimal;
+  ambos → esa línea se informa en vez de adivinar; ninguno → el formato de
+  cuota del usuario, como la caja de cuota (y `1,200`, coma decimal, como la
+  caja). Una celda que no es cuota no cuenta como pista.
+- Una cuota se valida ya redondeada a 3 decimales, como la guarda la base:
+  1.0004 se rechaza en el formulario o en el import, en vez de pasar y que
+  la base la rechace como 1.000 (lo que tiraba el import entero).
 - La cola quita cada operación enviada por su `opId`, nunca por posición.
   Una operación que ya salió una vez queda marcada `sent` (guardado con la
   cola): haya respondido o no, puede estar en el servidor, así que nadie la
@@ -325,7 +331,7 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       39 comprobaciones
+e2e/*.spec.ts                       41 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

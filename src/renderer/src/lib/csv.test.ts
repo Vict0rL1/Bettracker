@@ -303,6 +303,67 @@ describe('parseBetsCsv — odds in any format', () => {
     expect(errors[0]).toMatch(/Line 2: "150" could be American \(\+150\) or decimal/)
   })
 
+  it('round-trips its own export even when every price in it is a whole number from 100 up', () => {
+    const csv = betsToCsv([
+      bet({ date: '2026-01-02', amount: 1490, stake: 10, odds: 150, closingOdds: 120 }),
+      bet({ date: '2026-01-03', amount: 1000, stake: 10, odds: 101 }),
+      bet({ date: '2026-01-04', amount: -10, stake: 10 })
+    ])
+    for (const format of ['american', 'decimal', 'fractional'] as const) {
+      const { odds, closing, errors } = oddsOf(csv, format)
+      expect(errors).toEqual([])
+      expect(odds).toEqual([150, 101, null])
+      expect(closing).toEqual([120, null, null])
+    }
+    // The export from before closing odds existed too.
+    expect(oddsOf('date,status,stake,odds,amount,sport,book,bet_type,note\n2026-01-02,won,10.00,150,1490.00,,,,\n', 'american').odds).toEqual([150])
+  })
+
+  it('reads American prices from a spreadsheet number format ("150.00", "-110.00")', () => {
+    const { odds, errors } = oddsOf('date,amount,odds\n2026-04-01,15,150.00\n2026-04-02,-11,-110.00\n2026-04-03,20,200\n', 'decimal')
+    expect(errors).toEqual([])
+    expect(odds).toEqual([2.5, 1 + 100 / 110, 3])
+  })
+
+  it('lets a header that names the format settle the closing column too', () => {
+    const american = oddsOf('date,amount,american odds,closing\n2026-04-01,15,150,140\n', 'decimal')
+    expect([american.odds, american.closing]).toEqual([[2.5], [2.4]])
+    const decimal = oddsOf('date,amount,decimal odds,closing\n2026-04-01,1490,150,140\n', 'american')
+    expect([decimal.odds, decimal.closing]).toEqual([[150], [140]])
+  })
+
+  it('does not let a cell that is no price at all tip the file either way', () => {
+    // An old decimal file with one typo: 150 stays decimal, only the typo is skipped.
+    const typo = parseBetsCsv('date,amount,odds\n2026-04-01,1490,150\n2026-04-02,-10,1.91\n2026-04-03,5,-2.5\n', 'american')
+    expect(typo.rows.map((r) => r.odds)).toEqual([150, 1.91])
+    expect(typo.skipped).toBe(1)
+    // An American file with a 0 placeholder: 150 stays American.
+    const placeholder = parseBetsCsv('date,amount,odds\n2026-04-01,15,150\n2026-04-02,-11,-110\n2026-04-03,5,0\n', 'decimal')
+    expect(placeholder.rows.map((r) => r.odds)).toEqual([2.5, 1 + 100 / 110])
+    expect(placeholder.skipped).toBe(1)
+  })
+
+  it('reads thousands separators on American prices, and a decimal comma where the file is decimal', () => {
+    const signed = oddsOf('date,amount,odds\n2026-04-01,250,"+2,500"\n2026-04-02,-1,"-1,200"\n', 'decimal')
+    expect(signed.odds).toEqual([26, 1 + 100 / 1200])
+    expect(oddsOf('date,amount,odds\n2026-04-01,120,"1,200"\n2026-04-02,-11,-110\n', 'decimal').odds).toEqual([13, 1 + 100 / 110])
+    expect(oddsOf('date,amount,odds\n2026-04-01,15,"2,500"\n2026-04-02,-10,1.91\n', 'american').odds).toEqual([2.5, 1.91])
+    // Nothing else to go by: a decimal comma, as the odds box reads it.
+    expect(oddsOf('date,amount,odds\n2026-04-01,15,"2,500"\n', 'american').odds).toEqual([2.5])
+  })
+
+  it('reads the minus sign sportsbook pages use, a trailing point and a plus on a decimal', () => {
+    expect(oddsOf('date,amount,odds\n2026-04-01,-11,\u2212110\n').odds).toEqual([1 + 100 / 110])
+    expect(oddsOf('date,amount,odds\n2026-04-01,10,2.\n2026-04-02,15,+2.5\n').odds).toEqual([2, 2.5])
+  })
+
+  it('reports a price too short to store (it would round to 1.000) instead of losing the import', () => {
+    const { rows, errors, skipped } = parseBetsCsv('date,amount,odds\n2026-04-01,1,-300000\n2026-04-02,1,1/5000\n2026-04-03,1,1.91\n')
+    expect(rows.map((r) => r.odds)).toEqual([1.91])
+    expect(skipped).toBe(2)
+    expect(errors[0]).toMatch(/Line 2: Odds must be greater than 1/)
+  })
+
   it('rejects what is no price at all', () => {
     const { odds, errors, skipped } = (() => {
       const r = parseBetsCsv('date,amount,odds\n2026-04-01,15,+50\n2026-04-02,15,-1.5\n2026-04-03,15,abc\n2026-04-04,15,0/2\n2026-04-05,15,0.9\n2026-04-06,15,2.5\n')
