@@ -672,7 +672,7 @@ h2 {
 .mini-card {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 16px 16px;
   align-content: center;
 }
@@ -729,7 +729,7 @@ h2 {
 
   .mini-card {
     grid-column: span 2;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .grid-mid {
@@ -1260,6 +1260,9 @@ tbody tr:hover {
   gap: 8px;
   max-height: 240px;
   overflow-y: auto;
+  /* A scroll container in a flex column may shrink to nothing when the modal
+     is taller than the screen; keep the list and let the modal scroll instead. */
+  flex-shrink: 0;
 }
 
 .bet-item {
@@ -2187,6 +2190,7 @@ tr.is-pending td {
 
 .pend-list {
   max-height: min(60vh, 520px);
+  flex-shrink: 0;
 }
 
 .pend-item {

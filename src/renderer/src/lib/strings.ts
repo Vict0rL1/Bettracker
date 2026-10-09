@@ -292,7 +292,19 @@ export const en = {
   'pend.none': 'nothing waiting',
   'pend.empty': 'Every bet has a result. Pending bets you log will show up here.',
   'pend.past': 'past',
-  'pend.pastTitle': 'The date has passed and this bet still has no result'
+  'pend.pastTitle': 'The date has passed and this bet still has no result',
+
+  // Closing line value
+  'hist.clv': 'CLV',
+  'hero.clv': 'CLV',
+  'hero.clvSub': 'beat the close {beat} of {n}',
+  'hero.noClv': 'record closing odds to see it',
+  'hero.clvTitle':
+    'Closing line value: how much better your price was than where the market closed, averaged over the {n} bets with a closing price. Beating the close consistently is the surest sign of an edge.',
+  'bd.clv': 'CLV {pct}',
+  'bd.clvTitle': 'Average closing line value over the {n} bets here with a closing price',
+  'modal.closingOdds': 'Closing odds',
+  'modal.clv': 'CLV {pct}'
 } as const
 
 export type StringKey = keyof typeof en
@@ -565,5 +577,16 @@ export const es: Record<StringKey, string> = {
   'pend.none': 'nada pendiente',
   'pend.empty': 'Todas las apuestas tienen resultado. Las pendientes que registres aparecerán aquí.',
   'pend.past': 'pasada',
-  'pend.pastTitle': 'La fecha ya pasó y esta apuesta sigue sin resultado'
+  'pend.pastTitle': 'La fecha ya pasó y esta apuesta sigue sin resultado',
+
+  'hist.clv': 'CLV',
+  'hero.clv': 'CLV',
+  'hero.clvSub': 'batió el cierre {beat} de {n}',
+  'hero.noClv': 'registra la cuota de cierre para verlo',
+  'hero.clvTitle':
+    'Valor contra la línea de cierre: cuánto mejor fue tu cuota que la del cierre del mercado, de media sobre las {n} apuestas con cuota de cierre. Batir el cierre de forma constante es la señal más fiable de ventaja.',
+  'bd.clv': 'CLV {pct}',
+  'bd.clvTitle': 'CLV medio sobre las {n} apuestas de este grupo con cuota de cierre',
+  'modal.closingOdds': 'Cuota de cierre',
+  'modal.clv': 'CLV {pct}'
 }

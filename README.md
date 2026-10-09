@@ -240,7 +240,7 @@ policies.
 
 ## Data model
 
-One row per day, per user (`supabase/schema.sql`):
+One row per bet, per user (`supabase/schema.sql`, table `entries`):
 
 | Column | Type | Notes |
 |---|---|---|
@@ -249,6 +249,7 @@ One row per day, per user (`supabase/schema.sql`):
 | `amount` | numeric | the bet's **net result**; `> 0` won, `< 0` lost, `0` push/void, `null` while pending |
 | `stake` | numeric | amount risked; `null` = not recorded (excluded from ROI), `0` = free bet (bonus profit) |
 | `odds` | numeric | decimal price, `> 1`; optional |
+| `closing_odds` | numeric | the price when the market closed, `> 1`; optional. CLV = odds / closing_odds − 1 (migration 004) |
 | `status` | text | `pending` · `won` · `lost` · `push` · `void` — names shared with the Sports Predictor |
 | `note` | text | optional (e.g. "morning parlay") |
 | `sport` | text | optional tag (e.g. "NBA") |

@@ -4,7 +4,7 @@ import { humanDate } from '../lib/dates'
 import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { formatOdds } from '../lib/odds'
-import { tagValues } from '../lib/stats'
+import { clvOf, tagValues } from '../lib/stats'
 import { suggestedAmount } from '../lib/validate'
 import { toneOf } from './DayModal'
 import { ChevronLeftIcon, ChevronRightIcon, PencilIcon, TrashIcon } from './icons'
@@ -55,6 +55,8 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
 
   const sports = useMemo(() => tagValues(bets, 'sport'), [bets])
   const books = useMemo(() => tagValues(bets, 'book'), [bets])
+  // The CLV column only earns its space once a closing price has been recorded.
+  const hasClv = useMemo(() => bets.some((b) => b.closingOdds !== null), [bets])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -208,6 +210,7 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                       {sortHeader('odds', t('hist.odds'), true)}
                       {sortHeader('amount', t('hist.amount'), true)}
                       <th className="th-right">{t('hist.return')}</th>
+                      {hasClv && <th className="th-right">{t('hist.clv')}</th>}
                       <th>{t('hist.tags')}</th>
                       <th>{t('hist.note')}</th>
                       <th className="th-right">{t('hist.actions')}</th>
@@ -218,6 +221,7 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                       const tone = toneOf(b.status)
                       const decided = b.status === 'won' || b.status === 'lost'
                       const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
+                      const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
                       const tags = [b.sport, b.book, b.betType].filter(Boolean)
                       const when = humanDate(b.date)
                       return (
@@ -232,6 +236,11 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                           <td className={`td-roi ${ret === null ? '' : ret > 0 ? 'win' : ret < 0 ? 'loss' : ''}`}>
                             {ret === null ? <span className="td-none">—</span> : fmtPctSigned(ret)}
                           </td>
+                          {hasClv && (
+                            <td className={`td-roi td-clv ${clv === null ? '' : clv > 0 ? 'win' : clv < 0 ? 'loss' : ''}`}>
+                              {clv === null ? <span className="td-none">—</span> : fmtPctSigned(clv)}
+                            </td>
+                          )}
                           <td className="td-tags">
                             {tags.length === 0 ? (
                               <span className="td-none">—</span>

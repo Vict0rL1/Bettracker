@@ -51,7 +51,7 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
       : `${tn('day', month.dayCount)} · ${tn('bet', month.bets)} · ${record(month.dayWl)}` +
         (month.pendingCount > 0 ? t('hero.pendingSuffix', { n: month.pendingCount }) : '')
 
-  const { roi, bonus, implied } = lifetime
+  const { roi, bonus, implied, clv } = lifetime
   const smallSample = roi !== null && isSmallSample(roi.counted)
 
   // ROI only speaks for the bets that recorded a stake. When that's a subset,
@@ -152,6 +152,13 @@ export default function HeroStats({ bets, lifetime, ym, onPrev, onNext, onResetM
                 (isSmallSample(lifetime.strikeN) ? t('hero.smallSampleSuffix') : '')
           }
           title={implied ? t('hero.strikeTitle', { p: fmtProb(implied.avg), n: implied.n }) : t('hero.strikeTitleNoOdds')}
+        />
+        <Mini
+          label={t('hero.clv')}
+          value={clv ? fmtPctSigned(clv.avg) : '—'}
+          toneClass={clv ? tone(clv.avg) : ''}
+          sub={clv ? t('hero.clvSub', { beat: clv.beat, n: clv.n }) : t('hero.noClv')}
+          title={t('hero.clvTitle', { n: clv?.n ?? 0 })}
         />
         <Mini
           label={t('hero.greenDays')}

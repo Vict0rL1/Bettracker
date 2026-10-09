@@ -76,6 +76,11 @@ export default function Breakdown({ bets }: Props) {
                     ? t('bd.noRoi')
                     : t('bd.roiOn', { pct: fmtPctSigned(r.roi), staked: fmtStake(r.staked) }) + (r.roiBets < r.bets ? ` (${r.roiBets}/${r.bets})` : '')}
                 </span>
+                {r.clv !== null && (
+                  <span className={`bd-clv ${tone(r.clv)}`} title={t('bd.clvTitle', { n: r.clvBets })}>
+                    {t('bd.clv', { pct: fmtPctSigned(r.clv) })}
+                  </span>
+                )}
               </div>
             </li>
           ))}

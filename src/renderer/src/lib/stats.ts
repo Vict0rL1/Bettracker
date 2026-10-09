@@ -207,6 +207,39 @@ export function averageImplied(bets: readonly Bet[]): Implied | null {
   return n === 0 ? null : { avg: (sum / n) * 100, n }
 }
 
+/**
+ * Closing line value, as a percentage: how much better the price taken was
+ * than where the market closed. 2.50 taken, 2.20 at close → +13.6%.
+ */
+export const clvOf = (odds: number, closing: number): number => (odds / closing - 1) * 100
+
+export interface Clv {
+  /** Mean CLV, as a percentage. */
+  avg: number
+  /** Bets with both a price and a closing price — whatever their result. */
+  n: number
+  /** How many of those beat the close. */
+  beat: number
+}
+
+/**
+ * Average CLV over every bet that recorded both prices. The result of the bet
+ * is irrelevant: beating the close is the signal, winning is the noise.
+ */
+export function averageClv(bets: readonly Bet[]): Clv | null {
+  let sum = 0
+  let n = 0
+  let beat = 0
+  for (const b of bets) {
+    if (b.odds === null || b.closingOdds === null) continue
+    const c = clvOf(b.odds, b.closingOdds)
+    sum += c
+    n++
+    if (c > 0) beat++
+  }
+  return n === 0 ? null : { avg: sum / n, n, beat }
+}
+
 export interface Streak {
   kind: 'W' | 'L'
   count: number
@@ -294,6 +327,9 @@ export interface BreakdownRow {
    * the UI has to say so rather than let them look contradictory.
    */
   roiBets: number
+  /** Average closing line value over the bets here with both prices, and how many that is. */
+  clv: number | null
+  clvBets: number
 }
 
 /**
@@ -313,6 +349,7 @@ export function breakdown(bets: readonly Bet[], key: TagKey): BreakdownRow[] {
   return [...groups.entries()]
     .map(([label, list]) => {
       const r = roi(list)
+      const c = averageClv(list)
       const pending = list.filter((b) => b.status === 'pending').length
       return {
         label,
@@ -322,7 +359,9 @@ export function breakdown(bets: readonly Bet[], key: TagKey): BreakdownRow[] {
         wl: betWinLoss(list),
         roi: r ? r.pct : null,
         staked: r ? r.staked : 0,
-        roiBets: r ? r.counted : 0
+        roiBets: r ? r.counted : 0,
+        clv: c ? c.avg : null,
+        clvBets: c ? c.n : 0
       }
     })
     .sort((a, b) => b.profit - a.profit || a.label.localeCompare(b.label))
@@ -357,6 +396,7 @@ export interface Summary {
   roi: Roi | null
   bonus: Bonus
   implied: Implied | null
+  clv: Clv | null
   avgStake: number | null
   best: DaySummary | null
   worst: DaySummary | null
@@ -400,6 +440,7 @@ export function summarize(bets: readonly Bet[]): Summary {
     roi: roi(bets),
     bonus: bonusProfit(bets),
     implied: averageImplied(bets),
+    clv: averageClv(bets),
     avgStake: averageStake(bets),
     best,
     worst,

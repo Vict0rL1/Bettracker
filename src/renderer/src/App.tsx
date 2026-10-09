@@ -165,6 +165,7 @@ export default function App() {
           amount,
           stake: bet.stake,
           odds: bet.odds,
+          closingOdds: bet.closingOdds,
           status: next,
           note: bet.note,
           sport: bet.sport,

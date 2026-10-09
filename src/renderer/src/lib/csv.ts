@@ -1,7 +1,7 @@
 import type { Bet, BetInput, BetStatus } from '../../../shared/types'
 import { isValidDate, normalizeInput } from './validate'
 
-const COLUMNS = ['date', 'status', 'stake', 'odds', 'amount', 'sport', 'book', 'bet_type', 'note'] as const
+const COLUMNS = ['date', 'status', 'stake', 'odds', 'closing_odds', 'amount', 'sport', 'book', 'bet_type', 'note'] as const
 type Column = (typeof COLUMNS)[number]
 
 function escapeField(value: string): string {
@@ -37,6 +37,7 @@ export function betsToCsv(bets: readonly Bet[]): string {
         b.status,
         money(b.stake),
         odds(b.odds),
+        odds(b.closingOdds),
         money(b.amount),
         escapeField(guardCell(b.sport)),
         escapeField(guardCell(b.book)),
@@ -143,6 +144,14 @@ const ALIASES: Record<string, Column> = {
   price: 'odds',
   decimal_odds: 'odds',
   'decimal odds': 'odds',
+  closing_odds: 'closing_odds',
+  'closing odds': 'closing_odds',
+  closing: 'closing_odds',
+  close: 'closing_odds',
+  closing_price: 'closing_odds',
+  'closing price': 'closing_odds',
+  closing_line: 'closing_odds',
+  'closing line': 'closing_odds',
   amount: 'amount',
   profit: 'amount',
   net: 'amount',
@@ -302,12 +311,20 @@ export function parseBetsCsv(text: string): ImportResult {
       continue
     }
 
+    const closingRaw = at(row, 'closing_odds')
+    const closingOdds = parseOdds(closingRaw)
+    if (closingRaw.trim() !== '' && (closingOdds === null || closingOdds <= 1)) {
+      reject(line, `"${closingRaw}" is not a decimal closing price above 1.`)
+      continue
+    }
+
     const input: BetInput = {
       date,
       // A push or void with no amount column is still a 0; a pending bet has none.
       amount: status === 'pending' ? null : status === 'push' || status === 'void' ? (amount ?? 0) : amount,
       stake,
       odds,
+      closingOdds,
       ...(status !== undefined ? { status } : {}),
       sport: unguardCell(at(row, 'sport').trim()),
       book: unguardCell(at(row, 'book').trim()),

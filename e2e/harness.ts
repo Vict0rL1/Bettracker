@@ -21,6 +21,7 @@ export interface SeedEntry {
   amount: number
   stake: number | null
   odds?: number | null
+  closingOdds?: number | null
   /** Omitted on most seeds: the app derives it from the amount, as it does for pre-003 caches. */
   status?: 'pending' | 'won' | 'lost' | 'push' | 'void'
   note: string

@@ -4,7 +4,7 @@ import { humanDate } from '../lib/dates'
 import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { formatOdds, ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
-import { round2, total as sumTotal } from '../lib/stats'
+import { clvOf, round2, total as sumTotal } from '../lib/stats'
 import { MAX_AMOUNT, MAX_ODDS, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 
@@ -38,6 +38,7 @@ const toInput = (b: Bet): BetInput => ({
   amount: b.amount,
   stake: b.stake,
   odds: b.odds,
+  closingOdds: b.closingOdds,
   status: b.status,
   note: b.note,
   sport: b.sport,
@@ -52,6 +53,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
   const [amountStr, setAmountStr] = useState('')
   const [stakeStr, setStakeStr] = useState('')
   const [oddsStr, setOddsStr] = useState('')
+  const [closingStr, setClosingStr] = useState('')
   const [note, setNote] = useState('')
   const [sport, setSport] = useState('')
   const [book, setBook] = useState('')
@@ -68,6 +70,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
   // The odds box shows a stored price in the chosen format, which can round
   // (1.91 reads as −110). Saving an untouched box keeps the exact stored price.
   const shownOdds = useRef<{ text: string; value: number } | null>(null)
+  const shownClosing = useRef<{ text: string; value: number } | null>(null)
   // Legacy bets never recorded a stake; editing one shouldn't force it.
   const [stakeOptional, setStakeOptional] = useState(false)
   const titleId = useId()
@@ -115,6 +118,9 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
   const parsedStake = stakeStr.trim() === '' ? null : parseFloat(stakeStr)
   const readOdds = (text: string): number | null => (shownOdds.current && text === shownOdds.current.text ? shownOdds.current.value : parseOdds(text, oddsFormat))
   const parsedOdds = readOdds(oddsStr)
+  const parsedClosing =
+    shownClosing.current && closingStr === shownClosing.current.text ? shownClosing.current.value : parseOdds(closingStr, oddsFormat)
+  const fmtWord = t(`odds.${oddsFormat}`).toLowerCase()
 
   /** Put the result the stake and odds imply into the amount box, unless the user has typed one. */
   const suggest = (s: BetStatus, stake: number | null, odds: number | null): void => {
@@ -129,6 +135,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
     setAmountStr('')
     setStakeStr('')
     setOddsStr('')
+    setClosingStr('')
     setNote('')
     setSport('')
     setBook('')
@@ -136,6 +143,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
     setStakeOptional(false)
     amountEdited.current = false
     shownOdds.current = null
+    shownClosing.current = null
   }
 
   const startEdit = (b: Bet, as: BetStatus = b.status): void => {
@@ -144,6 +152,8 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
     setStakeStr(b.stake === null ? '' : String(b.stake))
     shownOdds.current = b.odds === null ? null : { text: formatOdds(b.odds, oddsFormat), value: b.odds }
     setOddsStr(shownOdds.current?.text ?? '')
+    shownClosing.current = b.closingOdds === null ? null : { text: formatOdds(b.closingOdds, oddsFormat), value: b.closingOdds }
+    setClosingStr(shownClosing.current?.text ?? '')
     setNote(b.note)
     setSport(b.sport)
     setBook(b.book)
@@ -179,7 +189,8 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
   const amountValid = !needsAmount || (Number.isFinite(amount) && amount > 0 && amount <= MAX_AMOUNT)
   const stakeValid = parsedStake === null ? stakeOptional : Number.isFinite(parsedStake) && parsedStake >= 0 && parsedStake <= MAX_AMOUNT
   const oddsValid = oddsStr.trim() === '' || (parsedOdds !== null && parsedOdds <= MAX_ODDS)
-  const canSave = amountValid && stakeValid && oddsValid && !busy
+  const closingValid = closingStr.trim() === '' || (parsedClosing !== null && parsedClosing <= MAX_ODDS)
+  const canSave = amountValid && stakeValid && oddsValid && closingValid && !busy
 
   const signedAmount: number | null = status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
 
@@ -188,7 +199,18 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
     if (!canSave) return
     setBusy(true)
     try {
-      const input: BetInput = { date, amount: signedAmount, stake: parsedStake, odds: parsedOdds, status, note: note.trim(), sport, book, betType }
+      const input: BetInput = {
+        date,
+        amount: signedAmount,
+        stake: parsedStake,
+        odds: parsedOdds,
+        closingOdds: parsedClosing,
+        status,
+        note: note.trim(),
+        sport,
+        book,
+        betType
+      }
       if (editingId) await onUpdate(editingId, input)
       else await onAdd(input)
       resetForm()
@@ -289,6 +311,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
                             {t(b.status === 'pending' ? 'modal.riding' : 'modal.risked', { amount: fmtStake(b.stake) })}
                             {b.odds !== null && ` @ ${formatOdds(b.odds, oddsFormat)}`}
                             {ret !== null && (b.status === 'won' || b.status === 'lost') && ` · ${fmtPctSigned(ret)}`}
+                            {b.odds !== null && b.closingOdds !== null && ` · ${t('modal.clv', { pct: fmtPctSigned(clvOf(b.odds, b.closingOdds)) })}`}
                           </span>
                         )}
                         {tags.map((x) => (
@@ -370,7 +393,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
 
             <label className="field">
               <span className="field-label">
-                {t('modal.odds')} <span className="field-opt">{t('modal.oddsOpt', { format: t(`odds.${oddsFormat}`).toLowerCase() })}</span>
+                {t('modal.odds')} <span className="field-opt">{t('modal.oddsOpt', { format: fmtWord })}</span>
               </span>
               <input
                 type="text"
@@ -402,6 +425,21 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
                   }}
                 />
               </div>
+            </label>
+
+            <label className="field">
+              <span className="field-label">
+                {t('modal.closingOdds')} <span className="field-opt">{t('modal.oddsOpt', { format: fmtWord })}</span>
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="odds-input closing-input"
+                placeholder={ODDS_PLACEHOLDER[oddsFormat]}
+                value={closingStr}
+                aria-invalid={!closingValid}
+                onChange={(e) => setClosingStr(e.target.value)}
+              />
             </label>
 
             <label className="field">

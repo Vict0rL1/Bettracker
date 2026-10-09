@@ -35,9 +35,9 @@ test.describe('settings', () => {
     await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
     const modal = page.locator('.day-modal')
     await expect(modal.locator('.bet-stake')).toContainText('@ 10/11')
-    await expect(modal.locator('.odds-input')).toHaveAttribute('placeholder', '3/2')
+    await expect(modal.locator('.odds-input').first()).toHaveAttribute('placeholder', '3/2')
     await modal.locator('.bet-item .btn-icon').first().click()
-    await expect(modal.locator('.odds-input')).toHaveValue('10/11')
+    await expect(modal.locator('.odds-input').first()).toHaveValue('10/11')
   })
 
   test('a default stake set here is what quick add opens with', async ({ page }) => {

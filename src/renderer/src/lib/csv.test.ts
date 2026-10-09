@@ -6,12 +6,26 @@ describe('betsToCsv', () => {
   it('writes a header, a BOM and CRLF endings', () => {
     const csv = betsToCsv([bet({ date: '2026-01-02', amount: 10, stake: 5 })])
     expect(csv.startsWith('﻿')).toBe(true)
-    expect(csv.slice(1).split('\r\n')[0]).toBe('date,status,stake,odds,amount,sport,book,bet_type,note')
+    expect(csv.slice(1).split('\r\n')[0]).toBe('date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note')
   })
 
-  it('leaves stake, odds and a pending amount blank when unknown', () => {
-    expect(betsToCsv([bet({ date: '2026-01-02', amount: 10 })])).toContain('2026-01-02,won,,,10.00,')
-    expect(betsToCsv([bet({ date: '2026-01-03', status: 'pending', stake: 25, odds: 1.91 })])).toContain('2026-01-03,pending,25.00,1.91,,')
+  it('leaves stake, odds, closing odds and a pending amount blank when unknown', () => {
+    expect(betsToCsv([bet({ date: '2026-01-02', amount: 10 })])).toContain('2026-01-02,won,,,,10.00,')
+    expect(betsToCsv([bet({ date: '2026-01-03', status: 'pending', stake: 25, odds: 1.91 })])).toContain('2026-01-03,pending,25.00,1.91,,,')
+  })
+
+  it('writes the closing price as stored (decimal), and reads it back under any of its names', () => {
+    const csv = betsToCsv([bet({ date: '2026-01-02', amount: 150, stake: 100, odds: 2.5, closingOdds: 2.2 })])
+    expect(csv).toContain('2026-01-02,won,100.00,2.5,2.2,150.00,')
+    expect(parseBetsCsv(csv).rows[0].closingOdds).toBe(2.2)
+    const other = parseBetsCsv('date,amount,odds,closing line\n2026-01-02,150,2.5,"2,20"\n')
+    expect(other.rows[0].closingOdds).toBe(2.2)
+  })
+
+  it('rejects a closing price that is not a decimal above 1', () => {
+    const r = parseBetsCsv('date,amount,closing_odds\n2026-01-02,10,0.9\n2026-01-03,10,\n')
+    expect(r.rows).toHaveLength(1)
+    expect(r.errors[0]).toMatch(/closing price/)
   })
 
   it('quotes fields containing commas, quotes or newlines', () => {
@@ -32,7 +46,7 @@ describe('betsToCsv', () => {
   })
 
   it('leaves negative amounts alone — they are numbers, not text', () => {
-    expect(betsToCsv([bet({ amount: -40, stake: 40 })])).toContain(',40.00,,-40.00,')
+    expect(betsToCsv([bet({ amount: -40, stake: 40 })])).toContain(',40.00,,,-40.00,')
   })
 
   it('sorts by date', () => {
@@ -83,10 +97,10 @@ describe('parseBetsCsv', () => {
     expect(skipped).toBe(0)
     expect(noStake).toBe(1)
     expect(rows).toEqual([
-      { date: '2026-01-02', amount: 120.5, stake: 100, odds: 2.205, status: 'won', sport: 'NBA', book: 'DK', betType: 'Parlay', note: 'a,b' },
-      { date: '2026-01-03', amount: -40, stake: null, odds: null, status: 'lost', sport: '', book: '', betType: '', note: '' },
-      { date: '2026-01-04', amount: null, stake: 30, odds: 1.8, status: 'pending', sport: '', book: '', betType: '', note: '' },
-      { date: '2026-01-05', amount: 0, stake: 30, odds: null, status: 'void', sport: '', book: '', betType: '', note: '' }
+      { date: '2026-01-02', amount: 120.5, stake: 100, odds: 2.205, closingOdds: null, status: 'won', sport: 'NBA', book: 'DK', betType: 'Parlay', note: 'a,b' },
+      { date: '2026-01-03', amount: -40, stake: null, odds: null, closingOdds: null, status: 'lost', sport: '', book: '', betType: '', note: '' },
+      { date: '2026-01-04', amount: null, stake: 30, odds: 1.8, closingOdds: null, status: 'pending', sport: '', book: '', betType: '', note: '' },
+      { date: '2026-01-05', amount: 0, stake: 30, odds: null, closingOdds: null, status: 'void', sport: '', book: '', betType: '', note: '' }
     ])
   })
 
@@ -108,8 +122,8 @@ describe('parseBetsCsv', () => {
     const { rows, errors } = parseBetsCsv('date,amount,note\r\n2026-04-01,25.00,parlay\r\n2026-04-02,-10.00,\r\n')
     expect(errors).toEqual([])
     expect(rows).toEqual([
-      { date: '2026-04-01', amount: 25, stake: null, odds: null, sport: '', book: '', betType: '', note: 'parlay' },
-      { date: '2026-04-02', amount: -10, stake: null, odds: null, sport: '', book: '', betType: '', note: '' }
+      { date: '2026-04-01', amount: 25, stake: null, odds: null, closingOdds: null, sport: '', book: '', betType: '', note: 'parlay' },
+      { date: '2026-04-02', amount: -10, stake: null, odds: null, closingOdds: null, sport: '', book: '', betType: '', note: '' }
     ])
   })
 
@@ -122,7 +136,7 @@ describe('parseBetsCsv', () => {
 
   it('matches columns by name in any order, ignoring extras', () => {
     const { rows } = parseBetsCsv('note,amount,ignored,date\nhello,25,zz,2026-04-01\n')
-    expect(rows).toEqual([{ date: '2026-04-01', amount: 25, stake: null, odds: null, sport: '', book: '', betType: '', note: 'hello' }])
+    expect(rows).toEqual([{ date: '2026-04-01', amount: 25, stake: null, odds: null, closingOdds: null, sport: '', book: '', betType: '', note: 'hello' }])
   })
 
   it('accepts aliases used by other trackers, including "session" for the note', () => {
