@@ -42,9 +42,9 @@ const REALTIME_DEBOUNCE_MS = 400
 
 /** One queued op, sent. Resolves with the row the server returned, when there is one. */
 async function sendOp(op: PendingOp): Promise<Bet | null> {
-  if (op.kind === 'add') return addBet(op.input, op.id)
+  if (op.kind === 'add') return addBet(op.input, op.id, op.queuedAt)
   if (op.kind === 'update') return updateBet(op.id, op.input, op.editedAt)
-  if (op.kind === 'bulk-add') await addBets(op.entries)
+  if (op.kind === 'bulk-add') await addBets(op.entries, op.queuedAt)
   else await deleteBet(op.id)
   return null
 }
@@ -77,6 +77,8 @@ export function useBetSync(
   const serverRef = useRef<Bet[] | null>(null)
   const outboxRef = useRef<PendingOp[]>([])
   const syncingRef = useRef(false)
+  // The op whose request is out right now; enqueueOp must leave it alone.
+  const inFlightRef = useRef<string | null>(null)
   const noticeRef = useRef(migrationNotice())
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
@@ -132,6 +134,9 @@ export function useBetSync(
       result = await drainOutbox({
         outbox: () => outboxRef.current,
         setOutbox,
+        sending: (op) => {
+          inFlightRef.current = op?.opId ?? null
+        },
         send: sendOp,
         applied: (op, row) => {
           // A refused update lost to a newer edit elsewhere (or the bet is
@@ -229,7 +234,7 @@ export function useBetSync(
     (ops: readonly PendingOp[]) => {
       if (ops.length === 0) return
       let next = outboxRef.current
-      for (const op of ops) next = enqueueOp(next, op)
+      for (const op of ops) next = enqueueOp(next, op, inFlightRef.current ?? undefined)
       setOutbox(next)
       setTimeout(() => void syncNow(), 0)
     },

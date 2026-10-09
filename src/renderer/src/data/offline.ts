@@ -201,10 +201,15 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
  * Rows inside a pending bulk-add are deliberately left alone: the import is
  * replayed as-is and the later edit/delete op applies on top, which costs one
  * extra request but keeps the import an all-or-nothing unit.
+ *
+ * `inFlightOpId` is the op being sent right now. Its request is already on
+ * the wire, so it can no longer be rewritten or cancelled: an edit or a
+ * delete of the same bet queues behind it instead and goes out after it.
  */
-export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp): PendingOp[] {
+export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp, inFlightOpId?: string): PendingOp[] {
+  const open = (o: PendingOp): boolean => o.opId !== inFlightOpId
   if (op.kind === 'update') {
-    const i = outbox.findIndex((o) => (o.kind === 'add' || o.kind === 'update') && o.id === op.id)
+    const i = outbox.findIndex((o) => open(o) && (o.kind === 'add' || o.kind === 'update') && o.id === op.id)
     if (i >= 0) {
       const next = [...outbox]
       const prev = next[i] as Extract<PendingOp, { kind: 'add' | 'update' }>
@@ -214,12 +219,13 @@ export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp): PendingO
     return [...outbox, op]
   }
   if (op.kind === 'delete') {
-    const hadPendingAdd = outbox.some((o) => o.kind === 'add' && o.id === op.id)
+    // An add on the wire can't be cancelled: the bet is reaching the server.
+    const hadPendingAdd = outbox.some((o) => open(o) && o.kind === 'add' && o.id === op.id)
     // A queued delete means the row exists on the server: a later add for the
     // same id is an Undo re-adding it, and deleting again must still reach the
     // server. Only an add with no delete before it can be cancelled outright.
     const hadQueuedDelete = outbox.some((o) => o.kind === 'delete' && o.id === op.id)
-    const filtered = outbox.filter((o) => o.kind === 'bulk-add' || o.id !== op.id)
+    const filtered = outbox.filter((o) => !open(o) || o.kind === 'bulk-add' || o.id !== op.id)
     return hadPendingAdd && !hadQueuedDelete ? filtered : [...filtered, op]
   }
   return [...outbox, op]

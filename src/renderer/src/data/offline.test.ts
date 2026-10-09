@@ -303,6 +303,44 @@ describe('enqueueOp', () => {
     // A second delete of the same synced bet is not queued twice.
     expect(enqueueOp([del('a')], del('a'))).toEqual([del('a')])
   })
+
+  describe('while an op is being sent', () => {
+    it('queues an edit of a bet whose add is on the wire behind it, instead of rewriting it', () => {
+      const sending = add('a', { amount: 10 })
+      const out = enqueueOp([sending], update('a', 55), sending.opId)
+      expect(out).toEqual([sending, update('a', 55)])
+    })
+
+    it('queues a newer edit behind the edit on the wire', () => {
+      const sending = update('a', 1, 'T1')
+      const out = enqueueOp([sending], update('a', 2, 'T2'), sending.opId)
+      expect(out).toEqual([sending, update('a', 2, 'T2')])
+      // ...and later edits collapse into that queued one as usual.
+      const later = enqueueOp(out, update('a', 3, 'T3'), sending.opId)
+      expect(later).toHaveLength(2)
+      expect(later[0]).toBe(sending)
+      expect(later[1]).toMatchObject({ kind: 'update', input: { amount: 3 }, editedAt: 'T3' })
+    })
+
+    it('cannot cancel an add on the wire: the delete goes out after it', () => {
+      const sending = add('a')
+      expect(enqueueOp([sending, add('b')], del('a'), sending.opId)).toEqual([sending, add('b'), del('a')])
+    })
+
+    it('keeps an edit on the wire when its bet is deleted, and drops the ones still waiting', () => {
+      const sending = update('a', 1, 'T1')
+      const out = enqueueOp([sending, add('c'), update('a', 2, 'T2')], del('a'), sending.opId)
+      expect(out).toEqual([sending, add('c'), del('a')])
+    })
+
+    it('leaves the queue alone for other bets', () => {
+      const sending = add('a')
+      const out = enqueueOp([sending, add('b')], update('b', 9), sending.opId)
+      expect(out[0]).toBe(sending)
+      expect(out[1]).toMatchObject({ kind: 'add', id: 'b', input: { amount: 9 } })
+      expect(out).toHaveLength(2)
+    })
+  })
 })
 
 describe('opSize', () => {

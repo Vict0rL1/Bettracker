@@ -264,6 +264,13 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   borrado de una apuesta restaurada conserva su `delete` en cola (bug
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
+- La cola quita cada operación enviada por su `opId`, nunca por posición.
+  Mientras una operación está en vuelo nadie la reescribe ni la cancela:
+  una edición o un borrado de esa apuesta hechos entretanto se encolan
+  detrás (`enqueueOp(…, inFlightOpId)`). Y un alta lleva como `updated_at`
+  la hora en que se registró (no el `now()` del servidor), para que una
+  edición hecha mientras el alta viajaba no parezca más antigua y la regla
+  de conflicto la rechace.
 - Una operación que la base rechaza porque le falta una migración se queda
   en la cola (como sin conexión) en vez de descartarse; el aviso sale una
   vez por episodio (hasta que una petición pasa o la cola se vacía), no en

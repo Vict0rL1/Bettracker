@@ -87,11 +87,16 @@ export async function getBets(): Promise<Bet[]> {
 /**
  * Add one bet. `id` is a client-generated UUID so an offline retry of the same
  * insert is recognized as a duplicate instead of creating a second row.
+ *
+ * `queuedAt` is when the user logged it, written as `updated_at` so the
+ * conflict check below compares device times only. Left to the server's
+ * clock, the row could look newer than an edit the user made while the
+ * insert was still on its way, and that edit would be refused.
  */
-export async function addBet(input: BetInput, id?: string): Promise<Bet> {
+export async function addBet(input: BetInput, id?: string, queuedAt?: string): Promise<Bet> {
   const clean = normalizeInput(input)
   const user_id = await currentUserId()
-  const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}) }
+  const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}), ...(queuedAt ? { updated_at: queuedAt } : {}) }
   const { data, error } = await supabase.from(TABLE).insert(payload).select().single()
   if (error) {
     if (error.code === '23505' && id) {
@@ -143,11 +148,13 @@ export async function deleteBet(id: string): Promise<boolean> {
  * Insert many bets at once (CSV import). Rows are sent in chunks so a large
  * file doesn't hit request-size limits, and ids are client-generated so a
  * partially-applied import can be re-run without duplicating rows.
+ * `queuedAt` is written as each row's `updated_at`, as in addBet.
  */
-export async function addBets(inputs: readonly { id: string; input: BetInput }[]): Promise<number> {
+export async function addBets(inputs: readonly { id: string; input: BetInput }[], queuedAt?: string): Promise<number> {
   if (inputs.length === 0) return 0
   const user_id = await currentUserId()
-  const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)) }))
+  const stamp = queuedAt ? { updated_at: queuedAt } : {}
+  const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)), ...stamp }))
 
   const CHUNK = 250
   let written = 0

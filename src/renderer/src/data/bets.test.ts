@@ -27,7 +27,7 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { addBet, getBets, updateBet } from './bets'
+import { addBet, addBets, getBets, updateBet } from './bets'
 import { MigrationNeededError } from './errors'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
@@ -57,6 +57,29 @@ describe('updateBet — last write wins by edit time', () => {
   it('validates before touching the network', async () => {
     await expect(updateBet('a', { date: 'nope', amount: 1 }, 'E')).rejects.toThrow(/calendar date/)
     expect(state.calls).toHaveLength(0)
+  })
+})
+
+describe('inserts carry the time they were queued', () => {
+  // The conflict check compares the row's updated_at with the device time of
+  // an edit. Left to the server's now(), an insert can land "after" an edit
+  // the user made while it was on the wire, and that edit would be refused.
+  it('addBet writes the queued time as updated_at', async () => {
+    state.result = { data: { id: 'id-1', date: '2026-03-01', amount: '5', status: 'won', note: '', created_at: 'c', updated_at: 'Q' }, error: null, count: null }
+    await addBet({ date: '2026-03-01', amount: 5 }, 'id-1', 'Q')
+    expect(call('insert')?.args[0]).toMatchObject({ id: 'id-1', updated_at: 'Q' })
+  })
+
+  it('addBets writes it on every imported row', async () => {
+    state.result = { data: null, error: null, count: 2 }
+    await addBets(
+      [
+        { id: 'x', input: { date: '2026-03-01', amount: 5 } },
+        { id: 'y', input: { date: '2026-03-02', amount: -5 } }
+      ],
+      'Q'
+    )
+    expect(call('upsert')?.args[0]).toEqual([expect.objectContaining({ id: 'x', updated_at: 'Q' }), expect.objectContaining({ id: 'y', updated_at: 'Q' })])
   })
 })
 

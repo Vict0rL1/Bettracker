@@ -27,6 +27,11 @@ export interface DrainHooks {
   /** The queue as it is now. Read before every op: the user can add to it while a request is out. */
   outbox: () => readonly PendingOp[]
   setOutbox: (next: PendingOp[]) => void
+  /**
+   * The op now on the wire, or null once its answer is in. While an op is out
+   * the queue must not rewrite or cancel it (enqueueOp's `inFlightOpId`).
+   */
+  sending: (op: PendingOp | null) => void
   /** Send one op; resolves with the row the server returned, if any. */
   send: (op: PendingOp) => Promise<Bet | null>
   /** The op reached the server. */
@@ -35,16 +40,25 @@ export interface DrainHooks {
   rejected: (op: PendingOp, err: unknown) => void
 }
 
-/** Send the queued bet ops in order until the queue is empty or one can't go through. */
+/**
+ * Send the queued bet ops in order until the queue is empty or one can't go
+ * through. A sent op leaves the queue by its opId, never by position: while
+ * it was out the user may have queued more, or cancelled other ops, so
+ * whatever is first by then may be a different op.
+ */
 export async function drainOutbox(h: DrainHooks): Promise<DrainResult> {
   let processed = 0
+  const without = (op: PendingOp): PendingOp[] => h.outbox().filter((o) => o.opId !== op.opId)
   for (let op = h.outbox()[0]; op !== undefined; op = h.outbox()[0]) {
+    h.sending(op)
     try {
       const result = await h.send(op)
+      h.sending(null)
       h.applied(op, result)
-      h.setOutbox(h.outbox().slice(1))
+      h.setOutbox(without(op))
       processed++
     } catch (err) {
+      h.sending(null)
       const failure = classifySyncError(err)
       // Unreachable, or the database is missing a migration: keep the op, and
       // everything queued after it, in order, for the next attempt.
@@ -52,7 +66,7 @@ export async function drainOutbox(h: DrainHooks): Promise<DrainResult> {
       if (failure === 'behind') return { stop: 'behind', processed, error: err }
       // The server rejected this op (validation, RLS, row gone). Drop it so it
       // can't block the queue, surface the error, and keep going.
-      h.setOutbox(h.outbox().slice(1))
+      h.setOutbox(without(op))
       h.rejected(op, err)
     }
   }
