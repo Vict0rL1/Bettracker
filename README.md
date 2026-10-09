@@ -44,12 +44,16 @@ anything already synced stays safe in your Supabase project.
 Small things that add up: a **light theme** (☀️ in the header — it follows your
 OS until you pick one, then stays put), **search and filters** over your history
 with paging, a balance chart you can flip between **all time and the selected
-month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log today,
-`Esc` to close a dialog.
+month**, the interface in **English or Spanish** (the header button switches;
+it follows your browser until you pick one, then stays put; validation and
+sync error messages stay in English), and
+keyboard shortcuts — `←`/`→` to change month, `T` to log today, `Esc` to
+close a dialog.
 
 ## What you'll need
 
-- **Node 20+**
+- **Node 22**, 22.12 or later (Electron 43 and supabase-js need it; it is what
+  CI runs)
 - A free **Supabase** account (supabase.com) — this is the shared backend.
 
 ## One-time setup
@@ -168,13 +172,19 @@ given OS's installer must be built on that OS.
 |---|---|
 | `npm run dev` | Web app dev server (open on phone + computer) |
 | `npm run build` | Type-check + build the web/PWA bundle → `dist/` (deploy this) |
-| `npm test` | Run the unit tests (stats, offline outbox, CSV, validation) |
+| `npm test` | Run the unit tests (stats, offline outbox and sync, CSV, validation, …) |
 | `npm run test:watch` | Same, in watch mode |
 | `npm run preview` | Serve the built web app on your LAN |
 | `npm run dev:desktop` | Native desktop app (Electron) in dev |
 | `npm run build:desktop` | Package a native desktop installer → `release/` |
-| `npm run typecheck` | Type-check the web + desktop code |
-| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed) |
+| `npm run build:desktop:dir` | The desktop app unpacked, without an installer → `release/` |
+| `npm run typecheck` | Type-check the web + desktop code and the e2e suite |
+| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed). The first time, run `npx playwright install chromium` |
+| `bash supabase/tests/run.sh` | Run the migrations and `schema.sql` against a throwaway Postgres and check the result. Needs `psql`, `createdb`, `dropdb` and `pg_dump`, with the `PG*` variables pointing at a server where it may create databases (all named `bettracker_test_*`) |
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request: a secret
+scan (gitleaks), the unit tests, the type-check and the build, the schema
+checks against Postgres, and the e2e suite.
 
 ## Settings
 
@@ -187,7 +197,7 @@ offline and follow you to other devices:
   box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
 - **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
 - **Monthly loss limit** — a banner appears when the current month's net loss
-  reaches 80% of it (amber) and again once it passes it (red). It never blocks
+  reaches 80% of it (amber) and again once it reaches it (red). It never blocks
   logging a bet; dismissing it hides it until the next line is crossed or the
   month turns.
 
@@ -231,22 +241,32 @@ works offline like any other edit.
 ## How it's put together
 
 ```
-bettracker/
+Bettracker/
 ├── vite.config.ts              # web / PWA build (the phone + browser app)
 ├── electron.vite.config.ts     # desktop build
 ├── electron-builder.yml        # desktop packaging targets
-├── supabase/schema.sql         # run once in your Supabase project
+├── playwright.config.ts        # e2e suite (e2e/), run against a built copy
+├── .github/workflows/ci.yml    # CI: secrets scan, tests, build, schema, e2e
+├── supabase/
+│   ├── schema.sql              # run once in your Supabase project
+│   ├── migrations/             # 001–004, for installs made before each change
+│   └── tests/                  # runs the two above against a real Postgres
 ├── build/make-icon.mjs         # regenerates all app/PWA icons
+├── e2e/                        # Playwright specs + a mock Supabase (harness.ts)
 └── src/
     ├── main/index.ts           # Electron: a native window around the web UI
     ├── preload/index.ts        # minimal (data goes over the network, not IPC)
-    ├── shared/types.ts         # shared entry types
+    ├── shared/types.ts         # Bet, BetInput, Settings, OddsFormat
     └── renderer/src/
         ├── App.tsx             # auth gate + dashboard + live sync wiring
         ├── auth/               # AuthProvider + Login screen
-        ├── data/entries.ts     # Supabase CRUD + realtime subscription
-        ├── data/offline.ts     # device cache + outbox (with unit tests)
-        ├── lib/                # supabase client, validation, csv, dates, stats, theme
+        ├── data/bets.ts        # Supabase CRUD + realtime subscription
+        ├── data/useBetSync.ts  # bets state: cache, outbox, sync loop
+        ├── data/offline.ts     # device cache + outbox
+        ├── data/drain.ts       # replaying the outbox: what leaves it, what stays
+        ├── data/errors.ts      # reading a failed request: offline, migration needed, refused
+        ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
+        ├── lib/                # supabase client, validation, csv, odds, dates, stats, strings, …
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, …
 ```
 
@@ -297,6 +317,7 @@ One row per bet, per user (`supabase/schema.sql`, table `entries`):
 
 | Column | Type | Notes |
 |---|---|---|
+| `id` | uuid | generated on the device, so a retried insert is recognised instead of duplicated |
 | `user_id` | uuid | the owner; enforced by row-level security |
 | `date` | date | `YYYY-MM-DD` — many rows can share a date |
 | `amount` | numeric | the bet's **net result**; `> 0` won, `< 0` lost, `0` push/void, `null` while pending |
@@ -308,6 +329,8 @@ One row per bet, per user (`supabase/schema.sql`, table `entries`):
 | `sport` | text | optional tag (e.g. "NBA") |
 | `book` | text | optional tag (e.g. "DraftKings") |
 | `bet_type` | text | optional tag (e.g. "Parlay") |
+| `created_at` | timestamptz | when the row reached the server ("logged at") |
+| `updated_at` | timestamptz | when the bet was last logged or edited, on the device that did it — the key the conflict rule compares |
 
 Each row is one bet. A day can hold any number of them, and the app sums a
 day's settled rows into its net total; a pending bet stays out of P/L, ROI
@@ -328,7 +351,8 @@ bet almost always costs exactly what was risked.
 ## Import and export
 
 **Export CSV** writes one row per bet, sorted by date, with the columns
-`date, status, stake, odds, amount, sport, book, bet_type, note` — summing a
+`date, status, stake, odds, closing_odds, amount, sport, book, bet_type, note`
+(odds as decimal) — summing a
 spreadsheet reproduces that day's total.
 
 **Import** reads that same shape back, so an export is a working backup. Only a
