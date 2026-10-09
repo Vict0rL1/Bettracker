@@ -226,6 +226,27 @@ describe('applyOutbox', () => {
   })
 })
 
+describe('loadOutbox — queues written by older versions', () => {
+  it('gives an edit queued before the conflict rule the time the queue is loaded, so it is still sent', () => {
+    // Exactly what the version deployed before migration 003 stored.
+    const legacy = [
+      { opId: 'o1', kind: 'add', id: 'a', input: { date: '2026-08-01', amount: 20, note: 'x' }, queuedAt: '2026-08-01T10:00:00.000Z' },
+      { opId: 'o2', kind: 'update', id: 'b', input: { date: '2026-08-02', amount: -15, note: '' } },
+      { opId: 'o3', kind: 'delete', id: 'c' }
+    ]
+    localStorage.setItem('bettracker:outbox:legacy', JSON.stringify(legacy))
+    const ops = loadOutbox('legacy', '2026-10-09T12:00:00.000Z')
+    expect(ops[0]).toEqual(legacy[0])
+    expect(ops[1]).toEqual({ ...legacy[1], editedAt: '2026-10-09T12:00:00.000Z' })
+    expect(ops[2]).toEqual(legacy[2])
+  })
+
+  it('leaves an edit that has its time alone', () => {
+    saveOutbox('u-now', [update('a', 5, 'T1')])
+    expect(loadOutbox('u-now', 'LATER')).toEqual([update('a', 5, 'T1')])
+  })
+})
+
 describe('enqueueOp', () => {
   it('rewrites a not-yet-synced add rather than queueing a second op', () => {
     const out = enqueueOp([add('a', { amount: 10 })], update('a', 55))

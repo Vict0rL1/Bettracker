@@ -77,11 +77,12 @@ month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log toda
    - *Upgrading an install people are using?* Run the migrations **before**
      you deploy the new version. Devices still on the old version keep
      working in between: their writes carry no status, and 003 gives them the
-     one their amount implies. Then deploy, and update every device. If you
-     deploy first, nothing is lost: the new version keeps each change queued
-     on the device, shows **Update needed · n queued**, and sends them as soon
-     as the migrations have run. Don't sign out on that device until then —
-     signing out clears its queue.
+     one their amount implies. Then deploy, and update every device; changes
+     a device still has queued from the old version are sent after the
+     update. If you deploy first, nothing is lost: the new version keeps each
+     change (settings included) queued on the device, shows **Update
+     needed**, and sends them as soon as the migrations have run. Don't sign
+     out on that device until then — signing out clears its queue.
 3. Go to **Project Settings → API** and copy your **Project URL** and the
    **anon public** key.
 

@@ -71,6 +71,7 @@ export const en = {
   'sync.offline': 'Offline',
   'sync.offlineN': 'Offline · {n} queued',
   'sync.offlineTitle': 'No connection — changes are saved on this device and will sync automatically when you are back online',
+  'sync.behind': 'Update needed',
   'sync.behindN': 'Update needed · {n} queued',
   'sync.behindTitle': 'Your Supabase database is missing a migration — changes are kept on this device and will sync as soon as it is updated',
 
@@ -281,6 +282,7 @@ export const en = {
   'settings.defaultStake': 'Default stake',
   'settings.defaultStakeHint': 'Prefilled in quick add. Leave it empty to reuse the last stake.',
   'settings.pending': 'Saved on this device — syncs when you’re back online.',
+  'settings.blocked': 'Saved on this device — syncs once your database is updated.',
   'odds.american': 'American',
   'odds.decimal': 'Decimal',
   'odds.fractional': 'Fractional',
@@ -422,6 +424,7 @@ export const es: Record<StringKey, string> = {
   'sync.offline': 'Sin conexión',
   'sync.offlineN': 'Sin conexión · {n} en cola',
   'sync.offlineTitle': 'Sin conexión: los cambios se guardan en este dispositivo y se sincronizarán solos al volver la conexión',
+  'sync.behind': 'Falta actualizar',
   'sync.behindN': 'Falta actualizar · {n} en cola',
   'sync.behindTitle': 'A tu base de datos de Supabase le falta una migración: los cambios se guardan en este dispositivo y se sincronizarán en cuanto se actualice',
 
@@ -621,6 +624,7 @@ export const es: Record<StringKey, string> = {
   'settings.defaultStake': 'Stake por defecto',
   'settings.defaultStakeHint': 'Se rellena en el registro rápido. Déjalo vacío para repetir el último stake.',
   'settings.pending': 'Guardado en este dispositivo: se sincronizará al volver la conexión.',
+  'settings.blocked': 'Guardado en este dispositivo: se sincronizará cuando se actualice tu base de datos.',
   'odds.american': 'Americana',
   'odds.decimal': 'Decimal',
   'odds.fractional': 'Fraccionaria',

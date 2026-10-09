@@ -25,7 +25,13 @@ fresh() {
   run "$1" "$HERE/stubs.sql"
 }
 check() { psql -q -X -v ON_ERROR_STOP=1 -d "$1" -f "$HERE/checks.sql" | grep -q 'checks passed'; }
-structure() { pg_dump -s -n public -d "$1" | grep -v -e '^--' -e '^$' -e '^\\restrict ' -e '^\\unrestrict ' | sort; }
+# Sorted dump lines: the same tables, columns, constraints, indexes, policies,
+# trigger and function whichever way the database got there (column order
+# aside, which additive migrations can't match), plus what realtime publishes.
+structure() {
+  pg_dump -s -n public -d "$1" | grep -v -e '^--' -e '^$' -e '^\\restrict ' -e '^\\unrestrict ' | sort
+  psql -X -At -d "$1" -c "select 'publication ' || tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1"
+}
 
 export PGOPTIONS='-c client_min_messages=error'
 

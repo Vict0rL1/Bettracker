@@ -28,11 +28,23 @@ update public.entries set amount = -75, note = 'old win', updated_at = now() whe
 update public.entries set amount = 0 where note = 'win';
 update public.entries set amount = 40 where note = 'push';
 update public.entries set amount = -10 where note = 'old loss';
+update public.entries set amount = 0 where note = 'stake era';
 do $$ begin
   assert (select status from public.entries where id = '20000000-0000-0000-0000-000000000001') = 'lost', 'won edited to a loss';
   assert (select status from public.entries where note = 'win') = 'push', 'won edited to 0';
   assert (select status from public.entries where note = 'push') = 'won', 'push edited to a win';
   assert (select status from public.entries where note = 'old loss') = 'lost', 'loss edited, still a loss';
+  assert (select status from public.entries where note = 'stake era') = 'push', 'lost edited to 0';
+end $$;
+
+-- 3b. A write with neither status nor amount is pending (no app sends one,
+-- but the trigger must not leave status null).
+insert into public.entries (id, user_id, date, note) values
+  ('20000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000001', '2026-08-05', 'no amount');
+update public.entries set amount = null where note = 'old win';
+do $$ begin
+  assert (select status from public.entries where note = 'no amount') = 'pending', 'no status, no amount';
+  assert (select status from public.entries where note = 'old win') = 'pending', 'amount cleared, no status';
 end $$;
 
 -- 4. The current app's writes are never changed.
@@ -41,6 +53,19 @@ insert into public.entries (id, user_id, date, amount, stake, odds, status, note
   ('30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', '2026-08-06', 0, 25, null, 'void', 'new void');
 update public.entries set status = 'won', amount = 27.5 where note = 'new pending';
 update public.entries set note = 'new void, retagged' where note = 'new void';
+-- A status the write sets itself is trusted, even one the trigger would not
+-- have worked out from the amount (push -> void at 0, and won at 0, which
+-- the database's own check allows).
+insert into public.entries (id, user_id, date, amount, status, note) values
+  ('30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000001', '2026-08-06', 0, 'push', 'explicit');
+update public.entries set status = 'void' where note = 'explicit';
+do $$ begin
+  assert (select status from public.entries where note = 'explicit') = 'void', 'explicit push to void';
+end $$;
+update public.entries set status = 'won', amount = 0 where note = 'explicit';
+do $$ begin
+  assert (select status from public.entries where note = 'explicit') = 'won', 'explicit status kept even when the amount does not fit';
+end $$;
 insert into public.entries (id, user_id, date, amount, stake, status, note) values
   ('30000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000001', '2026-08-07', null, 10, 'pending', 'still open');
 update public.entries set stake = 12 where note = 'still open';
@@ -50,7 +75,13 @@ do $$ begin
   assert (select status from public.entries where note = 'still open') = 'pending', 'pending kept on a stake edit';
 end $$;
 
--- 5. An older app edits a pending bet it reads as $0: it settles as what it typed.
+-- 5. An older app edits a pending bet it reads as $0. Sending that $0 back
+-- (a note fix) keeps it pending; typing a result settles it as that result.
+update public.entries set amount = 0, note = 'still open' where note = 'still open';
+do $$ begin
+  assert (select status from public.entries where note = 'still open') = 'pending', 'pending sent back as $0 stays pending';
+  assert (select amount from public.entries where note = 'still open') is null, 'pending keeps no amount';
+end $$;
 update public.entries set amount = 15 where note = 'still open';
 do $$ begin
   assert (select status from public.entries where note = 'still open') = 'won', 'pending edited by an old app';

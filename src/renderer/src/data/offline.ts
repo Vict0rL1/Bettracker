@@ -86,7 +86,18 @@ export function loadCache(userId: string): Bet[] | null {
 
 export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJson(cacheKey(userId), bets)
 
-export const loadOutbox = (userId: string): PendingOp[] => readJson<PendingOp[]>(outboxKey(userId)) ?? []
+/**
+ * The queue as stored. One written by a version from before the conflict
+ * rule (before migration 003's app) has edits without `editedAt`; sent as
+ * they are, the conflict check would compare against "undefined" and the
+ * server would refuse the edit, losing it. They get the moment the queue is
+ * loaded, which is what those versions did: they stamped an edit when it
+ * synced and applied it unconditionally.
+ */
+export function loadOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
+  const ops = readJson<PendingOp[]>(outboxKey(userId)) ?? []
+  return ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt } : op))
+}
 export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => writeJson(outboxKey(userId), outbox)
 
 /** Settings are one row; the cache holds the last-known row and the outbox at most one pending patch. */

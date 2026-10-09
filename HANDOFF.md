@@ -65,20 +65,28 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
   crea un trigger (`entries_status_from_amount`): a un alta sin `status` le
   pone el que implica su importe (la misma regla del backfill), y a una
   edición que cambia el importe sin tocar un `status` que ya no encaja se lo
-  recalcula. Lo que envía la versión nueva siempre encaja, así que no lo
-  toca. Así, entre las migraciones y el despliegue, los dispositivos con la
+  recalcula. Lo que envía la versión nueva siempre encaja (valida el signo
+  del importe ya redondeado a céntimos, como se guarda), así que no lo toca.
+  Así, entre las migraciones y el despliegue, los dispositivos con la
   versión antigua siguen guardando sin perder nada.
 - **Si se invierte el orden, tampoco se pierde nada.** La versión nueva
-  contra una base sin migrar no puede guardar (cada escritura lleva
-  `closing_odds`, de la 004), pero ya no tira esas operaciones: las deja en
-  la cola del dispositivo, como sin conexión, con la insignia "Falta
-  actualizar · n en cola" y un aviso, y las envía solas en cuanto corren las
+  contra una base sin migrar no puede dar altas ni editar (cada alta o
+  edición lleva `closing_odds`, de la 004; los borrados sí pasan), pero ya
+  no tira esas operaciones: las deja en la cola del dispositivo, como sin
+  conexión, con la insignia "Falta actualizar · n en cola" y un aviso (una
+  vez, no en cada reintento), y las envía solas en cuanto corren las
   migraciones (reintenta cada 20 s, al volver la conexión y al volver a la
-  app). Mientras tanto, no cerrar sesión en ese dispositivo: cerrar sesión
-  borra su cola.
+  app). Un ajuste cambiado entretanto espera igual: el diálogo de ajustes lo
+  dice y la insignia muestra "Falta actualizar". Mientras tanto, no cerrar
+  sesión en ese dispositivo: cerrar sesión borra su cola.
+- **Lo que un dispositivo tenga en cola al actualizarse se envía igual.**
+  La versión antigua guardaba las ediciones sin hora de edición; al cargar
+  esa cola, la versión nueva les pone la hora de carga (lo que hacía la
+  antigua: sellaba al sincronizar y aplicaba sin condición).
 - **Mientras convivan versiones**, una versión antigua ve una apuesta
-  pendiente (creada desde la nueva) como $0, y si la edita queda resuelta
-  con el importe que escriba. Por eso, actualizar todos los dispositivos
+  pendiente (creada desde la nueva) como $0. Si la edita escribiendo un
+  importe, queda resuelta con ese importe; si solo cambia otra cosa (la
+  nota), sigue pendiente. Por eso, actualizar todos los dispositivos
   pronto.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
@@ -87,10 +95,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 233 tests unitarios (vitest)
+npm test            # 242 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 34 comprobaciones Playwright, sin backend
+npm run test:e2e    # 38 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -98,12 +106,17 @@ CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
 con gitleaks, tests y build, el esquema SQL contra un Postgres de usar y
 tirar, y la suite e2e.
 
-`supabase/tests/run.sh` parte del esquema con el que se publicó la app
-(`supabase/tests/original_schema.sql`) y lo sube de tres formas: con las
-migraciones 001→004 (cada una dos veces), con `schema.sql` (dos veces) y
-desde cero con `schema.sql` más todas las migraciones encima. En cada caso
-comprueba el backfill, las escrituras de versiones antiguas y nuevas y las
-constraints, y que las tres estructuras resultantes son idénticas. Necesita
+`supabase/tests/run.sh` monta la base de tres formas: (A) el esquema con el
+que se publicó la app (`supabase/tests/original_schema.sql`) con filas,
+subido con las migraciones 001→004, cada una dos veces; (B) lo mismo subido
+con `schema.sql` dos veces; (C) una instalación desde cero con `schema.sql`
+dos veces y todas las migraciones encima, con filas escritas como las
+escribe una versión antigua (sin `status`). En A y B comprueba el backfill;
+en C, el trigger; en las tres, las escrituras de versiones antiguas y
+nuevas y las constraints. Luego compara las tres estructuras (tablas,
+columnas, constraints, índices, policies, trigger y función, y qué publica
+realtime; el orden de las columnas aparte, que migraciones aditivas no
+pueden igualar). Necesita
 `psql`, `createdb`, `dropdb` y `pg_dump` con las variables `PG*` apuntando a
 un servidor donde pueda crear bases (todas se llaman `bettracker_test_*`).
 En local, como root: `su postgres -c 'bash supabase/tests/run.sh'`.
@@ -111,8 +124,11 @@ En local, como root: `su postgres -c 'bash supabase/tests/run.sh'`.
 La suite e2e construye a `dist-e2e/`, sirve con `vite preview` e inyecta un
 mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
 `localStorage`, de modo que lo que se ejercita es el camino real offline de la
-app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
-`localhost`; en CI no.
+app. Con `backend: 'live'` o `'behind'` el mock es un pequeño servidor en
+memoria (apuestas y ajustes, altas, ediciones con la regla de conflicto,
+borrados, upserts; latencia y caída de conexión opcionales) para probar la
+sincronización de verdad. En este entorno hizo falta `NO_PROXY='*'` para que
+Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
@@ -139,8 +155,9 @@ app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
   de 50. Probabilidad implícita media junto al strike rate.
 - **Conflictos entre dispositivos:** gana la última edición por hora de
   edición (`updated_at = editedAt`, `update … where updated_at <= editedAt`);
-  una edición rechazada se descarta con aviso y se refresca. Sin columna
-  extra ni triggers; se confían los relojes de los dispositivos.
+  una edición rechazada se descarta con aviso y se refresca. La regla no
+  necesita columna extra ni triggers (el único trigger, el de la 003, es de
+  compatibilidad de `status`); se confían los relojes de los dispositivos.
 - CSV: columnas `date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note`,
   alias de otros trackers, columna `result` numérica detectada como importe.
   Exportaciones antiguas (sin estas columnas) importan sin cambios.
@@ -249,8 +266,12 @@ ingresos y retiradas; por eso la recomendación es la tabla.
 - Semana de domingo a sábado, como el calendario.
 - Una operación que la base rechaza porque le falta una migración se queda
   en la cola (como sin conexión) en vez de descartarse; el aviso sale una
-  vez, no en cada reintento. `data/drain.ts` decide qué sale de la cola y
-  qué se queda; los hooks solo guardan el estado.
+  vez por episodio (hasta que una petición pasa o la cola se vacía), no en
+  cada reintento. `data/drain.ts` decide qué sale de la cola y qué se queda,
+  qué muestra la insignia y cuándo repetir el aviso; los hooks solo guardan
+  el estado.
+- El signo de un importe se valida ya redondeado a céntimos, como se
+  guarda: 0.004 es un push de 0.00, no una ganada de 0.00.
 - La 003 se editó en su sitio (en vez de añadir una 005) para meter el
   trigger de compatibilidad, porque aún no se había ejecutado en ningún
   sitio; así el trigger existe desde el momento en que `status` pasa a ser
@@ -281,7 +302,7 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       34 comprobaciones
+e2e/*.spec.ts                       38 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

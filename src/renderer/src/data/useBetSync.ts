@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Bet, BetInput } from '../../../shared/types'
 import { normalizeInput } from '../lib/validate'
 import { addBet, addBets, deleteBet, getBets, subscribeToBets, updateBet } from './bets'
-import { drainOutbox, type DrainResult } from './drain'
+import { drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { isNetworkError } from './errors'
 import {
   applyOutbox,
@@ -16,8 +16,7 @@ import {
   type PendingOp
 } from './offline'
 
-/** 'behind': changes are queued because the database is missing a migration. */
-export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'behind'
+export type { SyncStatus }
 
 export interface BetSync {
   /** Server rows with queued local changes applied; null until first load. */
@@ -78,7 +77,7 @@ export function useBetSync(
   const serverRef = useRef<Bet[] | null>(null)
   const outboxRef = useRef<PendingOp[]>([])
   const syncingRef = useRef(false)
-  const behindRef = useRef(false)
+  const noticeRef = useRef(migrationNotice())
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
   const onErrorRef = useRef(onError)
@@ -105,10 +104,11 @@ export function useBetSync(
   )
 
   // The database is missing a migration. The hint is shown once, when that is
-  // first found, not on every retry; any op that goes through clears it.
+  // first found, not on every retry or resume; an op that goes through, or a
+  // queue that empties, ends the episode.
   const setBehind = useCallback((next: boolean, err?: unknown) => {
-    if (next && !behindRef.current) onErrorRef.current(err)
-    behindRef.current = next
+    if (next && noticeRef.current.found()) onErrorRef.current(err)
+    if (!next) noticeRef.current.clear()
     setBehindState(next)
   }, [])
 
@@ -152,9 +152,12 @@ export function useBetSync(
       return
     }
     if (result.stop === 'behind') {
+      // The server answered, so the connection is back whatever said otherwise.
+      setOffline(false)
       setBehind(true, result.error)
       return
     }
+    setBehind(false)
     // True-up after a drain so totals can never drift from the server.
     if (result.processed > 0 && outboxRef.current.length === 0) await refresh()
   }, [userId, setServer, setOutbox, setBehind, refresh])
@@ -166,7 +169,7 @@ export function useBetSync(
     setServerState(null)
     setOutboxState([])
     setOffline(false)
-    behindRef.current = false
+    noticeRef.current.clear()
     setBehindState(false)
     if (!userId) return
     const cached = loadCache(userId)
@@ -325,7 +328,7 @@ export function useBetSync(
     return applyOutbox(server ?? [], outbox)
   }, [server, outbox])
 
-  const status: SyncStatus = !canSync || offline ? 'offline' : outbox.length === 0 ? 'synced' : behind ? 'behind' : 'syncing'
+  const status = syncStatus({ canSync, offline, queued: outbox.length, behind })
 
   // Rows waiting to sync, not ops — one queued import of 40 bets reads as 40.
   const queuedCount = useMemo(() => outbox.reduce((n, op) => n + opSize(op), 0), [outbox])

@@ -9,6 +9,8 @@ interface Props {
   settings: Settings
   /** True while a change is still waiting to reach the server. */
   dirty: boolean
+  /** True when what it waits for is a database migration, not the connection. */
+  blocked: boolean
   onChange: (patch: SettingsPatch) => void
   onClose: () => void
 }
@@ -21,7 +23,7 @@ const SAMPLE = 1.9091
  * is no save button — and the change is queued for the server the same way a
  * bet is, so it works offline and follows the user to their other devices.
  */
-export default function SettingsDialog({ settings, dirty, onChange, onClose }: Props) {
+export default function SettingsDialog({ settings, dirty, blocked, onChange, onClose }: Props) {
   const { t } = useLang()
   const titleId = useId()
   const stakeId = useId()
@@ -159,7 +161,7 @@ export default function SettingsDialog({ settings, dirty, onChange, onClose }: P
 
         <footer className="modal-actions">
           <span className={`settings-sync ${dirty ? 'is-dirty' : ''}`} aria-live="polite">
-            {dirty ? t('settings.pending') : ''}
+            {dirty ? t(blocked ? 'settings.blocked' : 'settings.pending') : ''}
           </span>
           <span className="spacer" />
           <button type="button" className="btn btn-ghost" onClick={onClose}>

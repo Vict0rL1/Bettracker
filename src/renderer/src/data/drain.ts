@@ -97,3 +97,47 @@ export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushRe
     return { stop: 'rejected', error: err }
   }
 }
+
+/** What the header badge shows. 'behind': changes wait on a missing migration. */
+export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'behind'
+
+/**
+ * The badge, from the queue and the last attempt. No session or no connection
+ * comes first; then an empty queue is synced; then a queue held back by a
+ * missing migration is 'behind'; anything else queued is on its way.
+ * `queued` counts the waiting changes that the badge stands for.
+ */
+export function syncStatus(s: { canSync: boolean; offline: boolean; queued: number; behind: boolean }): SyncStatus {
+  if (!s.canSync || s.offline) return 'offline'
+  if (s.queued === 0) return 'synced'
+  return s.behind ? 'behind' : 'syncing'
+}
+
+/**
+ * Whether a missing migration is known right now, so its hint is shown once
+ * per episode rather than on every retry and resume. `found()` is true only
+ * the first time since the last `clear()` (a request that went through, or a
+ * queue that emptied).
+ */
+export interface MigrationNotice {
+  readonly active: boolean
+  found: () => boolean
+  clear: () => void
+}
+
+export function migrationNotice(): MigrationNotice {
+  let active = false
+  return {
+    get active() {
+      return active
+    },
+    found() {
+      const first = !active
+      active = true
+      return first
+    },
+    clear() {
+      active = false
+    }
+  }
+}

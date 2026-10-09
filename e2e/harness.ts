@@ -67,43 +67,105 @@ window.__supabaseMock = {
 `
 
 /**
- * A signed-in session against a database that is behind the app, missing
- * migration 004. Reads work; every write that names a column it does not have
- * is refused the way PostgREST refuses it (PGRST204), and the settings table
- * is missing (PGRST205). Setting `e2e:migrated` in localStorage stands for
- * running the migration: from then on writes go through. The rows and that
- * flag live in localStorage so they survive reloads, like a real database.
+ * A signed-in session against a small in-memory server: the bets and the
+ * settings row, and the PostgREST behaviour the app relies on — inserts (a
+ * duplicate id is 23505), updates guarded by `updated_at <= editedAt` (the
+ * conflict rule), deletes and upserts. Its state lives in localStorage so it
+ * survives reloads, like a real database:
+ *  - `e2e:rows`      the bets;
+ *  - `e2e:settings`  the user_settings row, if any;
+ *  - `e2e:migrated`  unset = the database is missing migration 004: reads
+ *                    work, every add or edit (they all name closing_odds) is
+ *                    refused (PGRST204), deletes go through, and the settings
+ *                    table is missing (PGRST205). Setting it stands for
+ *                    running the migration;
+ *  - `e2e:latency`   milliseconds before each answer, to leave a request on
+ *                    the wire while the test keeps using the app;
+ *  - `e2e:writes`    how many write requests have been answered, so a test
+ *                    can wait for a retry to have happened;
+ *  - `e2e:down`      set: the connection is down, and every request fails
+ *                    the way supabase-js reports a failed fetch.
+ * A row written without `updated_at` gets the time it was answered, as the
+ * server's now() would.
  */
-const MOCK_BEHIND = `
+const MOCK_SERVER = `
 (() => {
   const session = { access_token: 'e2e', user: ${JSON.stringify(USER)} }
   const migrated = () => localStorage.getItem('e2e:migrated') === '1'
+  const latency = () => Number(localStorage.getItem('e2e:latency') || 0)
   const rows = () => JSON.parse(localStorage.getItem('e2e:rows') || '[]')
   const saveRows = (r) => localStorage.setItem('e2e:rows', JSON.stringify(r))
   const NO_COLUMN = { message: "Could not find the 'closing_odds' column of 'entries' in the schema cache", code: 'PGRST204' }
   const NO_TABLE = { message: "Could not find the table 'public.user_settings' in the schema cache", code: 'PGRST205' }
+  const stamp = (row) => ({ created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...row })
+  const settingsRow = () => JSON.parse(localStorage.getItem('e2e:settings') || 'null')
+  const saveSettingsRow = (r) => localStorage.setItem('e2e:settings', JSON.stringify(r))
+  function settings(q) {
+    if (!migrated()) return { data: null, error: NO_TABLE }
+    const row = settingsRow()
+    if (q.action === 'select') return { data: row, error: null }
+    if (q.action === 'update') {
+      if (!row || (q.lte !== undefined && row.updated_at > q.lte)) return { data: null, error: null }
+      const next = { ...row, ...q.payload }
+      saveSettingsRow(next)
+      return { data: next, error: null }
+    }
+    if (q.action === 'insert') {
+      if (row) return { data: null, error: { message: 'duplicate key value violates unique constraint "user_settings_pkey"', code: '23505' } }
+      const next = { odds_format: 'american', unit_size: null, show_units: false, starting_bankroll: null, default_stake: null, loss_limit: null, ...q.payload }
+      saveSettingsRow(next)
+      return { data: next, error: null }
+    }
+    return { data: null, error: { message: 'e2e harness: settings ' + q.action + ' is not modelled', code: 'E2E' } }
+  }
   function answer(q) {
-    if (q.table === 'user_settings') return migrated() ? { data: null, error: null } : { data: null, error: NO_TABLE }
-    if (q.action === 'select') return { data: rows(), error: null }
+    if (localStorage.getItem('e2e:down') === '1') return { data: null, error: { message: 'TypeError: Failed to fetch', code: '' } }
+    if (q.action !== 'select') localStorage.setItem('e2e:writes', String(Number(localStorage.getItem('e2e:writes') || 0) + 1))
+    if (q.table === 'user_settings') return settings(q)
+    const all = rows()
+    if (q.action === 'select') {
+      if (q.eq.id === undefined) return { data: all, error: null }
+      return { data: all.find((r) => r.id === q.eq.id) || null, error: null }
+    }
+    if (q.action === 'delete') {
+      saveRows(all.filter((r) => r.id !== q.eq.id))
+      return { data: null, error: null, count: all.length - rows().length }
+    }
     if (!migrated()) return { data: null, error: NO_COLUMN }
     if (q.action === 'insert') {
-      const now = new Date().toISOString()
-      const row = { created_at: now, updated_at: now, ...q.payload }
-      saveRows([...rows(), row])
+      if (all.some((r) => r.id === q.payload.id)) return { data: null, error: { message: 'duplicate key value violates unique constraint "entries_pkey"', code: '23505' } }
+      const row = stamp(q.payload)
+      saveRows([...all, row])
       return { data: row, error: null }
+    }
+    if (q.action === 'update') {
+      const i = all.findIndex((r) => r.id === q.eq.id && (q.lte === undefined || r.updated_at <= q.lte))
+      if (i < 0) return { data: null, error: null }
+      all[i] = { ...all[i], ...q.payload }
+      saveRows(all)
+      return { data: all[i], error: null }
+    }
+    if (q.action === 'upsert') {
+      const byId = new Map(all.map((r) => [r.id, r]))
+      for (const r of q.payload) byId.set(r.id, { ...(byId.get(r.id) || {}), ...stamp(r) })
+      saveRows([...byId.values()])
+      return { data: null, error: null, count: q.payload.length }
     }
     return { data: null, error: { message: 'e2e harness: ' + q.action + ' is not modelled', code: 'E2E' } }
   }
   function from(table) {
-    const q = { table, action: 'select', payload: null }
+    const q = { table, action: 'select', payload: null, eq: {}, lte: undefined }
     const chain = {
-      select() { return chain }, order() { return chain }, eq() { return chain }, lte() { return chain },
-      single() { return chain }, maybeSingle() { return chain },
+      select() { return chain }, order() { return chain }, single() { return chain }, maybeSingle() { return chain },
+      eq(c, v) { q.eq[c] = v; return chain },
+      lte(c, v) { q.lte = v; return chain },
       insert(p) { q.action = 'insert'; q.payload = p; return chain },
       update(p) { q.action = 'update'; q.payload = p; return chain },
       upsert(p) { q.action = 'upsert'; q.payload = p; return chain },
       delete() { q.action = 'delete'; return chain },
-      then(resolve, reject) { return Promise.resolve(answer(q)).then(resolve, reject) }
+      then(resolve, reject) {
+        return new Promise((r) => setTimeout(r, latency())).then(() => answer(q)).then(resolve, reject)
+      }
     }
     return chain
   }
@@ -142,16 +204,43 @@ export interface BootOptions {
   settings?: Record<string, unknown>
   /**
    * 'none' (default): no session, so the app runs on its device copy alone.
-   * 'behind': signed in, against a database missing a migration (MOCK_BEHIND).
+   * 'behind': signed in, against a database missing migration 004 (MOCK_SERVER).
+   * 'live': signed in, against an up-to-date database (MOCK_SERVER).
    */
-  backend?: 'none' | 'behind'
+  backend?: 'none' | 'behind' | 'live'
+  /** With a backend: milliseconds before each answer. */
+  latencyMs?: number
+  /** A queue of changes waiting to sync, as the app (or an older version of it) stored it. */
+  outbox?: unknown[]
 }
+
+/** Cached settings (camelCase, as the app stores them) as the user_settings row a migrated server holds. */
+const toSettingsRow = (s: Record<string, unknown>) => ({
+  user_id: USER.id,
+  odds_format: s.oddsFormat ?? 'american',
+  unit_size: s.unitSize ?? null,
+  show_units: s.showUnits ?? false,
+  starting_bankroll: s.startingBankroll ?? null,
+  default_stake: s.defaultStake ?? null,
+  loss_limit: s.lossLimit ?? null,
+  updated_at: '2026-01-01T00:00:00.000Z'
+})
 
 export async function install(context: BrowserContext, opts: BootOptions = {}): Promise<void> {
   const entries = opts.entries ?? SEED
-  const behind = opts.backend === 'behind'
+  const backend = opts.backend ?? 'none'
+  const server =
+    backend === 'none'
+      ? null
+      : {
+          rows: entries.map(toRow),
+          migrated: backend === 'live',
+          latencyMs: opts.latencyMs ?? 0,
+          // A migrated server holds the settings the device has cached.
+          settingsRow: backend === 'live' && opts.settings ? toSettingsRow(opts.settings) : null
+        }
   await context.addInitScript(
-    ({ mock, user, entries, rows, theme, settings }) => {
+    ({ mock, user, entries, server, theme, settings, outbox }) => {
       // eslint-disable-next-line no-eval
       eval(mock)
       if (localStorage.getItem('e2e:seeded')) return
@@ -160,15 +249,22 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
       localStorage.setItem(`bettracker:cache:${user.id}`, JSON.stringify(entries))
       localStorage.setItem('bettracker:theme', theme)
       if (settings) localStorage.setItem(`bettracker:settings:${user.id}`, JSON.stringify(settings))
-      if (rows) localStorage.setItem('e2e:rows', JSON.stringify(rows))
+      if (server) {
+        localStorage.setItem('e2e:rows', JSON.stringify(server.rows))
+        if (server.migrated) localStorage.setItem('e2e:migrated', '1')
+        localStorage.setItem('e2e:latency', String(server.latencyMs))
+        if (server.settingsRow) localStorage.setItem('e2e:settings', JSON.stringify(server.settingsRow))
+      }
+      if (outbox) localStorage.setItem(`bettracker:outbox:${user.id}`, JSON.stringify(outbox))
     },
     {
-      mock: behind ? MOCK_BEHIND : MOCK,
+      mock: server ? MOCK_SERVER : MOCK,
       user: USER,
       entries,
-      rows: behind ? entries.map(toRow) : null,
+      server,
       theme: opts.theme ?? 'dark',
-      settings: opts.settings ?? null
+      settings: opts.settings ?? null,
+      outbox: opts.outbox ?? null
     }
   )
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_SETTINGS, type Settings, type SettingsPatch } from '../../../shared/types'
 import { loadSettingsCache, loadSettingsOutbox, saveSettingsCache, saveSettingsOutbox, type PendingSettings } from './offline'
-import { pushSettings } from './drain'
+import { migrationNotice, pushSettings } from './drain'
 import { classifySyncError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
 
@@ -10,6 +10,8 @@ export interface SettingsSync {
   settings: Settings
   /** True while a change is waiting to reach the server. */
   dirty: boolean
+  /** True while the database is missing the settings migration: a change waits for it, not for the connection. */
+  blocked: boolean
   update: (patch: SettingsPatch) => void
 }
 
@@ -29,10 +31,11 @@ export function useSettings(
 ): SettingsSync {
   const [server, setServerState] = useState<Settings | null>(null)
   const [pending, setPendingState] = useState<PendingSettings | null>(null)
+  const [blocked, setBlocked] = useState(false)
   const serverRef = useRef<Settings | null>(null)
   const pendingRef = useRef<PendingSettings | null>(null)
   const syncingRef = useRef(false)
-  const behindRef = useRef(false)
+  const noticeRef = useRef(migrationNotice())
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
   const onErrorRef = useRef(onError)
@@ -62,22 +65,26 @@ export function useSettings(
   const report = useCallback((err: unknown) => {
     const failure = classifySyncError(err)
     if (failure === 'rejected') onErrorRef.current(err)
-    else if (failure === 'behind' && !behindRef.current) {
-      behindRef.current = true
-      onErrorRef.current(err)
+    else if (failure === 'behind') {
+      setBlocked(true)
+      if (noticeRef.current.found()) onErrorRef.current(err)
     }
+  }, [])
+  const reached = useCallback(() => {
+    noticeRef.current.clear()
+    setBlocked(false)
   }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
       const row = await getSettings()
-      behindRef.current = false
+      reached()
       setServer(row ?? { ...DEFAULT_SETTINGS })
     } catch (err) {
       report(err)
     }
-  }, [userId, setServer, report])
+  }, [userId, setServer, report, reached])
 
   const syncNow = useCallback(async (): Promise<void> => {
     if (syncingRef.current || !canSyncRef.current || !userId || !pendingRef.current) return
@@ -89,23 +96,24 @@ export function useSettings(
         save: (p) => saveSettings(p.patch, p.editedAt)
       })
       if (out?.stop === 'saved') {
-        behindRef.current = false
+        reached()
         setServer(out.row)
       } else if (out?.stop === 'conflict') {
-        behindRef.current = false
+        reached()
         onNoticeRef.current?.('conflict')
         await refresh()
       } else if (out?.stop === 'behind' || out?.stop === 'rejected') report(out.error)
     } finally {
       syncingRef.current = false
     }
-  }, [userId, setPending, setServer, refresh, report])
+  }, [userId, setPending, setServer, refresh, report, reached])
 
   // Boot from the device cache.
   useEffect(() => {
     serverRef.current = null
     pendingRef.current = null
-    behindRef.current = false
+    noticeRef.current.clear()
+    setBlocked(false)
     setServerState(null)
     setPendingState(null)
     if (!userId) return
@@ -156,5 +164,5 @@ export function useSettings(
 
   const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}) }
 
-  return { settings, dirty: pending !== null, update }
+  return { settings, dirty: pending !== null, blocked, update }
 }

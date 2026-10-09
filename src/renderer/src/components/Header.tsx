@@ -46,7 +46,7 @@ export default function Header({
       : status === 'syncing'
         ? { label: queuedCount > 0 ? t('sync.syncingN', { n: queuedCount }) : t('sync.syncing'), title: t('sync.syncingTitle') }
         : status === 'behind'
-          ? { label: t('sync.behindN', { n: queuedCount }), title: t('sync.behindTitle') }
+          ? { label: queuedCount > 0 ? t('sync.behindN', { n: queuedCount }) : t('sync.behind'), title: t('sync.behindTitle') }
           : { label: queuedCount > 0 ? t('sync.offlineN', { n: queuedCount }) : t('sync.offline'), title: t('sync.offlineTitle') }
 
   return (

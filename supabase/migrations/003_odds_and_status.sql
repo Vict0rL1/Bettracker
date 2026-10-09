@@ -31,7 +31,8 @@ alter table public.entries add column if not exists status text;
 -- NULL, the row gets the status its amount implies (the backfill's rule). An
 -- update that changes the amount but keeps a status that no longer fits it
 -- (an older app editing a won bet into a loss) gets it worked out the same
--- way. "Fits" is the app's rule: won nets more than 0, lost less than 0,
+-- way, except that a pending bet sent back as $0 stays pending (an older app
+-- shows it that way). "Fits" is the app's rule: won nets more than 0, lost less than 0,
 -- push and void exactly 0, pending nothing. The current app always sends a
 -- status that fits, so this never changes its writes. Created before the
 -- backfill, so a row written while this file runs is covered too.
@@ -41,6 +42,11 @@ language plpgsql
 set search_path = ''
 as $$
 begin
+  -- An older app shows a pending bet as $0 and sends that 0 back on any edit,
+  -- even one that only fixes the note: the bet stays pending.
+  if tg_op = 'UPDATE' and old.status = 'pending' and new.status = 'pending' and new.amount = 0 then
+    new.amount := null;
+  end if;
   if new.status is null
      or (tg_op = 'UPDATE'
          and new.status = old.status

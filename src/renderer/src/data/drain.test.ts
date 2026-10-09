@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Bet, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { drainOutbox, pushSettings, type DrainHooks } from './drain'
+import { drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
 import { MigrationNeededError } from './errors'
 import type { PendingOp, PendingSettings } from './offline'
 
@@ -77,6 +77,27 @@ describe('drainOutbox', () => {
     expect(await drainOutbox(h.hooks)).toEqual({ stop: 'done', processed: 2 })
     expect(h.applied).toEqual(['op-a', 'op-b'])
     expect(h.queue()).toEqual([])
+  })
+
+  it('sends an op queued while a request is out, after it', async () => {
+    let h: ReturnType<typeof harness>
+    h = harness([add('a')], async (op) => {
+      if (op.opId === 'op-a') h.hooks.setOutbox([...h.hooks.outbox(), add('d')])
+      return bet()
+    })
+    expect(await drainOutbox(h.hooks)).toEqual({ stop: 'done', processed: 2 })
+    expect(h.sent).toEqual(['op-a', 'op-d'])
+    expect(h.queue()).toEqual([])
+  })
+
+  it('keeps an op queued while a request is out when that request finds the database behind', async () => {
+    let h: ReturnType<typeof harness>
+    h = harness([add('a')], async () => {
+      h.hooks.setOutbox([...h.hooks.outbox(), add('d')])
+      throw new MigrationNeededError()
+    })
+    expect((await drainOutbox(h.hooks)).stop).toBe('behind')
+    expect(h.queue()).toEqual(['op-a', 'op-d'])
   })
 
   it('drops an op the server refuses for good, and carries on', async () => {
@@ -164,5 +185,37 @@ describe('pushSettings', () => {
     const out = await pushSettings(h.hooks)
     expect(out?.stop).toBe('rejected')
     expect(h.pending()).toBeNull()
+  })
+})
+
+describe('syncStatus — the badge', () => {
+  const at = (over: Partial<Parameters<typeof syncStatus>[0]>) => syncStatus({ canSync: true, offline: false, queued: 0, behind: false, ...over })
+
+  it('says offline first, with no session or no connection', () => {
+    expect(at({ canSync: false, queued: 2, behind: true })).toBe('offline')
+    expect(at({ offline: true, queued: 2, behind: true })).toBe('offline')
+  })
+
+  it('says synced when nothing is queued, whatever happened before', () => {
+    expect(at({ behind: true })).toBe('synced')
+  })
+
+  it('says behind when the queue waits on a migration, syncing otherwise', () => {
+    expect(at({ queued: 1, behind: true })).toBe('behind')
+    expect(at({ queued: 1 })).toBe('syncing')
+  })
+})
+
+describe('migrationNotice — the hint once per episode', () => {
+  it('is new only the first time, until it is cleared', () => {
+    const n = migrationNotice()
+    expect(n.active).toBe(false)
+    expect(n.found()).toBe(true)
+    expect(n.found()).toBe(false) // a retry
+    expect(n.found()).toBe(false) // a resume
+    expect(n.active).toBe(true)
+    n.clear() // a request went through, or the queue emptied
+    expect(n.active).toBe(false)
+    expect(n.found()).toBe(true)
   })
 })
