@@ -5,6 +5,7 @@ import {
   applyOutbox,
   clearUserData,
   enqueueOp,
+  insertStamp,
   hydrateBet,
   loadCache,
   loadOutbox,
@@ -304,41 +305,59 @@ describe('enqueueOp', () => {
     expect(enqueueOp([del('a')], del('a'))).toEqual([del('a')])
   })
 
-  describe('while an op is being sent', () => {
-    it('queues an edit of a bet whose add is on the wire behind it, instead of rewriting it', () => {
-      const sending = add('a', { amount: 10 })
-      const out = enqueueOp([sending], update('a', 55), sending.opId)
-      expect(out).toEqual([sending, update('a', 55)])
+  describe('once an op has been sent', () => {
+    // Sent: its request went out (and may be out still, or may have failed),
+    // so it may be on the server whatever the answer.
+    const sent = <T extends PendingOp>(op: T): T => ({ ...op, sent: true })
+
+    it('queues an edit behind a sent add, instead of rewriting it', () => {
+      const a = sent(add('a', { amount: 10 }))
+      expect(enqueueOp([a], update('a', 55))).toEqual([a, update('a', 55)])
     })
 
-    it('queues a newer edit behind the edit on the wire', () => {
-      const sending = update('a', 1, 'T1')
-      const out = enqueueOp([sending], update('a', 2, 'T2'), sending.opId)
-      expect(out).toEqual([sending, update('a', 2, 'T2')])
-      // ...and later edits collapse into that queued one as usual.
-      const later = enqueueOp(out, update('a', 3, 'T3'), sending.opId)
+    it('queues a newer edit behind a sent edit, and folds later ones into that newer one', () => {
+      const u = sent(update('a', 1, 'T1'))
+      const out = enqueueOp([u], update('a', 2, 'T2'))
+      expect(out).toEqual([u, update('a', 2, 'T2')])
+      const later = enqueueOp(out, update('a', 3, 'T3'))
       expect(later).toHaveLength(2)
-      expect(later[0]).toBe(sending)
+      expect(later[0]).toBe(u)
       expect(later[1]).toMatchObject({ kind: 'update', input: { amount: 3 }, editedAt: 'T3' })
     })
 
-    it('cannot cancel an add on the wire: the delete goes out after it', () => {
-      const sending = add('a')
-      expect(enqueueOp([sending, add('b')], del('a'), sending.opId)).toEqual([sending, add('b'), del('a')])
+    it('folds an edit into the last op for the bet, never an earlier one', () => {
+      // The sent add failed and stays queued, with an edit already behind it.
+      const queue = [sent(add('a', { amount: 10 })), update('a', 20, 'T2')]
+      const out = enqueueOp(queue, update('a', 30, 'T3'))
+      expect(out[0]).toBe(queue[0])
+      expect(out[1]).toMatchObject({ kind: 'update', input: { amount: 30 }, editedAt: 'T3' })
+      expect(applyOutbox([], out).map((b) => b.amount)).toEqual([30])
     })
 
-    it('keeps an edit on the wire when its bet is deleted, and drops the ones still waiting', () => {
-      const sending = update('a', 1, 'T1')
-      const out = enqueueOp([sending, add('c'), update('a', 2, 'T2')], del('a'), sending.opId)
-      expect(out).toEqual([sending, add('c'), del('a')])
+    it('cannot cancel a sent add: the delete is queued after it', () => {
+      const a = sent(add('a'))
+      expect(enqueueOp([a, add('b')], del('a'))).toEqual([a, add('b'), del('a')])
+    })
+
+    it('keeps a sent edit when its bet is deleted, and drops the ones still waiting', () => {
+      const u = sent(update('a', 1, 'T1'))
+      expect(enqueueOp([u, add('c'), update('a', 2, 'T2')], del('a'))).toEqual([u, add('c'), del('a')])
     })
 
     it('leaves the queue alone for other bets', () => {
-      const sending = add('a')
-      const out = enqueueOp([sending, add('b')], update('b', 9), sending.opId)
-      expect(out[0]).toBe(sending)
+      const a = sent(add('a'))
+      const out = enqueueOp([a, add('b')], update('b', 9))
+      expect(out[0]).toBe(a)
       expect(out[1]).toMatchObject({ kind: 'add', id: 'b', input: { amount: 9 } })
       expect(out).toHaveLength(2)
+    })
+
+    it('stamps an add with the last edit folded into it, for the insert and the optimistic row', () => {
+      const out = enqueueOp([add('a')], update('a', 9, 'T9'))
+      expect(out[0]).toMatchObject({ kind: 'add', queuedAt: '2026-01-01T10:00:00.000Z', editedAt: 'T9' })
+      expect(insertStamp(out[0] as Extract<PendingOp, { kind: 'add' }>)).toBe('T9')
+      expect(insertStamp(add('b') as Extract<PendingOp, { kind: 'add' }>)).toBe('2026-01-01T10:00:00.000Z')
+      expect(applyOutbox([], out)[0]).toMatchObject({ createdAt: '2026-01-01T10:00:00.000Z', updatedAt: 'T9' })
     })
   })
 })

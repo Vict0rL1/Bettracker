@@ -95,10 +95,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 242 tests unitarios (vitest)
+npm test            # 265 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 38 comprobaciones Playwright, sin backend
+npm run test:e2e    # 39 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -265,12 +265,18 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
 - La cola quita cada operación enviada por su `opId`, nunca por posición.
-  Mientras una operación está en vuelo nadie la reescribe ni la cancela:
-  una edición o un borrado de esa apuesta hechos entretanto se encolan
-  detrás (`enqueueOp(…, inFlightOpId)`). Y un alta lleva como `updated_at`
-  la hora en que se registró (no el `now()` del servidor), para que una
-  edición hecha mientras el alta viajaba no parezca más antigua y la regla
-  de conflicto la rechace.
+  Una operación que ya salió una vez queda marcada `sent` (guardado con la
+  cola): haya respondido o no, puede estar en el servidor, así que nadie la
+  reescribe ni la cancela; una edición o un borrado de esa apuesta hechos
+  después se encolan detrás, y una edición se funde solo en la última
+  operación sin enviar de esa apuesta. Si el servidor rechaza un alta, se
+  van con ella las ediciones y borrados encolados para esa apuesta (que
+  solo podrían fallar, con un falso aviso de conflicto).
+- Un alta lleva como `updated_at` la hora de su contenido en el dispositivo
+  (la del registro o la de la última edición fundida en ella), no el
+  `now()` del servidor: así una edición hecha mientras el alta viajaba no
+  parece más antigua, y la regla de conflicto compara siempre horas de
+  dispositivo.
 - Una operación que la base rechaza porque le falta una migración se queda
   en la cola (como sin conexión) en vez de descartarse; el aviso sale una
   vez por episodio (hasta que una petición pasa o la cola se vacía), no en
@@ -309,7 +315,7 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       38 comprobaciones
+e2e/*.spec.ts                       39 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

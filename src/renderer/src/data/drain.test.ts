@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
 import { drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
 import { MigrationNeededError } from './errors'
-import { enqueueOp, type PendingOp, type PendingSettings } from './offline'
+import { applyOutbox, enqueueOp, insertStamp, type PendingOp, type PendingSettings } from './offline'
 
 const add = (id: string): PendingOp => ({ opId: `op-${id}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' })
 const del = (id: string): PendingOp => ({ opId: `op-del-${id}`, kind: 'delete', id })
@@ -23,7 +23,7 @@ function harness(initial: PendingOp[], send: (op: PendingOp) => Promise<Bet | nu
     setOutbox: (next) => {
       queue = next
     },
-    sending: () => {},
+    markSent: () => {},
     send: (op) => {
       sent.push(op.opId)
       return send(op)
@@ -225,50 +225,90 @@ describe('migrationNotice — the hint once per episode', () => {
  * The user keeps working while a request is out: a drain sends the op at the
  * head of the queue, and before the server answers, the app can queue more
  * ops through enqueueOp. These run the real enqueueOp against a fake server
- * whose answers the test releases by hand, then check what the server ends
- * up holding.
+ * with the real rules (an insert is stamped with insertStamp, an update lands
+ * only when updated_at <= editedAt, a duplicate insert returns the row that
+ * is there) whose answers the test releases by hand, and whose requests can
+ * fail every way a real one can.
  */
 describe('drainOutbox — changes made while a request is out', () => {
-  type Row = { amount: number | null; note: string }
+  type Row = { amount: number | null; note: string; updatedAt: string }
+  type Failure = 'offline' | 'behind' | 'refused' | 'landed-then-offline'
 
-  function setup(initialServer: Record<string, Row>, initialQueue: PendingOp[]) {
-    const server = new Map(Object.entries(initialServer))
+  function setup(initialServer: Record<string, { amount: number | null; note: string; updatedAt?: string }>, initialQueue: PendingOp[]) {
+    const server = new Map<string, Row>(Object.entries(initialServer).map(([id, r]) => [id, { updatedAt: 'T00', ...r }]))
     let queue = [...initialQueue]
-    let inFlight: string | null = null
     const paused = new Map<string, () => void>()
     let pauseNext: string | null = null
+    const failures = new Map<string, Failure>()
     const reached: string[] = []
+    const conflicts: string[] = []
+    const rejected: string[] = []
+
+    const row = (input: { amount?: number | null; note?: string }, updatedAt: string): Row => ({ amount: input.amount ?? null, note: input.note ?? '', updatedAt })
+    const apply = (op: PendingOp): Bet | null => {
+      if (op.kind === 'add') {
+        if (!server.has(op.id)) server.set(op.id, row(op.input, insertStamp(op)))
+      } else if (op.kind === 'bulk-add') {
+        for (const e of op.entries) server.set(e.id, row(e.input, insertStamp(op)))
+      } else if (op.kind === 'update') {
+        const current = server.get(op.id)
+        if (!current || current.updatedAt > op.editedAt) {
+          conflicts.push(op.opId)
+          return null
+        }
+        server.set(op.id, row(op.input, op.editedAt))
+      } else server.delete(op.id)
+      return null
+    }
 
     const hooks: DrainHooks = {
       outbox: () => queue,
       setOutbox: (next) => {
         queue = next
       },
-      sending: (op) => {
-        inFlight = op?.opId ?? null
+      markSent: (op) => {
+        queue = queue.map((o) => (o.opId === op.opId ? { ...o, sent: true } : o))
       },
       send: async (op) => {
-        if (op.opId === pauseNext) await new Promise<void>((resolve) => paused.set(op.opId, resolve))
+        if (op.opId === pauseNext) {
+          pauseNext = null
+          await new Promise<void>((resolve) => paused.set(op.opId, resolve))
+        }
         reached.push(op.opId)
-        const row = (input: { amount?: number | null; note?: string }): Row => ({ amount: input.amount ?? null, note: input.note ?? '' })
-        if (op.kind === 'add') server.set(op.id, row(op.input))
-        else if (op.kind === 'update' && server.has(op.id)) server.set(op.id, row(op.input))
-        else if (op.kind === 'delete') server.delete(op.id)
-        else if (op.kind === 'bulk-add') for (const e of op.entries) server.set(e.id, row(e.input))
-        return null
+        const failure = failures.get(op.opId)
+        failures.delete(op.opId)
+        if (failure === 'offline') throw new TypeError('Failed to fetch')
+        if (failure === 'behind') throw new MigrationNeededError()
+        if (failure === 'refused') throw new Error('new row violates row-level security policy')
+        const result = apply(op)
+        if (failure === 'landed-then-offline') throw new TypeError('Failed to fetch')
+        return result
       },
       applied: () => {},
-      rejected: () => {}
+      rejected: (op) => void rejected.push(op.opId)
     }
 
     return {
       server,
+      hooks,
       queue: () => queue,
       reached,
-      /** What the hook does when the user acts: enqueue, knowing which op is on the wire. */
+      conflicts,
+      rejected,
+      /** What the user sees: the server's rows with the queue applied on top. */
+      view: () =>
+        applyOutbox(
+          [...server].map(([id, r]) => bet({ id, amount: r.amount, note: r.note, status: r.amount === null ? 'pending' : undefined })),
+          queue
+        ).map((b) => [b.id, b.note]),
+      /** What the hook does when the user acts. */
       user: (op: PendingOp) => {
-        queue = enqueueOp(queue, op, inFlight ?? undefined)
+        queue = enqueueOp(queue, op)
       },
+      /** Make the next request for `opId` fail this way. */
+      fail: (opId: string, how: Failure) => void failures.set(opId, how),
+      /** A plain drain, run to its end. */
+      drain: () => drainOutbox(hooks),
       /** Start a drain that stops inside the request for `opId`; resolves once it is out. */
       startPausedAt: async (opId: string) => {
         pauseNext = opId
@@ -284,8 +324,9 @@ describe('drainOutbox — changes made while a request is out', () => {
     }
   }
 
-  const addOp = (id: string, note: string): PendingOp => ({ opId: `add-${id}-${note}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5, note }, queuedAt: 'Q' })
-  const editOp = (id: string, note: string, editedAt = `E-${note}`): PendingOp => ({ opId: `edit-${id}-${note}`, kind: 'update', id, input: { date: '2026-03-01', amount: 5, note }, editedAt })
+  // Times are compared as strings, like ISO timestamps: T00 < T01 < T1 < T2 < T50…
+  const addOp = (id: string, note: string): PendingOp => ({ opId: `add-${id}-${note}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5, note }, queuedAt: 'T01' })
+  const editOp = (id: string, note: string, editedAt = `T50-${note}`): PendingOp => ({ opId: `edit-${id}-${note}`, kind: 'update', id, input: { date: '2026-03-01', amount: 5, note }, editedAt })
   const delOp = (id: string): PendingOp => ({ opId: `del-${id}`, kind: 'delete', id })
 
   it('an edit made while its add is being sent reaches the server', async () => {
@@ -327,14 +368,108 @@ describe('drainOutbox — changes made while a request is out', () => {
   it('an Undo of a bulk settle made while the settle is being sent puts every bet back', async () => {
     const t = setup(
       { a: { amount: null, note: 'open' }, b: { amount: null, note: 'open' } },
-      [editOp('a', 'settled', 'E1'), editOp('b', 'settled', 'E1')]
+      [editOp('a', 'settled', 'T11'), editOp('b', 'settled', 'T11')]
     )
     const drain = await t.startPausedAt('edit-a-settled')
-    t.user(editOp('a', 'open', 'E2'))
-    t.user(editOp('b', 'open', 'E2'))
+    t.user(editOp('a', 'open', 'T12'))
+    t.user(editOp('b', 'open', 'T12'))
     await drain.finish()
     expect(t.server.get('a')?.note).toBe('open')
     expect(t.server.get('b')?.note).toBe('open')
+    expect(t.queue()).toEqual([])
+  })
+
+  it('an edit made after a sent add failed, with an edit already behind it, is the one that lands', async () => {
+    for (const how of ['offline', 'behind'] as const) {
+      const t = setup({}, [addOp('a', 'v1')])
+      t.fail('add-a-v1', how)
+      const drain = await t.startPausedAt('add-a-v1')
+      t.user(editOp('a', 'v2', 'T2'))
+      expect((await drain.finish()).stop).toBe(how)
+      // Nothing is on the wire now; the user edits again.
+      t.user(editOp('a', 'v3', 'T3'))
+      expect(t.view()).toEqual([['a', 'v3']])
+      expect((await t.drain()).stop).toBe('done')
+      expect(t.server.get('a')?.note).toBe('v3')
+      expect(t.queue()).toEqual([])
+    }
+  })
+
+  it('an edit made after a sent edit failed lands, with no false conflict', async () => {
+    const t = setup({ a: { amount: 5, note: 'v0' } }, [editOp('a', 'v1', 'T1')])
+    t.fail('edit-a-v1', 'offline')
+    const drain = await t.startPausedAt('edit-a-v1')
+    t.user(editOp('a', 'v2', 'T2'))
+    await drain.finish()
+    t.user(editOp('a', 'v3', 'T3'))
+    expect(t.view()).toEqual([['a', 'v3']])
+    await t.drain()
+    expect(t.server.get('a')?.note).toBe('v3')
+    expect(t.conflicts).toEqual([])
+  })
+
+  it('a bet whose add landed but whose answer was lost is deleted, not brought back', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    t.fail('add-a-v1', 'landed-then-offline')
+    expect((await t.drain()).stop).toBe('offline')
+    t.user(delOp('a'))
+    await t.drain()
+    expect(t.server.has('a')).toBe(false)
+    expect(t.queue()).toEqual([])
+  })
+
+  it('an edit of a bet whose add landed but whose answer was lost reaches the server', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    t.fail('add-a-v1', 'landed-then-offline')
+    await t.drain()
+    t.user(editOp('a', 'v2', 'T2'))
+    await t.drain() // the add again (already there: the row comes back), then the edit
+    expect(t.server.get('a')?.note).toBe('v2')
+    expect(t.conflicts).toEqual([])
+  })
+
+  it('a refused add takes the edits queued for its bet with it, with no false conflict', async () => {
+    const t = setup({}, [addOp('a', 'v1'), addOp('b', 'v1')])
+    t.fail('add-a-v1', 'refused')
+    const drain = await t.startPausedAt('add-a-v1')
+    t.user(editOp('a', 'v2', 'T2'))
+    expect((await drain.finish()).stop).toBe('done')
+    expect(t.rejected).toEqual(['add-a-v1'])
+    expect(t.conflicts).toEqual([])
+    expect([...t.server.keys()]).toEqual(['b'])
+    expect(t.queue()).toEqual([])
+  })
+
+  it('an edit of an imported row made while the import is out lands after it', async () => {
+    const t = setup({}, [{ opId: 'imp', kind: 'bulk-add', entries: [{ id: 'x', input: { date: '2026-03-01', amount: 5, note: 'imported' } }], queuedAt: 'T1' }])
+    const drain = await t.startPausedAt('imp')
+    t.user(editOp('x', 'settled', 'T2'))
+    await drain.finish()
+    expect(t.server.get('x')?.note).toBe('settled')
+    expect(t.conflicts).toEqual([])
+  })
+
+  it('a restored bet edited before it syncs carries that edit\'s time, so an older edit from elsewhere loses', async () => {
+    // Deleted, restored with Undo at T03, then edited at T10, all before syncing.
+    const restore: PendingOp = { opId: 'restore-a', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5, note: 'restored' }, queuedAt: 'T03' }
+    const t = setup({ a: { amount: 5, note: 'v0', updatedAt: 'T01' } }, [delOp('a'), restore])
+    t.user(editOp('a', 'mine', 'T10'))
+    await t.drain()
+    // Another device's edit made offline at T04 arrives now.
+    t.user(editOp('a', 'theirs', 'T04'))
+    await t.drain()
+    expect(t.server.get('a')?.note).toBe('mine')
+    expect(t.conflicts).toEqual(['edit-a-theirs'])
+  })
+
+  it('removes the op it sent by its opId, even when another op is first by then', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    const drain = await t.startPausedAt('add-a-v1')
+    // Something puts another op at the head while the request is out.
+    t.hooks.setOutbox([addOp('z', 'v1'), ...t.queue()])
+    await drain.finish()
+    expect(t.reached.filter((id) => id === 'add-a-v1')).toHaveLength(1)
+    expect([...t.server.keys()].sort()).toEqual(['a', 'z'])
     expect(t.queue()).toEqual([])
   })
 

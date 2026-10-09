@@ -28,10 +28,11 @@ export interface DrainHooks {
   outbox: () => readonly PendingOp[]
   setOutbox: (next: PendingOp[]) => void
   /**
-   * The op now on the wire, or null once its answer is in. While an op is out
-   * the queue must not rewrite or cancel it (enqueueOp's `inFlightOpId`).
+   * Mark an op `sent`, just before its first request goes out: from then on
+   * it may reach the server whatever the answer, so enqueueOp must never
+   * rewrite or cancel it. The mark is saved with the queue.
    */
-  sending: (op: PendingOp | null) => void
+  markSent: (op: PendingOp) => void
   /** Send one op; resolves with the row the server returned, if any. */
   send: (op: PendingOp) => Promise<Bet | null>
   /** The op reached the server. */
@@ -43,30 +44,31 @@ export interface DrainHooks {
 /**
  * Send the queued bet ops in order until the queue is empty or one can't go
  * through. A sent op leaves the queue by its opId, never by position: while
- * it was out the user may have queued more, or cancelled other ops, so
- * whatever is first by then may be a different op.
+ * it was out the user may have queued more, so whatever is first by then may
+ * be a different op.
  */
 export async function drainOutbox(h: DrainHooks): Promise<DrainResult> {
   let processed = 0
   const without = (op: PendingOp): PendingOp[] => h.outbox().filter((o) => o.opId !== op.opId)
   for (let op = h.outbox()[0]; op !== undefined; op = h.outbox()[0]) {
-    h.sending(op)
+    if (!op.sent) h.markSent(op)
     try {
       const result = await h.send(op)
-      h.sending(null)
       h.applied(op, result)
       h.setOutbox(without(op))
       processed++
     } catch (err) {
-      h.sending(null)
       const failure = classifySyncError(err)
       // Unreachable, or the database is missing a migration: keep the op, and
       // everything queued after it, in order, for the next attempt.
       if (failure === 'offline') return { stop: 'offline', processed }
       if (failure === 'behind') return { stop: 'behind', processed, error: err }
       // The server rejected this op (validation, RLS, row gone). Drop it so it
-      // can't block the queue, surface the error, and keep going.
-      h.setOutbox(without(op))
+      // can't block the queue, surface the error, and keep going. A refused
+      // add never made its bet, so the edits and deletes queued for it go
+      // too: sent, they could only fail, as a false "newer edit" notice.
+      const orphans = new Set(op.kind === 'add' ? [op.id] : op.kind === 'bulk-add' ? op.entries.map((e) => e.id) : [])
+      h.setOutbox(without(op).filter((o) => !((o.kind === 'update' || o.kind === 'delete') && orphans.has(o.id))))
       h.rejected(op, err)
     }
   }
