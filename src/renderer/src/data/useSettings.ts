@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_SETTINGS, type Settings, type SettingsPatch } from '../../../shared/types'
 import { loadSettingsCache, loadSettingsOutbox, saveSettingsCache, saveSettingsOutbox, type PendingSettings } from './offline'
-import { getSettings, isNetworkError, saveSettings, subscribeToSettings } from './settings'
+import { migrationNotice, pushSettings } from './drain'
+import { classifySyncError } from './errors'
+import { getSettings, saveSettings, subscribeToSettings } from './settings'
 
 export interface SettingsSync {
   /** Last-known row with any pending edit applied; defaults until the first load. */
   settings: Settings
   /** True while a change is waiting to reach the server. */
   dirty: boolean
+  /** True while the database is missing the settings migration: a change waits for it, not for the connection. */
+  blocked: boolean
   update: (patch: SettingsPatch) => void
 }
 
@@ -27,9 +31,11 @@ export function useSettings(
 ): SettingsSync {
   const [server, setServerState] = useState<Settings | null>(null)
   const [pending, setPendingState] = useState<PendingSettings | null>(null)
+  const [blocked, setBlocked] = useState(false)
   const serverRef = useRef<Settings | null>(null)
   const pendingRef = useRef<PendingSettings | null>(null)
   const syncingRef = useRef(false)
+  const noticeRef = useRef(migrationNotice())
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
   const onErrorRef = useRef(onError)
@@ -54,43 +60,60 @@ export function useSettings(
     [userId]
   )
 
+  // A request failed. Unreachable is silent; a missing migration is said once,
+  // not on every retry or resume, until a request goes through again.
+  const report = useCallback((err: unknown) => {
+    const failure = classifySyncError(err)
+    if (failure === 'rejected') onErrorRef.current(err)
+    else if (failure === 'behind') {
+      setBlocked(true)
+      if (noticeRef.current.found()) onErrorRef.current(err)
+    }
+  }, [])
+  const reached = useCallback(() => {
+    noticeRef.current.clear()
+    setBlocked(false)
+  }, [])
+
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
       const row = await getSettings()
+      reached()
       setServer(row ?? { ...DEFAULT_SETTINGS })
     } catch (err) {
-      if (!isNetworkError(err)) onErrorRef.current(err)
+      report(err)
     }
-  }, [userId, setServer])
+  }, [userId, setServer, report, reached])
 
   const syncNow = useCallback(async (): Promise<void> => {
     if (syncingRef.current || !canSyncRef.current || !userId || !pendingRef.current) return
     syncingRef.current = true
     try {
-      const p = pendingRef.current
-      const saved = await saveSettings(p.patch, p.editedAt)
-      // Only clear the queue if nothing was added while the request was out.
-      if (pendingRef.current === p) setPending(null)
-      if (saved) setServer(saved)
-      else {
+      const out = await pushSettings({
+        pending: () => pendingRef.current,
+        setPending,
+        save: (p) => saveSettings(p.patch, p.editedAt)
+      })
+      if (out?.stop === 'saved') {
+        reached()
+        setServer(out.row)
+      } else if (out?.stop === 'conflict') {
+        reached()
         onNoticeRef.current?.('conflict')
         await refresh()
-      }
-    } catch (err) {
-      if (!isNetworkError(err)) {
-        setPending(null)
-        onErrorRef.current(err)
-      }
+      } else if (out?.stop === 'behind' || out?.stop === 'rejected') report(out.error)
     } finally {
       syncingRef.current = false
     }
-  }, [userId, setPending, setServer, refresh])
+  }, [userId, setPending, setServer, refresh, report, reached])
 
   // Boot from the device cache.
   useEffect(() => {
     serverRef.current = null
     pendingRef.current = null
+    noticeRef.current.clear()
+    setBlocked(false)
     setServerState(null)
     setPendingState(null)
     if (!userId) return
@@ -141,5 +164,5 @@ export function useSettings(
 
   const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}) }
 
-  return { settings, dirty: pending !== null, update }
+  return { settings, dirty: pending !== null, blocked, update }
 }

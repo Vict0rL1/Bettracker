@@ -66,7 +66,10 @@ export default function App() {
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice)
   const { bets, status, queuedCount, isOffline } = sync
-  const { settings, dirty: settingsDirty, update: updateSettings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
+  const { settings, dirty: settingsDirty, blocked: settingsBlocked, update: updateSettings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
+  // A settings change waiting on a migration is a queued change too: the badge
+  // says so even when no bet is queued.
+  const badgeStatus = status === 'synced' && settingsDirty && settingsBlocked ? 'behind' : status
 
   useEffect(() => {
     if (!loading && (!activeUserId || bets !== null)) {
@@ -318,7 +321,7 @@ export default function App() {
     <div className="app">
       <Header
         email={activeEmail}
-        status={status}
+        status={badgeStatus}
         queuedCount={queuedCount}
         pendingCount={openList.length}
         canExport={shownBets.length > 0}
@@ -381,7 +384,7 @@ export default function App() {
         <QuickAdd bets={shownBets} settings={settings} suggestions={suggestions} onAdd={handleAdd} onClose={() => setQuickOpen(false)} />
       )}
 
-      {settingsOpen && <SettingsDialog settings={settings} dirty={settingsDirty} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsDialog settings={settings} dirty={settingsDirty} blocked={settingsBlocked} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />}
 
       {pendingOpen && (
         <PendingPanel

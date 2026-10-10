@@ -27,7 +27,8 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { addBet, getBets, isMissingColumnError, MIGRATION_HINT, updateBet } from './bets'
+import { addBet, getBets, updateBet, updateBetLegacy } from './bets'
+import { MigrationNeededError } from './errors'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
 
@@ -59,6 +60,28 @@ describe('updateBet — last write wins by edit time', () => {
   })
 })
 
+describe('updateBetLegacy — an edit queued by a version from before 003', () => {
+  it('sends only the fields that version knew, never status, odds or closing odds', async () => {
+    state.result = { data: { id: 'a', date: '2026-03-01', amount: null, status: 'pending', odds: '2.1', note: 'fixed', created_at: 'c', updated_at: 'L' }, error: null, count: null }
+    const out = await updateBetLegacy('a', { date: '2026-03-01', amount: 0, note: 'fixed' }, 'L')
+    expect(call('update')?.args[0]).toEqual({ date: '2026-03-01', amount: 0, note: 'fixed', updated_at: 'L' })
+    expect(call('lte')?.args).toEqual(['updated_at', 'L'])
+    expect(out).toMatchObject({ status: 'pending', odds: 2.1 })
+  })
+
+  it('carries stake and tags when that version had them', async () => {
+    state.result = { data: null, error: null, count: null }
+    await updateBetLegacy('a', { date: '2026-03-01', amount: -10, stake: 10, note: '', sport: 'NBA', book: 'DK', betType: 'Spread' }, 'L')
+    expect(call('update')?.args[0]).toEqual({ date: '2026-03-01', amount: -10, stake: 10, note: '', sport: 'NBA', book: 'DK', bet_type: 'Spread', updated_at: 'L' })
+  })
+
+  it('validates before touching the network', async () => {
+    await expect(updateBetLegacy('a', { date: 'nope', amount: 1 }, 'L')).rejects.toThrow(/calendar date/)
+    await expect(updateBetLegacy('a', { date: '2026-03-01', amount: Number.NaN }, 'L')).rejects.toThrow(/finite/)
+    expect(state.calls).toHaveLength(0)
+  })
+})
+
 describe('reading rows', () => {
   it('coerces numeric strings and derives a status when the column is absent (pre-003 database)', async () => {
     state.result = {
@@ -85,13 +108,12 @@ describe('reading rows', () => {
 describe('missing migration', () => {
   it('turns a PostgREST unknown-column error into the migration hint', async () => {
     state.result = { data: null, error: { message: "Could not find the 'odds' column of 'entries' in the schema cache", code: 'PGRST204' }, count: null }
-    await expect(addBet({ date: '2026-03-01', amount: 5 }, 'id-1')).rejects.toThrow(MIGRATION_HINT)
+    await expect(addBet({ date: '2026-03-01', amount: 5 }, 'id-1')).rejects.toBeInstanceOf(MigrationNeededError)
   })
 
-  it('recognises both wordings Postgres and PostgREST use', () => {
-    expect(isMissingColumnError(new Error('column entries.status does not exist'))).toBe(true)
-    expect(isMissingColumnError(new Error("Could not find the 'stake' column of 'entries' in the schema cache"))).toBe(true)
-    expect(isMissingColumnError(new Error('permission denied for table entries'))).toBe(false)
+  it('reads a second bet on one day, before migration 001, as a missing migration', async () => {
+    state.result = { data: null, error: { message: 'duplicate key value violates unique constraint "entries_user_id_date_key"', code: '23505' }, count: null }
+    await expect(addBet({ date: '2026-03-01', amount: 5 }, 'id-1')).rejects.toBeInstanceOf(MigrationNeededError)
   })
 
   it('sends odds and status on insert', async () => {

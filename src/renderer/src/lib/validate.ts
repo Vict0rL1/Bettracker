@@ -76,13 +76,17 @@ export function normalizeInput(input: BetInput): CleanBet {
   if (rawAmount !== null && Math.abs(rawAmount) > MAX_AMOUNT) {
     throw new Error('Amount is out of range')
   }
+  // The sign is read off what gets stored, in cents: a 0.004 result is 0.00,
+  // a push, not a win. Checking before rounding would store a "won" 0.00,
+  // which the database's status trigger would later read as a push.
+  const cents = rawAmount === null ? null : round2(rawAmount)
 
   // No status given: it is whatever the result says, which is what every bet
   // logged before statuses existed relies on.
   let status: BetStatus
   if (input.status !== undefined) status = input.status
-  else if (rawAmount === null) status = 'pending'
-  else status = statusForAmount(rawAmount)
+  else if (cents === null) status = 'pending'
+  else status = statusForAmount(cents)
 
   let amount: number | null
   switch (status) {
@@ -90,18 +94,18 @@ export function normalizeInput(input: BetInput): CleanBet {
       amount = null
       break
     case 'won':
-      if (rawAmount === null) throw new Error('A won bet needs its result')
-      if (rawAmount <= 0) throw new Error('A won bet nets a positive amount')
-      amount = round2(rawAmount)
+      if (cents === null) throw new Error('A won bet needs its result')
+      if (cents <= 0) throw new Error('A won bet nets a positive amount')
+      amount = cents
       break
     case 'lost':
-      if (rawAmount === null) throw new Error('A lost bet needs its result')
-      if (rawAmount >= 0) throw new Error('A lost bet nets a negative amount')
-      amount = round2(rawAmount)
+      if (cents === null) throw new Error('A lost bet needs its result')
+      if (cents >= 0) throw new Error('A lost bet nets a negative amount')
+      amount = cents
       break
     case 'push':
     case 'void':
-      if (rawAmount !== null && rawAmount !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
+      if (cents !== null && cents !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
       amount = 0
       break
   }

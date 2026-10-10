@@ -38,41 +38,103 @@ Las fijó el dueño del proyecto y siguen vigentes:
 
 ## Qué hay que hacer a mano
 
-1. **Migraciones en Supabase**, en este orden, en el SQL editor del proyecto:
+Por este orden (ver "Orden de despliegue seguro" justo debajo):
+
+1. **Migraciones en Supabase**, en el SQL editor del proyecto:
    `supabase/migrations/002_stake_and_tags.sql` → `003_odds_and_status.sql`
    → `004_user_settings_and_closing_odds.sql`. Las tres son aditivas y
    re-ejecutables (`if not exists`, `drop … if exists` antes de cada
-   constraint y policy). `supabase/schema.sql` contiene lo mismo acumulado
-   por si prefieres ejecutar un solo archivo desde cero. La 001 ya estaba
-   aplicada antes de este trabajo. Hasta que corras la 004, al guardar un
-   ajuste la app mostrará "Your database is behind the app…" con la lista de
-   archivos; las apuestas siguen funcionando.
-2. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
-3. **Despliegue.** Si la PWA está en Vercel, en el proyecto que ya existe:
-   Settings → Git, conectar este repositorio y poner el directorio raíz en
-   `/`. Así se conservan el dominio y las variables. Un dominio nuevo dejaría
-   la app instalada en el móvil apuntando al viejo, con lo guardado sin
-   conexión allí, y obligaría a cambiar las URL de redirección en Supabase
-   Auth. El instalador de escritorio se construye con `npm run build:desktop`.
+   constraint, policy y trigger). `supabase/schema.sql` contiene lo mismo
+   acumulado por si prefieres ejecutar un solo archivo. La 001 ya estaba
+   aplicada antes de este trabajo.
+2. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
+   el proyecto que ya existe: Settings → Git, conectar este repositorio y
+   poner el directorio raíz en `/`. Así se conservan el dominio y las
+   variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
+   al viejo, con lo guardado sin conexión allí, y obligaría a cambiar las URL
+   de redirección en Supabase Auth. El instalador de escritorio se construye
+   con `npm run build:desktop`.
+3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
+   conexión (una recarga basta); el escritorio hay que reinstalarlo.
+4. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
+
+### Orden de despliegue seguro
+
+- **Migrar antes de desplegar.** La versión desplegada hoy no conoce
+  `status` y la 003 lo hace obligatorio. Para que siga funcionando, la 003
+  crea un trigger (`entries_status_from_amount`): a un alta sin `status` le
+  pone el que implica su importe (la misma regla del backfill), y a una
+  edición que cambia el importe sin tocar un `status` que ya no encaja se lo
+  recalcula. Lo que envía la versión nueva siempre encaja (valida el signo
+  del importe ya redondeado a céntimos, como se guarda), así que no lo toca.
+  Así, entre las migraciones y el despliegue, los dispositivos con la
+  versión antigua siguen guardando sin perder nada.
+- **Si se invierte el orden, tampoco se pierde nada.** La versión nueva
+  contra una base sin migrar no puede dar altas ni editar (cada alta o
+  edición lleva `closing_odds`, de la 004; los borrados sí pasan), pero ya
+  no tira esas operaciones: las deja en la cola del dispositivo, como sin
+  conexión, con la insignia "Falta actualizar · n en cola" y un aviso (una
+  vez por cola, la de apuestas y la de ajustes, no en cada reintento), y
+  las envía solas en cuanto corren las
+  migraciones (reintenta cada 20 s, al volver la conexión y al volver a la
+  app). Un ajuste cambiado entretanto espera igual: el diálogo de ajustes lo
+  dice y la insignia muestra "Falta actualizar". Mientras tanto, no cerrar
+  sesión en ese dispositivo: cerrar sesión borra su cola.
+- **Lo que un dispositivo tenga en cola al actualizarse se envía igual que
+  lo habría enviado la versión antigua.** Esa versión guardaba las ediciones
+  sin hora de edición y solo con los campos que conocía. Al cargar esa cola,
+  la versión nueva las marca `legacy`, les pone la hora de carga (ella
+  sellaba al sincronizar) y las envía solo con esos campos y sin `status`
+  (`updateBetLegacy`): no borra cuotas, cuota de cierre ni nada que esa
+  versión no conocía, y el trigger de la 003 calcula el estado como para
+  cualquier escritura suya.
+- **Mientras convivan versiones**, una versión antigua ve una apuesta
+  pendiente (creada desde la nueva) como $0. Si la edita escribiendo un
+  importe distinto de 0, queda resuelta con ese importe; si deja el $0 (por
+  ejemplo, solo cambia la nota), sigue pendiente, así que un push de una
+  pendiente solo se puede registrar desde una versión actualizada. Por eso,
+  actualizar todos los dispositivos pronto.
+- Las comprobaciones de esto contra un Postgres real están en
+  `supabase/tests/` (ver "Cómo probar").
 
 ## Cómo probar
 
 ```bash
 npm ci
-npm test            # 212 tests unitarios (vitest)
+npm test            # 247 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 33 comprobaciones Playwright, sin backend
+npm run test:e2e    # 39 comprobaciones Playwright, sin backend
+bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
 CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
-con gitleaks, tests y build, y la suite e2e.
+con gitleaks, tests y build, el esquema SQL contra un Postgres de usar y
+tirar, y la suite e2e.
+
+`supabase/tests/run.sh` monta la base de tres formas: (A) el esquema con el
+que se publicó la app (`supabase/tests/original_schema.sql`) con filas,
+subido con las migraciones 001→004, cada una dos veces; (B) lo mismo subido
+con `schema.sql` dos veces; (C) una instalación desde cero con `schema.sql`
+dos veces y todas las migraciones encima, con filas escritas como las
+escribe una versión antigua (sin `status`). En A y B comprueba el backfill;
+en C, el trigger; en las tres, las escrituras de versiones antiguas y
+nuevas y las constraints. Luego compara las tres estructuras (tablas,
+columnas, constraints, índices, policies, trigger y función, y qué publica
+realtime; el orden de las columnas aparte, que migraciones aditivas no
+pueden igualar). Necesita
+`psql`, `createdb`, `dropdb` y `pg_dump` con las variables `PG*` apuntando a
+un servidor donde pueda crear bases (todas se llaman `bettracker_test_*`).
+En local, como root: `su postgres -c 'bash supabase/tests/run.sh'`.
 
 La suite e2e construye a `dist-e2e/`, sirve con `vite preview` e inyecta un
 mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
 `localStorage`, de modo que lo que se ejercita es el camino real offline de la
-app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
-`localhost`; en CI no.
+app. Con `backend: 'live'` o `'behind'` el mock es un pequeño servidor en
+memoria (apuestas y ajustes, altas, ediciones con la regla de conflicto,
+borrados, upserts; latencia y caída de conexión opcionales) para probar la
+sincronización de verdad. En este entorno hizo falta `NO_PROXY='*'` para que
+Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
@@ -89,7 +151,8 @@ app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
 - Migración 003: `odds` (decimal, > 1), `status`
   (`pending|won|lost|push|void`) con backfill desde el signo de `amount`,
   `amount` nullable (solo `null` mientras está pendiente), constraints que
-  atan importe y estado, índice de pendientes.
+  atan importe y estado, índice de pendientes, y un trigger que da a las
+  escrituras de versiones antiguas (sin `status`) el que implica su importe.
 - `amount` sigue siendo el **resultado neto**, nunca el pago; `stake`
   `null` sigue siendo "sin registrar" (fuera del ROI), `0` es apuesta gratis
   (ganancia reportada aparte como *bonus*).
@@ -98,8 +161,9 @@ app. En este entorno hizo falta `NO_PROXY='*'` para que Playwright llegara a
   de 50. Probabilidad implícita media junto al strike rate.
 - **Conflictos entre dispositivos:** gana la última edición por hora de
   edición (`updated_at = editedAt`, `update … where updated_at <= editedAt`);
-  una edición rechazada se descarta con aviso y se refresca. Sin columna
-  extra ni triggers; se confían los relojes de los dispositivos.
+  una edición rechazada se descarta con aviso y se refresca. La regla no
+  necesita columna extra ni triggers (el único trigger, el de la 003, es de
+  compatibilidad de `status`); se confían los relojes de los dispositivos.
 - CSV: columnas `date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note`,
   alias de otros trackers, columna `result` numérica detectada como importe.
   Exportaciones antiguas (sin estas columnas) importan sin cambios.
@@ -206,6 +270,20 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   borrado de una apuesta restaurada conserva su `delete` en cola (bug
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
+- Una operación que la base rechaza porque le falta una migración se queda
+  en la cola (como sin conexión) en vez de descartarse; cada cola (apuestas
+  y ajustes) da el aviso una vez por episodio (hasta que una petición pasa o
+  la cola se vacía), no en
+  cada reintento. `data/drain.ts` decide qué sale de la cola y qué se queda,
+  qué muestra la insignia y cuándo repetir el aviso; los hooks solo guardan
+  el estado.
+- El signo de un importe se valida ya redondeado a céntimos, como se
+  guarda: 0.004 es un push de 0.00, no una ganada de 0.00.
+- La 003 se editó en su sitio (en vez de añadir una 005) para meter el
+  trigger de compatibilidad, porque aún no se había ejecutado en ningún
+  sitio; así el trigger existe desde el momento en que `status` pasa a ser
+  obligatorio. La regla de "migraciones nuevas para cada cambio" sigue
+  valiendo para todo lo ya aplicado.
 
 ## Mapa de archivos nuevos o muy cambiados
 
@@ -225,10 +303,13 @@ src/renderer/src/lib/
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
+  drain.ts                                vaciar la cola: qué sale y qué se queda
+  errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       33 comprobaciones
+e2e/*.spec.ts                       39 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
+supabase/tests/                     el esquema contra un Postgres real
 ```

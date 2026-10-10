@@ -98,6 +98,16 @@ describe('normalizeInput', () => {
       expect(() => normalizeInput({ date: '2026-05-04', status: 'won' })).toThrow(/needs its result/i)
     })
 
+    it('reads the sign off the amount in cents, as it is stored', () => {
+      // A result under half a cent is 0.00: a push, never a "won" 0.00.
+      expect(normalizeInput({ ...base, amount: 0.004 })).toMatchObject({ status: 'push', amount: 0 })
+      expect(normalizeInput({ ...base, amount: -0.004 })).toMatchObject({ status: 'push', amount: 0 })
+      expect(() => normalizeInput({ ...base, amount: 0.004, status: 'won' })).toThrow(/positive/)
+      expect(() => normalizeInput({ ...base, amount: -0.004, status: 'lost' })).toThrow(/negative/)
+      expect(normalizeInput({ ...base, amount: 0.004, status: 'void' })).toMatchObject({ status: 'void', amount: 0 })
+      expect(normalizeInput({ ...base, amount: 0.005 })).toMatchObject({ status: 'won', amount: 0.01 })
+    })
+
     it('settles a push or void at exactly 0', () => {
       expect(normalizeInput({ date: '2026-05-04', status: 'push' }).amount).toBe(0)
       expect(normalizeInput({ date: '2026-05-04', status: 'void', amount: 0 }).amount).toBe(0)

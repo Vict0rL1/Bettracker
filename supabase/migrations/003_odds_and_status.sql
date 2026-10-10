@@ -7,7 +7,9 @@
 --           bets never recorded it. Must be > 1 when present.
 --   status  'pending' | 'won' | 'lost' | 'push' | 'void'. Backfilled from the
 --           sign of `amount` for every existing row, so nothing you've logged
---           changes meaning.
+--           changes meaning. A trigger gives writes from older versions of
+--           the app (which send no status) the same treatment, so they keep
+--           working until every device is updated.
 --   amount  becomes nullable, but ONLY for pending bets: a bet that hasn't been
 --           settled has no result yet, and storing 0 would make an open week
 --           read as break-even. The check below ties the two together.
@@ -23,6 +25,50 @@
 
 alter table public.entries add column if not exists odds   numeric(8, 3);
 alter table public.entries add column if not exists status text;
+
+-- Apps built before this migration don't know about statuses: they send an
+-- amount and no status. Rather than refuse their writes once status is NOT
+-- NULL, the row gets the status its amount implies (the backfill's rule). An
+-- update that changes the amount but keeps a status that no longer fits it
+-- (an older app editing a won bet into a loss) gets it worked out the same
+-- way, except that a pending bet sent back as $0 stays pending (an older app
+-- shows it that way). "Fits" is the app's rule: won nets more than 0, lost less than 0,
+-- push and void exactly 0, pending nothing. The current app always sends a
+-- status that fits, so this never changes its writes. Created before the
+-- backfill, so a row written while this file runs is covered too.
+create or replace function public.entries_status_from_amount()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  -- An older app shows a pending bet as $0 and sends that 0 back on any edit,
+  -- even one that only fixes the note: the bet stays pending.
+  if tg_op = 'UPDATE' and old.status = 'pending' and new.status = 'pending' and new.amount = 0 then
+    new.amount := null;
+  end if;
+  if new.status is null
+     or (tg_op = 'UPDATE'
+         and new.status = old.status
+         and not coalesce(
+           (new.status = 'pending' and new.amount is null)
+           or (new.status = 'won' and new.amount > 0)
+           or (new.status = 'lost' and new.amount < 0)
+           or (new.status in ('push', 'void') and new.amount = 0),
+           false)) then
+    new.status := case when new.amount is null then 'pending'
+                       when new.amount > 0 then 'won'
+                       when new.amount < 0 then 'lost'
+                       else 'push' end;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists entries_status_from_amount on public.entries;
+create trigger entries_status_from_amount
+  before insert or update on public.entries
+  for each row execute function public.entries_status_from_amount();
 
 update public.entries
    set status = case when amount > 0 then 'won'
@@ -48,7 +94,7 @@ alter table public.entries add  constraint entries_amount_matches_status
   check (
     (status = 'pending' and amount is null)
     or (status in ('won', 'lost') and amount is not null)
-    or (status in ('push', 'void') and amount = 0)
+    or (status in ('push', 'void') and amount is not null and amount = 0)
   );
 
 create index if not exists entries_user_pending_idx

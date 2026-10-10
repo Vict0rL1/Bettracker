@@ -1,7 +1,8 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
-import { normalizeInput, type CleanBet } from '../lib/validate'
+import { isValidDate, MAX_AMOUNT, normalizeInput, round2, type CleanBet } from '../lib/validate'
+import { describeError } from './errors'
 
 // The table keeps its original name: renaming it is not an additive migration
 // and every policy and index refers to it. Everywhere else these are bets.
@@ -63,35 +64,6 @@ function toRowPayload(clean: CleanBet): Record<string, unknown> {
     book: clean.book,
     bet_type: clean.betType
   }
-}
-
-/** True when a request failed because the network/server was unreachable (retryable). */
-export function isNetworkError(err: unknown): boolean {
-  if (err instanceof TypeError) return true
-  const msg = err instanceof Error ? err.message : String(err)
-  return /failed to fetch|networkerror|network request failed|load failed|fetch failed|err_internet|err_network|timeout/i.test(
-    msg
-  )
-}
-
-/**
- * True when the backend rejected a column the app knows about but the database
- * doesn't have yet — i.e. a migration hasn't been run. Callers use this to tell
- * the user exactly what to do instead of showing a raw PostgREST error.
- */
-export function isMissingColumnError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err)
-  return /column .*(stake|sport|book|bet_type|odds|status|closing_odds).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status|closing_odds).* column|relation .*user_settings.* does not exist|could not find the table .*user_settings/i.test(
-    msg
-  )
-}
-
-export const MIGRATION_HINT =
-  'Your database is behind the app. Run the files in supabase/migrations/ (002, 003, then 004) in your Supabase SQL editor.'
-
-export function describeError(error: { message: string }): Error {
-  const err = new Error(error.message)
-  return isMissingColumnError(err) ? new Error(MIGRATION_HINT) : err
 }
 
 async function currentUserId(): Promise<string> {
@@ -156,6 +128,32 @@ export async function updateBet(id: string, input: BetInput, editedAt: string): 
     .lte('updated_at', editedAt)
     .select()
     .maybeSingle()
+  if (error) throw describeError(error)
+  return data ? toBet(data as Row) : null
+}
+
+/**
+ * Send an edit queued by a version from before migration 003 the way that
+ * version sent it (see loadOutbox): only the fields it knew and its input
+ * carries, never status, odds or closing odds, so nothing it did not know
+ * about is blanked and the 003 trigger works the status out exactly as for
+ * a write from that version. Same conflict rule as updateBet.
+ */
+export async function updateBetLegacy(id: string, input: BetInput, editedAt: string): Promise<Bet | null> {
+  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
+  const amount = input.amount
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount must be a finite number')
+  const payload: Record<string, unknown> = { date: input.date, amount: round2(amount), updated_at: editedAt }
+  if ('note' in input) payload.note = input.note ?? ''
+  if ('stake' in input) {
+    const stake = input.stake
+    if (stake !== null && stake !== undefined && (!Number.isFinite(stake) || stake < 0 || stake > MAX_AMOUNT)) throw new Error('Stake is out of range')
+    payload.stake = stake === null || stake === undefined ? null : round2(stake)
+  }
+  if ('sport' in input) payload.sport = input.sport ?? ''
+  if ('book' in input) payload.book = input.book ?? ''
+  if ('betType' in input) payload.bet_type = input.betType ?? ''
+  const { data, error } = await supabase.from(TABLE).update(payload).eq('id', id).lte('updated_at', editedAt).select().maybeSingle()
   if (error) throw describeError(error)
   return data ? toBet(data as Row) : null
 }

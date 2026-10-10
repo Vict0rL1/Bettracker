@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Bet, BetInput } from '../../../shared/types'
 import { normalizeInput } from '../lib/validate'
-import { addBet, addBets, deleteBet, getBets, isNetworkError, subscribeToBets, updateBet } from './bets'
+import { addBet, addBets, deleteBet, getBets, subscribeToBets, updateBet, updateBetLegacy } from './bets'
+import { drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { isNetworkError } from './errors'
 import {
   applyOutbox,
   enqueueOp,
@@ -14,7 +16,7 @@ import {
   type PendingOp
 } from './offline'
 
-export type SyncStatus = 'synced' | 'syncing' | 'offline'
+export type { SyncStatus }
 
 export interface BetSync {
   /** Server rows with queued local changes applied; null until first load. */
@@ -38,6 +40,15 @@ export interface BetSync {
 const RETRY_INTERVAL_MS = 20_000
 const REALTIME_DEBOUNCE_MS = 400
 
+/** One queued op, sent. Resolves with the row the server returned, when there is one. */
+async function sendOp(op: PendingOp): Promise<Bet | null> {
+  if (op.kind === 'add') return addBet(op.input, op.id)
+  if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
+  if (op.kind === 'bulk-add') await addBets(op.entries)
+  else await deleteBet(op.id)
+  return null
+}
+
 /**
  * Offline-first bet state.
  *
@@ -59,12 +70,14 @@ export function useBetSync(
   const [server, setServerState] = useState<Bet[] | null>(null)
   const [outbox, setOutboxState] = useState<PendingOp[]>([])
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
+  const [behind, setBehindState] = useState(false)
 
   // Refs are the source of truth inside the async sync loop; state mirrors
   // them for rendering.
   const serverRef = useRef<Bet[] | null>(null)
   const outboxRef = useRef<PendingOp[]>([])
   const syncingRef = useRef(false)
+  const noticeRef = useRef(migrationNotice())
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
   const onErrorRef = useRef(onError)
@@ -90,6 +103,15 @@ export function useBetSync(
     [userId]
   )
 
+  // The database is missing a migration. The hint is shown once, when that is
+  // first found, not on every retry or resume; an op that goes through, or a
+  // queue that empties, ends the episode.
+  const setBehind = useCallback((next: boolean, err?: unknown) => {
+    if (next && noticeRef.current.found()) onErrorRef.current(err)
+    if (!next) noticeRef.current.clear()
+    setBehindState(next)
+  }, [])
+
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
@@ -105,44 +127,40 @@ export function useBetSync(
   const syncNow = useCallback(async (): Promise<void> => {
     if (syncingRef.current || !canSyncRef.current || !userId) return
     syncingRef.current = true
-    let processed = false
+    let result: DrainResult
     try {
-      while (outboxRef.current.length > 0) {
-        const op = outboxRef.current[0]
-        try {
-          let result: Bet | null = null
-          if (op.kind === 'add') result = await addBet(op.input, op.id)
-          else if (op.kind === 'update') {
-            result = await updateBet(op.id, op.input, op.editedAt)
-            // A refused update lost to a newer edit elsewhere (or the bet is
-            // gone). Nothing to retry: the refresh after the drain shows the
-            // version that won.
-            if (result === null) onNoticeRef.current?.('conflict')
-          } else if (op.kind === 'bulk-add') await addBets(op.entries)
-          else await deleteBet(op.id)
-
-          setServer(reconcile(serverRef.current ?? [], op, result))
-          setOutbox(outboxRef.current.slice(1))
+      result = await drainOutbox({
+        outbox: () => outboxRef.current,
+        setOutbox,
+        send: sendOp,
+        applied: (op, row) => {
+          // A refused update lost to a newer edit elsewhere (or the bet is
+          // gone). Nothing to retry: the refresh after the drain shows the
+          // version that won.
+          if (op.kind === 'update' && row === null) onNoticeRef.current?.('conflict')
+          setServer(reconcile(serverRef.current ?? [], op, row))
           setOffline(false)
-          processed = true
-        } catch (err) {
-          if (isNetworkError(err)) {
-            // Unreachable — keep the op and try again later, in order.
-            setOffline(true)
-            return
-          }
-          // The server rejected this op (validation, RLS, row gone). Drop it
-          // so it can't block the queue, surface the error, and keep going.
-          setOutbox(outboxRef.current.slice(1))
-          onErrorRef.current(err)
-        }
-      }
+          setBehind(false)
+        },
+        rejected: (_op, err) => onErrorRef.current(err)
+      })
     } finally {
       syncingRef.current = false
     }
+    if (result.stop === 'offline') {
+      setOffline(true)
+      return
+    }
+    if (result.stop === 'behind') {
+      // The server answered, so the connection is back whatever said otherwise.
+      setOffline(false)
+      setBehind(true, result.error)
+      return
+    }
+    setBehind(false)
     // True-up after a drain so totals can never drift from the server.
-    if (processed && outboxRef.current.length === 0) await refresh()
-  }, [userId, setServer, setOutbox, refresh])
+    if (result.processed > 0 && outboxRef.current.length === 0) await refresh()
+  }, [userId, setServer, setOutbox, setBehind, refresh])
 
   // Boot: hydrate this user's cache + outbox synchronously for instant paint.
   useEffect(() => {
@@ -151,6 +169,8 @@ export function useBetSync(
     setServerState(null)
     setOutboxState([])
     setOffline(false)
+    noticeRef.current.clear()
+    setBehindState(false)
     if (!userId) return
     const cached = loadCache(userId)
     const pending = loadOutbox(userId)
@@ -308,7 +328,7 @@ export function useBetSync(
     return applyOutbox(server ?? [], outbox)
   }, [server, outbox])
 
-  const status: SyncStatus = !canSync || offline ? 'offline' : outbox.length > 0 ? 'syncing' : 'synced'
+  const status = syncStatus({ canSync, offline, queued: outbox.length, behind })
 
   // Rows waiting to sync, not ops — one queued import of 40 bets reads as 40.
   const queuedCount = useMemo(() => outbox.reduce((n, op) => n + opSize(op), 0), [outbox])
