@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_AMOUNT, MAX_ODDS, isValidDate, normalizeInput, suggestedAmount } from './validate'
+import { MAX_AMOUNT, MAX_ODDS, isValidDate, normalizeInput, storableOdds, suggestedAmount } from './validate'
 
 describe('isValidDate', () => {
   it('accepts a real calendar date', () => {
@@ -134,6 +134,18 @@ describe('normalizeInput', () => {
       expect(() => normalizeInput({ ...base, odds: 1.0004 })).toThrow(/greater than 1/i)
       expect(() => normalizeInput({ ...base, closingOdds: 1.0004 })).toThrow(/greater than 1/i)
       expect(normalizeInput({ ...base, odds: 1.0006 }).odds).toBe(1.001)
+      // The top of the range is judged the same way.
+      expect(normalizeInput({ ...base, odds: MAX_ODDS + 0.0004 }).odds).toBe(MAX_ODDS)
+      expect(() => normalizeInput({ ...base, odds: MAX_ODDS + 0.0005 })).toThrow(/out of range/i)
+    })
+
+    it('says which prices the forms and the import may offer: the ones that survive being stored', () => {
+      expect(storableOdds(1.91)).toBe(true)
+      expect(storableOdds(1.0006)).toBe(true)
+      expect(storableOdds(1.0004)).toBe(false)
+      expect(storableOdds(1)).toBe(false)
+      expect(storableOdds(MAX_ODDS + 0.0004)).toBe(true)
+      expect(storableOdds(MAX_ODDS + 0.0005)).toBe(false)
     })
 
     it('rejects a typo-sized price', () => {

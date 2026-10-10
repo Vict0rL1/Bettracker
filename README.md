@@ -370,11 +370,13 @@ carry currency symbols, thousands separators, or parenthesised negatives
 100 up, like `150` or `150.00`, could be +150 with its plus sign dropped
 (spreadsheets do that) or a decimal longshot, and `1,200` could be +1200 or
 1.2, so the file decides, for both odds columns at once: an export from this
-app is always decimal; a header that names the format (`american odds`,
-`decimal odds`) settles it; otherwise signed prices elsewhere in the file
-make it American and decimals make it decimal, a file with both kinds
-reports that line instead of guessing, and a file with neither follows your
-odds format setting, like the odds box. Lines that can't be read are skipped and reported
+app is decimal (unless American odds were typed into it); a header that
+names the format (`american odds`, `decimal odds`) settles it; otherwise
+signed prices elsewhere in the file make it American and decimals make it
+decimal, and a file with both kinds reports that line instead of guessing.
+With nothing else to go by, a `1,200` makes the file decimal, and a whole
+number follows your odds format setting, both as the odds box reads them. A
+cell that is not a price that can be stored counts for nothing. Lines that can't be read are skipped and reported
 rather than half-guessed, and the import queues through the same offline outbox
 as everything else — so it works with no connection and can't create duplicate
 rows if it's retried.

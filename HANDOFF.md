@@ -103,7 +103,7 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 282 tests unitarios (vitest)
+npm test            # 290 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
 npm run test:e2e    # 41 comprobaciones Playwright, sin backend
@@ -279,15 +279,18 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   `150.00` puede ser +150 sin el `+`, que Excel quita, o una cuota decimal de
   150, y así la escriben nuestras propias exportaciones) y `1,200` (miles o
   coma decimal). Se decide una vez por archivo y para las dos columnas de
-  cuota: un export nuestro (se reconoce por su cabecera) es decimal; una
-  cabecera que nombra el formato manda; si no, precios con signo válidos y
-  ningún decimal → americano; decimales válidos y ningún signo → decimal;
-  ambos → esa línea se informa en vez de adivinar; ninguno → el formato de
-  cuota del usuario, como la caja de cuota (y `1,200`, coma decimal, como la
-  caja). Una celda que no es cuota no cuenta como pista.
-- Una cuota se valida ya redondeada a 3 decimales, como la guarda la base:
-  1.0004 se rechaza en el formulario o en el import, en vez de pasar y que
-  la base la rechace como 1.000 (lo que tiraba el import entero).
+  cuota: un export nuestro (se reconoce por su cabecera) es decimal, salvo
+  que alguien haya escrito a mano cuotas americanas en él; una cabecera que
+  nombra el formato manda; si no, precios con signo válidos y ningún
+  decimal → americano; decimales válidos y ningún signo → decimal; ambos →
+  esa línea se informa en vez de adivinar; ninguno → si hay algún `1,200`,
+  decimal (coma decimal, como la caja de cuota), y si no, el formato de
+  cuota del usuario. Solo cuenta como pista una cuota que se puede guardar
+  (`storableOdds`): una errata no inclina el archivo.
+- Una cuota se valida ya redondeada a 3 decimales, como la guarda la base
+  (`storableOdds`, en `lib/validate.ts`): 1.0004 se marca inválida en el
+  formulario y se rechaza en el import, en vez de pasar y que la base la
+  rechace como 1.000 (lo que tiraba el import entero).
 - La cola quita cada operación enviada por su `opId`, nunca por posición.
   Una operación que ya salió una vez queda marcada `sent` (guardado con la
   cola): haya respondido o no, puede estar en el servidor, así que nadie la

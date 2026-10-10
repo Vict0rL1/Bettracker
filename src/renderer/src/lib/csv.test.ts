@@ -364,6 +364,52 @@ describe('parseBetsCsv — odds in any format', () => {
     expect(errors[0]).toMatch(/Line 2: Odds must be greater than 1/)
   })
 
+  it('reads an export of ours edited by hand with American odds as the American it then holds', () => {
+    const header = 'date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note'
+    // Exported 1.909, then +150 typed in Excel (which drops the plus) and -110: both kinds, so 150 is reported.
+    const both = parseBetsCsv(`${header}\n2026-01-01,lost,10.00,1.909,,-10.00,,,,\n2026-01-02,won,10.00,150,,15.00,,,,\n2026-01-03,lost,11.00,-110,,-11.00,,,,\n`, 'american')
+    expect(both.rows.map((r) => r.odds)).toEqual([1.909, 1 + 100 / 110])
+    expect(both.errors[0]).toMatch(/Line 3: "150" could be American/)
+    // Only hand-typed American odds: 150 is +150.
+    expect(oddsOf(`${header}\n2026-01-02,won,10.00,150,,15.00,,,,\n2026-01-03,lost,11.00,-110,,-11.00,,,,\n`, 'decimal').odds).toEqual([2.5, 1 + 100 / 110])
+  })
+
+  it('reads a "1,200" and a whole number the same way when nothing else in the file says how', () => {
+    // A decimal-comma file with a whole longshot: both decimal, whatever the user's format.
+    expect(oddsOf('date,amount,odds\n2026-01-02,10,"1,909"\n2026-01-03,1490,150\n', 'american').odds).toEqual([1.909, 150])
+  })
+
+  it('takes a plus on a decimal written with a point, and reports a bare "+3" like "+50"', () => {
+    const { rows, errors } = parseBetsCsv('date,amount,odds\n2026-01-02,15,+2.50\n2026-01-03,20,+3.00\n2026-01-04,10,"+2,0"\n2026-01-05,9,+3\n', 'decimal')
+    expect(rows.map((r) => r.odds)).toEqual([2.5, 3, 2])
+    expect(errors).toEqual([expect.stringMatching(/Line 5: "\+3" is not a price/)])
+  })
+
+  it('reports a "1,200" it cannot place in a file with both kinds of odds', () => {
+    const { rows, errors } = parseBetsCsv('date,amount,odds\n2026-01-02,120,"1,200"\n2026-01-03,-11,-110\n2026-01-04,-10,1.91\n', 'american')
+    expect(rows.map((r) => r.odds)).toEqual([1 + 100 / 110, 1.91])
+    expect(errors[0]).toMatch(/Line 2: "1,200" could be American \(\+1200\) or decimal \(1\.2\)/)
+  })
+
+  it('rejects a signed cell that is no number, and reads an en dash as a minus', () => {
+    const r = parseBetsCsv('date,amount,odds\n2026-01-02,15,+abc\n2026-01-03,-11,\u2013110\n')
+    expect(r.rows.map((x) => x.odds)).toEqual([1 + 100 / 110])
+    expect(r.errors[0]).toMatch(/Line 2: "\+abc" is not a price/)
+  })
+
+  it('never reads a group that starts with 0 as thousands', () => {
+    const r = parseBetsCsv('date,amount,odds\n2026-01-02,15,"0,050"\n2026-01-03,-11,-110\n2026-01-04,15,"+0,150"\n')
+    expect(r.rows.map((x) => x.odds)).toEqual([1 + 100 / 110])
+    expect(r.skipped).toBe(2)
+  })
+
+  it('does not let a price that cannot be stored tip how the file reads', () => {
+    // 1500.5 is out of range and -300000 rounds to 1.000: neither counts as a clue.
+    const typo = parseBetsCsv('date,amount,odds\n2026-01-02,15,150\n2026-01-03,20,200\n2026-01-04,20,1500.5\n2026-01-05,1,-300000\n', 'american')
+    expect(typo.rows.map((r) => r.odds)).toEqual([2.5, 3])
+    expect(typo.skipped).toBe(2)
+  })
+
   it('rejects what is no price at all', () => {
     const { odds, errors, skipped } = (() => {
       const r = parseBetsCsv('date,amount,odds\n2026-04-01,15,+50\n2026-04-02,15,-1.5\n2026-04-03,15,abc\n2026-04-04,15,0/2\n2026-04-05,15,0.9\n2026-04-06,15,2.5\n')

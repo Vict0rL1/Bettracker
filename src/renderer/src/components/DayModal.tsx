@@ -6,7 +6,7 @@ import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { formatOdds, ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
 import { clvOf, round2, total as sumTotal } from '../lib/stats'
-import { MAX_AMOUNT, MAX_ODDS, suggestedAmount } from '../lib/validate'
+import { MAX_AMOUNT, storableOdds, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 
 export interface TagSuggestions {
@@ -176,8 +176,8 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
   const needsAmount = status === 'won' || status === 'lost'
   const amountValid = !needsAmount || (Number.isFinite(amount) && amount > 0 && amount <= MAX_AMOUNT)
   const stakeValid = parsedStake === null ? stakeOptional : Number.isFinite(parsedStake) && parsedStake >= 0 && parsedStake <= MAX_AMOUNT
-  const oddsValid = oddsStr.trim() === '' || (parsedOdds !== null && parsedOdds <= MAX_ODDS)
-  const closingValid = closingStr.trim() === '' || (parsedClosing !== null && parsedClosing <= MAX_ODDS)
+  const oddsValid = oddsStr.trim() === '' || (parsedOdds !== null && storableOdds(parsedOdds))
+  const closingValid = closingStr.trim() === '' || (parsedClosing !== null && storableOdds(parsedClosing))
   const canSave = amountValid && stakeValid && oddsValid && closingValid && !busy
 
   const signedAmount: number | null = status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
