@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput, type Settings, type SettingsPatch } from '../../../shared/types'
+import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput, type BetStatus, type Settings, type SettingsPatch } from '../../../shared/types'
 
 /**
  * Device-local persistence for offline support.
@@ -16,8 +16,13 @@ import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput
 
 export type PendingOp =
   | { opId: string; kind: 'add'; id: string; input: BetInput; queuedAt: string }
-  /** `editedAt` is when the user made the edit — the conflict key, see data/bets.ts. */
-  | { opId: string; kind: 'update'; id: string; input: BetInput; editedAt: string }
+  /**
+   * `editedAt` is when the user made the edit — the conflict key, see data/bets.ts.
+   * `legacy` marks an edit queued by a version from before migration 003: its
+   * input only has the fields that version knew, and it is sent the way that
+   * version sent it (see loadOutbox).
+   */
+  | { opId: string; kind: 'update'; id: string; input: BetInput; editedAt: string; legacy?: true }
   | { opId: string; kind: 'delete'; id: string }
   /** A CSV import: many rows in one op so it syncs as a few chunked requests. */
   | { opId: string; kind: 'bulk-add'; entries: { id: string; input: BetInput }[]; queuedAt: string }
@@ -87,16 +92,46 @@ export function loadCache(userId: string): Bet[] | null {
 export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJson(cacheKey(userId), bets)
 
 /**
- * The queue as stored. One written by a version from before the conflict
- * rule (before migration 003's app) has edits without `editedAt`; sent as
- * they are, the conflict check would compare against "undefined" and the
- * server would refuse the edit, losing it. They get the moment the queue is
- * loaded, which is what those versions did: they stamped an edit when it
- * synced and applied it unconditionally.
+ * The queue as stored. One written by a version from before migration 003
+ * has edits without `editedAt`, whose input only carries the fields that
+ * version knew (date, amount, note, and from 002 stake and tags). Sent as a
+ * full edit, it would blank odds, closing odds and whatever else it lacks,
+ * and its $0 for a pending bet (that version shows one as $0) would settle it
+ * as a push; sent with no edit time, the conflict check would refuse it. So
+ * it is marked `legacy` and stamped with the moment the queue is loaded, and
+ * goes out the way that version sent it: its own fields, no status (see
+ * updateBetLegacy), which the 003 trigger treats like any write from it.
  */
 export function loadOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
   const ops = readJson<PendingOp[]>(outboxKey(userId)) ?? []
-  return ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt } : op))
+  return ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true } : op))
+}
+
+const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
+  status === 'pending' ? amount === null : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 : amount === 0)
+
+/**
+ * A legacy edit (see loadOutbox) laid over the row it edits, the way the
+ * database applies it: only the fields it carries are written, and the
+ * status follows migration 003's trigger — a pending bet sent back as $0
+ * stays pending, a status the new amount no longer fits is worked out again.
+ */
+export function applyLegacyEdit(current: Bet, input: BetInput): Bet {
+  let amount = typeof input.amount === 'number' ? input.amount : current.amount
+  let status = current.status
+  if (status === 'pending' && amount === 0) amount = null
+  else if (!fitsStatus(status, amount)) status = amount === null ? 'pending' : statusForAmount(amount)
+  return {
+    ...current,
+    date: input.date,
+    amount,
+    status,
+    ...('note' in input ? { note: input.note ?? '' } : {}),
+    ...('stake' in input ? { stake: input.stake ?? null } : {}),
+    ...('sport' in input ? { sport: input.sport ?? '' } : {}),
+    ...('book' in input ? { book: input.book ?? '' } : {}),
+    ...('betType' in input ? { betType: input.betType ?? '' } : {})
+  }
 }
 export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => writeJson(outboxKey(userId), outbox)
 
@@ -182,7 +217,8 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
       for (const { id, input } of op.entries) map.set(id, optimisticRow(id, input, op.queuedAt))
     } else if (op.kind === 'update') {
       const current = map.get(op.id)
-      if (current) map.set(op.id, { ...current, ...fieldsFrom(op.input), updatedAt: op.editedAt })
+      if (current && op.legacy) map.set(op.id, { ...applyLegacyEdit(current, op.input), updatedAt: op.editedAt })
+      else if (current) map.set(op.id, { ...current, ...fieldsFrom(op.input), updatedAt: op.editedAt })
     } else {
       map.delete(op.id)
     }
@@ -208,7 +244,8 @@ export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp): PendingO
     if (i >= 0) {
       const next = [...outbox]
       const prev = next[i] as Extract<PendingOp, { kind: 'add' | 'update' }>
-      next[i] = prev.kind === 'add' ? { ...prev, input: op.input } : { ...prev, input: op.input, editedAt: op.editedAt }
+      // A legacy edit overtaken by a full one is a full edit from then on.
+      next[i] = prev.kind === 'add' ? { ...prev, input: op.input } : { ...prev, input: op.input, editedAt: op.editedAt, legacy: undefined }
       return next
     }
     return [...outbox, op]

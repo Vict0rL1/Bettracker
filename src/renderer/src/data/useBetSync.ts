@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Bet, BetInput } from '../../../shared/types'
 import { normalizeInput } from '../lib/validate'
-import { addBet, addBets, deleteBet, getBets, subscribeToBets, updateBet } from './bets'
+import { addBet, addBets, deleteBet, getBets, subscribeToBets, updateBet, updateBetLegacy } from './bets'
 import { drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { isNetworkError } from './errors'
 import {
@@ -43,7 +43,7 @@ const REALTIME_DEBOUNCE_MS = 400
 /** One queued op, sent. Resolves with the row the server returned, when there is one. */
 async function sendOp(op: PendingOp): Promise<Bet | null> {
   if (op.kind === 'add') return addBet(op.input, op.id)
-  if (op.kind === 'update') return updateBet(op.id, op.input, op.editedAt)
+  if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
   if (op.kind === 'bulk-add') await addBets(op.entries)
   else await deleteBet(op.id)
   return null

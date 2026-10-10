@@ -119,6 +119,10 @@ const MOCK_SERVER = `
     return { data: null, error: { message: 'e2e harness: settings ' + q.action + ' is not modelled', code: 'E2E' } }
   }
   function answer(q) {
+    // Postgres refuses a conflict check against something that is no time (an edit with no editedAt).
+    if (q.lteSet && (typeof q.lte !== 'string' || isNaN(Date.parse(q.lte)))) {
+      return { data: null, error: { message: 'invalid input syntax for type timestamp with time zone: "' + q.lte + '"', code: '22007' } }
+    }
     if (localStorage.getItem('e2e:down') === '1') return { data: null, error: { message: 'TypeError: Failed to fetch', code: '' } }
     if (q.action !== 'select') localStorage.setItem('e2e:writes', String(Number(localStorage.getItem('e2e:writes') || 0) + 1))
     if (q.table === 'user_settings') return settings(q)
@@ -158,7 +162,7 @@ const MOCK_SERVER = `
     const chain = {
       select() { return chain }, order() { return chain }, single() { return chain }, maybeSingle() { return chain },
       eq(c, v) { q.eq[c] = v; return chain },
-      lte(c, v) { q.lte = v; return chain },
+      lte(c, v) { q.lte = v; q.lteSet = true; return chain },
       insert(p) { q.action = 'insert'; q.payload = p; return chain },
       update(p) { q.action = 'update'; q.payload = p; return chain },
       upsert(p) { q.action = 'upsert'; q.payload = p; return chain },
@@ -182,7 +186,7 @@ const MOCK_SERVER = `
 })()
 `
 
-/** A seed bet as the database row it would be (snake_case, no status: the app derives it). */
+/** A seed bet as the database row it would be (snake_case; with no status the app derives it). */
 const toRow = (e: SeedEntry) => ({
   id: e.id,
   user_id: USER.id,
@@ -194,7 +198,11 @@ const toRow = (e: SeedEntry) => ({
   book: e.book,
   bet_type: e.betType,
   created_at: e.createdAt,
-  updated_at: e.updatedAt
+  updated_at: e.updatedAt,
+  ...(e.odds !== undefined ? { odds: e.odds } : {}),
+  ...(e.closingOdds !== undefined ? { closing_odds: e.closingOdds } : {}),
+  // A seed with a status is a migrated row: pending has no amount.
+  ...(e.status ? { status: e.status, amount: e.status === 'pending' ? null : e.amount } : {})
 })
 
 export interface BootOptions {

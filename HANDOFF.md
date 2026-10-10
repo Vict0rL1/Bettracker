@@ -74,20 +74,26 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
   edición lleva `closing_odds`, de la 004; los borrados sí pasan), pero ya
   no tira esas operaciones: las deja en la cola del dispositivo, como sin
   conexión, con la insignia "Falta actualizar · n en cola" y un aviso (una
-  vez, no en cada reintento), y las envía solas en cuanto corren las
+  vez por cola, la de apuestas y la de ajustes, no en cada reintento), y
+  las envía solas en cuanto corren las
   migraciones (reintenta cada 20 s, al volver la conexión y al volver a la
   app). Un ajuste cambiado entretanto espera igual: el diálogo de ajustes lo
   dice y la insignia muestra "Falta actualizar". Mientras tanto, no cerrar
   sesión en ese dispositivo: cerrar sesión borra su cola.
-- **Lo que un dispositivo tenga en cola al actualizarse se envía igual.**
-  La versión antigua guardaba las ediciones sin hora de edición; al cargar
-  esa cola, la versión nueva les pone la hora de carga (lo que hacía la
-  antigua: sellaba al sincronizar y aplicaba sin condición).
+- **Lo que un dispositivo tenga en cola al actualizarse se envía igual que
+  lo habría enviado la versión antigua.** Esa versión guardaba las ediciones
+  sin hora de edición y solo con los campos que conocía. Al cargar esa cola,
+  la versión nueva las marca `legacy`, les pone la hora de carga (ella
+  sellaba al sincronizar) y las envía solo con esos campos y sin `status`
+  (`updateBetLegacy`): no borra cuotas, cuota de cierre ni nada que esa
+  versión no conocía, y el trigger de la 003 calcula el estado como para
+  cualquier escritura suya.
 - **Mientras convivan versiones**, una versión antigua ve una apuesta
   pendiente (creada desde la nueva) como $0. Si la edita escribiendo un
-  importe, queda resuelta con ese importe; si solo cambia otra cosa (la
-  nota), sigue pendiente. Por eso, actualizar todos los dispositivos
-  pronto.
+  importe distinto de 0, queda resuelta con ese importe; si deja el $0 (por
+  ejemplo, solo cambia la nota), sigue pendiente, así que un push de una
+  pendiente solo se puede registrar desde una versión actualizada. Por eso,
+  actualizar todos los dispositivos pronto.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
 
@@ -95,10 +101,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 242 tests unitarios (vitest)
+npm test            # 247 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 38 comprobaciones Playwright, sin backend
+npm run test:e2e    # 39 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -265,8 +271,9 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
 - Una operación que la base rechaza porque le falta una migración se queda
-  en la cola (como sin conexión) en vez de descartarse; el aviso sale una
-  vez por episodio (hasta que una petición pasa o la cola se vacía), no en
+  en la cola (como sin conexión) en vez de descartarse; cada cola (apuestas
+  y ajustes) da el aviso una vez por episodio (hasta que una petición pasa o
+  la cola se vacía), no en
   cada reintento. `data/drain.ts` decide qué sale de la cola y qué se queda,
   qué muestra la insignia y cuándo repetir el aviso; los hooks solo guardan
   el estado.
@@ -302,7 +309,7 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       38 comprobaciones
+e2e/*.spec.ts                       39 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

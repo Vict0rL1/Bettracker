@@ -27,7 +27,7 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { addBet, getBets, updateBet } from './bets'
+import { addBet, getBets, updateBet, updateBetLegacy } from './bets'
 import { MigrationNeededError } from './errors'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
@@ -56,6 +56,28 @@ describe('updateBet — last write wins by edit time', () => {
 
   it('validates before touching the network', async () => {
     await expect(updateBet('a', { date: 'nope', amount: 1 }, 'E')).rejects.toThrow(/calendar date/)
+    expect(state.calls).toHaveLength(0)
+  })
+})
+
+describe('updateBetLegacy — an edit queued by a version from before 003', () => {
+  it('sends only the fields that version knew, never status, odds or closing odds', async () => {
+    state.result = { data: { id: 'a', date: '2026-03-01', amount: null, status: 'pending', odds: '2.1', note: 'fixed', created_at: 'c', updated_at: 'L' }, error: null, count: null }
+    const out = await updateBetLegacy('a', { date: '2026-03-01', amount: 0, note: 'fixed' }, 'L')
+    expect(call('update')?.args[0]).toEqual({ date: '2026-03-01', amount: 0, note: 'fixed', updated_at: 'L' })
+    expect(call('lte')?.args).toEqual(['updated_at', 'L'])
+    expect(out).toMatchObject({ status: 'pending', odds: 2.1 })
+  })
+
+  it('carries stake and tags when that version had them', async () => {
+    state.result = { data: null, error: null, count: null }
+    await updateBetLegacy('a', { date: '2026-03-01', amount: -10, stake: 10, note: '', sport: 'NBA', book: 'DK', betType: 'Spread' }, 'L')
+    expect(call('update')?.args[0]).toEqual({ date: '2026-03-01', amount: -10, stake: 10, note: '', sport: 'NBA', book: 'DK', bet_type: 'Spread', updated_at: 'L' })
+  })
+
+  it('validates before touching the network', async () => {
+    await expect(updateBetLegacy('a', { date: 'nope', amount: 1 }, 'L')).rejects.toThrow(/calendar date/)
+    await expect(updateBetLegacy('a', { date: '2026-03-01', amount: Number.NaN }, 'L')).rejects.toThrow(/finite/)
     expect(state.calls).toHaveLength(0)
   })
 })
