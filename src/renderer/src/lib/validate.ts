@@ -31,12 +31,28 @@ function cleanMoney(value: number | null | undefined, what: string, min: number)
   return round2(value)
 }
 
+/** A price as the database stores it: 3 decimals. */
+const roundOdds = (value: number): number => Math.round(value * 1000) / 1000
+
+/**
+ * True when a decimal price survives being stored: above 1 and within range
+ * once rounded to the 3 decimals the database keeps. The forms and the CSV
+ * import use it so they never offer the writer a price it would refuse.
+ */
+export const storableOdds = (value: number): boolean => {
+  const rounded = roundOdds(value)
+  return rounded > 1 && rounded <= MAX_ODDS
+}
+
 function cleanOdds(value: number | null | undefined, what: string): number | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
-  if (value <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
-  if (value > MAX_ODDS) throw new Error(`${what} are out of range`)
-  return Math.round(value * 1000) / 1000
+  // Checked after rounding to what the database stores: 1.0004 would
+  // otherwise pass here and be refused there as 1.000.
+  const rounded = roundOdds(value)
+  if (rounded <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
+  if (rounded > MAX_ODDS) throw new Error(`${what} are out of range`)
+  return rounded
 }
 
 export interface CleanBet {
