@@ -74,20 +74,26 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
   edición lleva `closing_odds`, de la 004; los borrados sí pasan), pero ya
   no tira esas operaciones: las deja en la cola del dispositivo, como sin
   conexión, con la insignia "Falta actualizar · n en cola" y un aviso (una
-  vez, no en cada reintento), y las envía solas en cuanto corren las
+  vez por cola, la de apuestas y la de ajustes, no en cada reintento), y
+  las envía solas en cuanto corren las
   migraciones (reintenta cada 20 s, al volver la conexión y al volver a la
   app). Un ajuste cambiado entretanto espera igual: el diálogo de ajustes lo
   dice y la insignia muestra "Falta actualizar". Mientras tanto, no cerrar
   sesión en ese dispositivo: cerrar sesión borra su cola.
-- **Lo que un dispositivo tenga en cola al actualizarse se envía igual.**
-  La versión antigua guardaba las ediciones sin hora de edición; al cargar
-  esa cola, la versión nueva les pone la hora de carga (lo que hacía la
-  antigua: sellaba al sincronizar y aplicaba sin condición).
+- **Lo que un dispositivo tenga en cola al actualizarse se envía igual que
+  lo habría enviado la versión antigua.** Esa versión guardaba las ediciones
+  sin hora de edición y solo con los campos que conocía. Al cargar esa cola,
+  la versión nueva las marca `legacy`, les pone la hora de carga (ella
+  sellaba al sincronizar) y las envía solo con esos campos y sin `status`
+  (`updateBetLegacy`): no borra cuotas, cuota de cierre ni nada que esa
+  versión no conocía, y el trigger de la 003 calcula el estado como para
+  cualquier escritura suya.
 - **Mientras convivan versiones**, una versión antigua ve una apuesta
   pendiente (creada desde la nueva) como $0. Si la edita escribiendo un
-  importe, queda resuelta con ese importe; si solo cambia otra cosa (la
-  nota), sigue pendiente. Por eso, actualizar todos los dispositivos
-  pronto.
+  importe distinto de 0, queda resuelta con ese importe; si deja el $0 (por
+  ejemplo, solo cambia la nota), sigue pendiente, así que un push de una
+  pendiente solo se puede registrar desde una versión actualizada. Por eso,
+  actualizar todos los dispositivos pronto.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
 
@@ -95,10 +101,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 290 tests unitarios (vitest)
+npm test            # 306 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 41 comprobaciones Playwright, sin backend
+npm run test:e2e    # 42 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -288,17 +294,30 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   cola): haya respondido o no, puede estar en el servidor, así que nadie la
   reescribe ni la cancela; una edición o un borrado de esa apuesta hechos
   después se encolan detrás, y una edición se funde solo en la última
-  operación sin enviar de esa apuesta. Si el servidor rechaza un alta, se
-  van con ella las ediciones y borrados encolados para esa apuesta (que
-  solo podrían fallar, con un falso aviso de conflicto).
+  operación sin enviar de esa apuesta. La cabeza de la cola al arrancar
+  cuenta como enviada: una versión anterior no guardaba `sent` y su cola es
+  idéntica (cuesta como mucho una petición de más).
+- Si el servidor rechaza para siempre un alta en su primer intento (y no
+  como duplicada), la apuesta no llegó a existir: se van con ella las
+  ediciones encoladas para esa apuesta (solo podrían fallar, con un falso
+  aviso de conflicto). Los borrados y un Deshacer detrás se quedan (borrar
+  una fila que no existe no hace nada; el Deshacer es otra decisión del
+  usuario). Tras un intento anterior (pudo llegar) o en una importación
+  (pudo llegar un trozo) solo sale la operación rechazada. Si en su primer
+  intento la base la rechaza por falta de migración, se desmarca `sent`:
+  no se aplicó, así que borrarla aún la cancela.
+- Un `update` rechazado por la regla de conflicto no avisa de "edición más
+  reciente en otro dispositivo" si queda detrás otra operación de este
+  dispositivo para esa apuesta: esa tiene la última palabra.
 - Un alta lleva como `updated_at` la hora de su contenido en el dispositivo
   (la del registro o la de la última edición fundida en ella), no el
   `now()` del servidor: así una edición hecha mientras el alta viajaba no
   parece más antigua, y la regla de conflicto compara siempre horas de
   dispositivo.
 - Una operación que la base rechaza porque le falta una migración se queda
-  en la cola (como sin conexión) en vez de descartarse; el aviso sale una
-  vez por episodio (hasta que una petición pasa o la cola se vacía), no en
+  en la cola (como sin conexión) en vez de descartarse; cada cola (apuestas
+  y ajustes) da el aviso una vez por episodio (hasta que una petición pasa o
+  la cola se vacía), no en
   cada reintento. `data/drain.ts` decide qué sale de la cola y qué se queda,
   qué muestra la insignia y cuándo repetir el aviso; los hooks solo guardan
   el estado.

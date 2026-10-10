@@ -37,7 +37,7 @@ create table if not exists public.entries (
   constraint entries_amount_matches_status check (
     (status = 'pending' and amount is null)
     or (status in ('won', 'lost') and amount is not null)
-    or (status in ('push', 'void') and amount = 0)
+    or (status in ('push', 'void') and amount is not null and amount = 0)
   )
   -- Several bets can share a date; each row is one bet, and a day's total is
   -- the sum of its settled rows.
@@ -112,7 +112,7 @@ alter table public.entries drop constraint if exists entries_amount_matches_stat
 alter table public.entries add  constraint entries_amount_matches_status check (
   (status = 'pending' and amount is null)
   or (status in ('won', 'lost') and amount is not null)
-  or (status in ('push', 'void') and amount = 0)
+  or (status in ('push', 'void') and amount is not null and amount = 0)
 );
 alter table public.entries add column if not exists closing_odds numeric(8, 3);
 alter table public.entries drop constraint if exists entries_closing_odds_gt_one;

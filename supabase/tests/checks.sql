@@ -75,6 +75,20 @@ do $$ begin
   assert (select status from public.entries where note = 'still open') = 'pending', 'pending kept on a stake edit';
 end $$;
 
+-- 4b. The current app settling a pending bet as a push or a void at $0
+-- (an explicit status) is not mistaken for an older app's $0.
+insert into public.entries (id, user_id, date, amount, status, note) values
+  ('30000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000001', '2026-08-06', null, 'pending', 'to push'),
+  ('30000000-0000-0000-0000-000000000006', '00000000-0000-0000-0000-000000000001', '2026-08-06', null, 'pending', 'to void');
+update public.entries set status = 'push', amount = 0 where note = 'to push';
+update public.entries set status = 'void', amount = 0 where note = 'to void';
+do $$ begin
+  assert (select status from public.entries where note = 'to push') = 'push', 'pending settled as push';
+  assert (select amount from public.entries where note = 'to push') = 0, 'push keeps its $0';
+  assert (select status from public.entries where note = 'to void') = 'void', 'pending settled as void';
+  assert (select amount from public.entries where note = 'to void') = 0, 'void keeps its $0';
+end $$;
+
 -- 5. An older app edits a pending bet it reads as $0. Sending that $0 back
 -- (a note fix) keeps it pending; typing a result settles it as that result.
 update public.entries set amount = 0, note = 'still open' where note = 'still open';
@@ -97,6 +111,11 @@ do $$ begin
   begin
     insert into public.entries (user_id, date, amount, stake) values ('00000000-0000-0000-0000-000000000001', '2026-08-08', 5, -1);
     raise exception 'negative stake was accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.entries (user_id, date, amount, status) values ('00000000-0000-0000-0000-000000000001', '2026-08-08', null, 'push');
+    raise exception 'a push with no amount was accepted';
   exception when check_violation then null;
   end;
 end $$;
