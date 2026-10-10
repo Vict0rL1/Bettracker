@@ -1,8 +1,9 @@
 # BetTracker · Handoff
 
 Estado a fecha 2026-10-09. Este repositorio contiene solo BetTracker: su
-código, sus migraciones, sus tests y su CI. Cada commit pasa typecheck,
-tests unitarios, build y la suite e2e.
+código, sus migraciones, sus tests y su CI. El CI corre aquí desde 2084828
+(antes, en el repositorio de origen) y todo PR tiene que pasarlo entero:
+typecheck, tests unitarios, build, esquema SQL y la suite e2e.
 
 ## Origen
 
@@ -38,7 +39,14 @@ Las fijó el dueño del proyecto y siguen vigentes:
 
 ## Qué hay que hacer a mano
 
-Por este orden (ver "Orden de despliegue seguro" justo debajo):
+Antes que nada, **las reglas de `main` en GitHub** (Settings → Rules →
+Rulesets): exigen los checks `check`, `e2e (celular)`, `e2e (celular-pequeno)`,
+`e2e (escritorio)` y `deploy-preview / Cloudflare Pages`, que son de otro
+proyecto; el CI de este repositorio no los produce, así que ningún PR puede
+fusionarse. Hay que cambiarlos por los de este CI: `Secretos`,
+`Tests y build`, `Esquema SQL` y `e2e con Playwright`.
+
+Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 1. **Migraciones en Supabase**, en el SQL editor del proyecto:
    `supabase/migrations/002_stake_and_tags.sql` → `003_odds_and_status.sql`
@@ -218,7 +226,7 @@ Playwright llegara a `localhost`; en CI no.
    (funciona offline). Una apuesta restaurada conserva su id pero recibe
    una hora de registro nueva.
 9. **Límite mensual de pérdidas** (`lib/lossLimit.ts`, `LossBanner.tsx`):
-   aviso ámbar al 80 % y rojo al superarlo; nunca bloquea; se puede cerrar
+   aviso ámbar al 80 % y rojo al alcanzarlo; nunca bloquea; se puede cerrar
    por mes y nivel.
 
 **Ajustes** viven en `user_settings` (migración 004): `odds_format`,
