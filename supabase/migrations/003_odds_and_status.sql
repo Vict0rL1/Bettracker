@@ -94,7 +94,7 @@ alter table public.entries add  constraint entries_amount_matches_status
   check (
     (status = 'pending' and amount is null)
     or (status in ('won', 'lost') and amount is not null)
-    or (status in ('push', 'void') and amount = 0)
+    or (status in ('push', 'void') and amount is not null and amount = 0)
   );
 
 create index if not exists entries_user_pending_idx

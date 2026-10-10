@@ -228,7 +228,7 @@ describe('applyOutbox', () => {
 })
 
 describe('loadOutbox — queues written by older versions', () => {
-  it('gives an edit queued before the conflict rule the time the queue is loaded, so it is still sent', () => {
+  it('marks an edit queued before migration 003 as legacy, with the time the queue is loaded', () => {
     // Exactly what the version deployed before migration 003 stored.
     const legacy = [
       { opId: 'o1', kind: 'add', id: 'a', input: { date: '2026-08-01', amount: 20, note: 'x' }, queuedAt: '2026-08-01T10:00:00.000Z' },
@@ -237,14 +237,51 @@ describe('loadOutbox — queues written by older versions', () => {
     ]
     localStorage.setItem('bettracker:outbox:legacy', JSON.stringify(legacy))
     const ops = loadOutbox('legacy', '2026-10-09T12:00:00.000Z')
-    expect(ops[0]).toEqual(legacy[0])
-    expect(ops[1]).toEqual({ ...legacy[1], editedAt: '2026-10-09T12:00:00.000Z' })
+    expect(ops[0]).toEqual({ ...legacy[0], sent: true })
+    expect(ops[1]).toEqual({ ...legacy[1], editedAt: '2026-10-09T12:00:00.000Z', legacy: true })
     expect(ops[2]).toEqual(legacy[2])
   })
 
   it('leaves an edit that has its time alone', () => {
-    saveOutbox('u-now', [update('a', 5, 'T1')])
-    expect(loadOutbox('u-now', 'LATER')).toEqual([update('a', 5, 'T1')])
+    saveOutbox('u-now', [del('x'), update('a', 5, 'T1')])
+    expect(loadOutbox('u-now', 'LATER')[1]).toEqual(update('a', 5, 'T1'))
+  })
+
+  it('takes the head of the queue as sent: it may have gone out with its answer lost', () => {
+    // That version kept no `sent`: the add at the head may already be on the server.
+    saveOutbox('u-lost', [add('a', { amount: 1 }), add('b', { amount: 2 })])
+    const ops = loadOutbox('u-lost')
+    expect(ops.map((o) => o.sent)).toEqual([true, undefined])
+    // So deleting it sends a delete rather than cancelling the add, and an
+    // edit of it goes out after it rather than into it.
+    expect(enqueueOp(ops, del('a')).map((o) => o.kind)).toEqual(['add', 'add', 'delete'])
+    expect(enqueueOp(ops, update('a', 9, 'T9')).map((o) => o.kind)).toEqual(['add', 'add', 'update'])
+    // The ops behind it never went out: those still fold and cancel.
+    expect(enqueueOp(ops, del('b')).map((o) => o.opId)).toEqual([ops[0].opId])
+  })
+
+  it('shows a legacy edit as the database applies it: only its fields, status by the 003 rule', () => {
+    const pending = bet({ id: 'p', status: 'pending', stake: 25, odds: 2.1, closingOdds: 2, sport: 'NBA' })
+    const won = bet({ id: 'w', amount: 15, stake: 10, odds: 2.5, closingOdds: 2.4, sport: 'NFL' })
+    const view = applyOutbox(
+      [pending, won],
+      [
+        // A note fixed on a bet that version shows as $0: still pending, odds and tags kept.
+        { opId: 'l1', kind: 'update', id: 'p', input: { date: pending.date, amount: 0, note: 'fixed' }, editedAt: 'L', legacy: true },
+        // A win edited into a loss, with stake (a 002-era version): lost, odds kept.
+        { opId: 'l2', kind: 'update', id: 'w', input: { date: won.date, amount: -10, stake: 10, note: '' }, editedAt: 'L', legacy: true }
+      ]
+    )
+    expect(view.find((b) => b.id === 'p')).toMatchObject({ status: 'pending', amount: null, odds: 2.1, closingOdds: 2, stake: 25, sport: 'NBA', note: 'fixed' })
+    expect(view.find((b) => b.id === 'w')).toMatchObject({ status: 'lost', amount: -10, odds: 2.5, closingOdds: 2.4, sport: 'NFL' })
+  })
+
+  it('makes a legacy edit a full edit once a new edit is folded into it', () => {
+    const legacyOp: PendingOp = { opId: 'l1', kind: 'update', id: 'a', input: { date: '2026-01-01', amount: 0, note: 'x' }, editedAt: 'L', legacy: true }
+    const out = enqueueOp([legacyOp], update('a', 7, 'T9'))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'update', input: { amount: 7 }, editedAt: 'T9' })
+    expect((out[0] as { legacy?: true }).legacy).toBeUndefined()
   })
 })
 
