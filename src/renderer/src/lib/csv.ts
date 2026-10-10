@@ -1,6 +1,6 @@
 import type { Bet, BetInput, BetStatus, OddsFormat } from '../../../shared/types'
 import { fromAmerican, fromFractional } from './odds'
-import { isValidDate, normalizeInput } from './validate'
+import { isValidDate, normalizeInput, storableOdds } from './validate'
 
 const COLUMNS = ['date', 'status', 'stake', 'odds', 'closing_odds', 'amount', 'sport', 'book', 'bet_type', 'note'] as const
 type Column = (typeof COLUMNS)[number]
@@ -222,7 +222,8 @@ function parseMoney(raw: string): number | null {
  * Odds cells. Each is read into a shape before anything is decided:
  *  - a fraction ("3/2", "10:11", "100-1");
  *  - a signed price ("+150", "-110", "-110.00", "+2,500"): American, or a
- *    decimal written with a plus when it can't be American ("+2.5");
+ *    decimal written with a plus and a decimal point when it can't be
+ *    American ("+2.5", "+3.00");
  *  - a plain number: decimal ("1.91", "2,50", "3", "2."), except when its
  *    value is a whole number from 100 up ("150", "150.00"), which is
  *    ambiguous: +150 whose plus sign a spreadsheet dropped, or a 150.0
@@ -234,7 +235,11 @@ function parseMoney(raw: string): number | null {
 type OddsShape =
   | { kind: 'blank' }
   | { kind: 'bad' }
-  /** Says its own format; `value` is null when it is no valid price. */
+  /**
+   * Says its own format; `value` is null when it is no valid price.
+   * `evidence` is the format it shows, counted only when the price can be
+   * stored: a typo must not tip how the rest of the file reads.
+   */
   | { kind: 'price'; value: number | null; evidence: 'american' | 'decimal' | null }
   | { kind: 'whole'; n: number }
   | { kind: 'grouped'; thousands: number; decimalComma: number }
@@ -244,10 +249,20 @@ const FRACTION = /^\d+(\.\d+)?\s*[/:-]\s*\d+(\.\d+)?$/
 /** The unsigned part of a number as written: "1.91", "2,50", "2.", "1,234.5". NaN when it is none. */
 function unsignedValue(t: string): number {
   if (/^\d+(\.\d*)?$/.test(t)) return Number(t)
-  if (/^\d{1,3}(,\d{3})+(\.\d*)?$/.test(t)) return Number(t.replace(/,/g, ''))
+  if (GROUPED.test(t)) return Number(t.replace(/,/g, ''))
   if (/^\d+,\d+$/.test(t)) return Number(t.replace(',', '.'))
   return NaN
 }
+
+/** Thousands groups: "1,200", "12,500", "1,234.5" (never "0,150", which can only be a decimal comma). */
+const GROUPED = /^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$/
+
+/** A shape that says its format, with that format counted as evidence only when the price can be stored. */
+const price = (value: number | null, format: 'american' | 'decimal'): OddsShape => ({
+  kind: 'price',
+  value,
+  evidence: value !== null && storableOdds(value) ? format : null
+})
 
 function oddsShape(raw: string): OddsShape {
   // Sportsbook pages write minus as U+2212 (or an en dash); a copy keeps it.
@@ -261,22 +276,21 @@ function oddsShape(raw: string): OddsShape {
     // With a sign there is no doubt: "+2,500" is grouped, "+2,5" a decimal comma.
     const n = unsignedValue(body)
     if (!Number.isFinite(n)) return { kind: 'bad' }
-    if (n >= 100) {
-      const value = fromAmerican(sign === '-' ? -n : n)
-      return { kind: 'price', value, evidence: value === null ? null : 'american' }
-    }
-    // No American price lies between -100 and +100: "+2.5" can only be decimal.
-    if (sign === '+' && !Number.isInteger(n) && n > 1) return { kind: 'price', value: n, evidence: 'decimal' }
+    if (n >= 100) return price(fromAmerican(sign === '-' ? -n : n), 'american')
+    // No American price lies between -100 and +100, so "+2.5" or "+3.00",
+    // written with a decimal point, can only be decimal. A bare "+3" or "+50"
+    // looks like a mistyped American price and is reported instead.
+    if (sign === '+' && /[.,]/.test(body) && n > 1) return price(n, 'decimal')
     return { kind: 'price', value: null, evidence: null }
   }
 
-  if (/^\d{1,3},\d{3}$/.test(body)) {
+  if (/^[1-9]\d{0,2},\d{3}$/.test(body)) {
     return { kind: 'grouped', thousands: Number(body.replace(',', '')), decimalComma: Number(body.replace(',', '.')) }
   }
   const n = unsignedValue(body)
   if (!Number.isFinite(n)) return { kind: 'bad' }
   if (Number.isInteger(n) && n >= 100) return { kind: 'whole', n }
-  return { kind: 'price', value: n > 1 ? n : null, evidence: n > 1 ? 'decimal' : null }
+  return price(n > 1 ? n : null, 'decimal')
 }
 
 /**
@@ -300,20 +314,27 @@ const OWN_EXPORT_HEADERS = new Set([
 ])
 
 /**
- * Settle the ambiguous odds of a file, once for both odds columns: one of
- * this app's own exports is decimal; a header that names a format decides;
- * otherwise valid signed prices and no decimals mean American, valid decimals
- * and no signed prices mean decimal, both mean the file mixes formats.
+ * Settle the ambiguous odds of a file, once for both odds columns:
+ *  - one of this app's own exports is decimal (they never write a sign, so
+ *    a signed price in one means it was edited by hand: read on as below);
+ *  - a header that names a format decides;
+ *  - otherwise valid signed prices and no decimals mean American, valid
+ *    decimals and no signed prices mean decimal, both mean the file mixes
+ *    formats;
+ *  - with nothing to go by, a "1,200" in the file makes it decimal (that is
+ *    how the odds box reads one), so its whole numbers read the same way;
+ *    a file without one is 'unknown' and follows the user's format.
  */
 function oddsReading(header: readonly string[], oddsHeaders: readonly (string | undefined)[], shapes: readonly OddsShape[]): OddsReading {
-  if (OWN_EXPORT_HEADERS.has(header.join(','))) return 'decimal'
-  const named = oddsHeaders.map(headerFormat).find((f) => f !== null)
-  if (named) return named
   const american = shapes.some((x) => x.kind === 'price' && x.evidence === 'american')
   const decimal = shapes.some((x) => x.kind === 'price' && x.evidence === 'decimal')
+  if (OWN_EXPORT_HEADERS.has(header.join(',')) && !american) return 'decimal'
+  const named = oddsHeaders.map(headerFormat).find((f) => f !== null)
+  if (named) return named
   if (american && decimal) return null
   if (american) return 'american'
   if (decimal) return 'decimal'
+  if (shapes.some((x) => x.kind === 'grouped')) return 'decimal'
   return 'unknown'
 }
 
@@ -347,8 +368,8 @@ function readOdds(raw: string, shape: OddsShape, reading: OddsReading, fallback:
     }
     case 'grouped': {
       if (reading === null) return mixed(`+${shape.thousands}`, String(shape.decimalComma))
-      if (reading === 'american') return { ok: true, value: fromAmerican(shape.thousands) as number }
-      return shape.decimalComma > 1 ? { ok: true, value: shape.decimalComma } : notAPrice
+      const value = reading === 'american' ? fromAmerican(shape.thousands) : shape.decimalComma
+      return value !== null && value > 1 ? { ok: true, value } : notAPrice
     }
   }
 }

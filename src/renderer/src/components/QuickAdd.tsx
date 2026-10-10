@@ -4,7 +4,7 @@ import { humanDate, todayStr } from '../lib/dates'
 import { useLang } from '../lib/i18n'
 import { ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
 import { quickDefaults } from '../lib/quick'
-import { MAX_AMOUNT, round2, suggestedAmount } from '../lib/validate'
+import { MAX_AMOUNT, round2, storableOdds, suggestedAmount } from '../lib/validate'
 import { toneOf, type TagSuggestions } from './DayModal'
 import { CloseIcon } from './icons'
 
@@ -58,7 +58,7 @@ export default function QuickAdd({ bets, settings, suggestions, onAdd, onClose }
   const stake = stakeStr.trim() === '' ? null : parseFloat(stakeStr)
   const stakeValid = stake !== null && Number.isFinite(stake) && stake >= 0 && stake <= MAX_AMOUNT
   const odds = parseOdds(oddsStr, settings.oddsFormat)
-  const oddsValid = oddsStr.trim() === '' || odds !== null
+  const oddsValid = oddsStr.trim() === '' || (odds !== null && storableOdds(odds))
   const profit = parseFloat(profitStr)
   const profitValid = Number.isFinite(profit) && profit > 0 && profit <= MAX_AMOUNT
 
