@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, reload } from './harness'
+import { boot, entry, reload, SEED } from './harness'
 
 const HINT = 'Your database is behind the app'
 
@@ -65,6 +65,33 @@ test.describe('a database behind the app', () => {
     expect(await toast.count()).toBe(0)
   })
 
+  test('says so again once the queue has emptied and a new change is held back', async ({ page }) => {
+    await boot(page, { backend: 'behind' })
+    const badge = page.locator('.sync-badge')
+    const toast = page.locator('.toast')
+    const rows = page.locator('.history-card tbody tr')
+    const logLoss = async () => {
+      await page.keyboard.press('t')
+      const sheet = page.locator('.quick-modal')
+      await sheet.locator('.field input').first().fill('20')
+      await sheet.locator('.seg-btn.loss').click()
+      await expect(sheet).toHaveCount(0)
+    }
+    await logLoss()
+    await expect(badge).toHaveText('Update needed · 1 queued')
+    await expect(toast).toHaveCount(0, { timeout: 10_000 })
+    // Deleting the bet that never reached the server empties the queue: the episode is over.
+    const del = rows.first().locator('.td-actions .btn-icon.danger')
+    await del.click()
+    await del.click()
+    await expect(badge).toHaveText('Synced')
+    await expect(toast).toHaveCount(0, { timeout: 10_000 })
+    // The next change held back says why again.
+    await logLoss()
+    await expect(badge).toHaveText('Update needed · 1 queued')
+    await expect(toast).toContainText(HINT)
+  })
+
   test('reads as behind, not offline, once the connection is back and the database answers', async ({ page }) => {
     await boot(page, { backend: 'behind' })
     const badge = page.locator('.sync-badge')
@@ -106,12 +133,22 @@ test.describe('a database behind the app', () => {
   })
 })
 
-test('an edit queued by the version deployed before this one still reaches the server after the upgrade', async ({ page }) => {
-  // That version stored edits with no edit time (it had no conflict rule).
-  const legacy = [{ opId: 'legacy-1', kind: 'update', id: 'c', input: { date: '2026-08-03', amount: -60, note: 'edited offline' } }]
-  await boot(page, { backend: 'live', outbox: legacy })
+test('an edit queued by the version deployed before this one reaches the server after the upgrade, as that version sent it', async ({ page }) => {
+  // That version stored edits with no edit time and only the fields it knew,
+  // and showed a pending bet as $0. Here it fixed two notes while offline.
+  const legacy = [
+    { opId: 'legacy-1', kind: 'update', id: 'c', input: { date: '2026-08-03', amount: -60, note: 'edited offline' } },
+    { opId: 'legacy-2', kind: 'update', id: 'p', input: { date: '2026-08-04', amount: 0, note: 'note fixed' } }
+  ]
+  const pending = entry({ id: 'p', date: '2026-08-04', amount: 0, status: 'pending', stake: 25, odds: 2.1, closingOdds: 2 })
+  await boot(page, { backend: 'live', entries: [...SEED, pending], outbox: legacy })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
-  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('e2e:rows') ?? '[]') as { id: string; amount: number; note: string }[])
-  expect(stored.find((r) => r.id === 'c')).toMatchObject({ amount: -60, note: 'edited offline' })
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('e2e:rows') ?? '[]') as Record<string, unknown>[])
+  // What it did not know about is untouched: stake, odds, closing odds, and the pending status.
+  expect(stored.find((r) => r.id === 'c')).toMatchObject({ amount: -60, note: 'edited offline', stake: 60 })
+  const p = stored.find((r) => r.id === 'p')
+  expect(p).toMatchObject({ note: 'note fixed', stake: 25, odds: 2.1, closing_odds: 2 })
+  expect(p?.status).not.toBe('push')
   await expect(page.locator('.history-card tbody')).toContainText('edited offline')
+  await expect(page.locator('.pending-btn .pending-badge')).toHaveText('1')
 })
