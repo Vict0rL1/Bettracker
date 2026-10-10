@@ -237,14 +237,27 @@ describe('loadOutbox — queues written by older versions', () => {
     ]
     localStorage.setItem('bettracker:outbox:legacy', JSON.stringify(legacy))
     const ops = loadOutbox('legacy', '2026-10-09T12:00:00.000Z')
-    expect(ops[0]).toEqual(legacy[0])
+    expect(ops[0]).toEqual({ ...legacy[0], sent: true })
     expect(ops[1]).toEqual({ ...legacy[1], editedAt: '2026-10-09T12:00:00.000Z', legacy: true })
     expect(ops[2]).toEqual(legacy[2])
   })
 
   it('leaves an edit that has its time alone', () => {
-    saveOutbox('u-now', [update('a', 5, 'T1')])
-    expect(loadOutbox('u-now', 'LATER')).toEqual([update('a', 5, 'T1')])
+    saveOutbox('u-now', [del('x'), update('a', 5, 'T1')])
+    expect(loadOutbox('u-now', 'LATER')[1]).toEqual(update('a', 5, 'T1'))
+  })
+
+  it('takes the head of the queue as sent: it may have gone out with its answer lost', () => {
+    // That version kept no `sent`: the add at the head may already be on the server.
+    saveOutbox('u-lost', [add('a', { amount: 1 }), add('b', { amount: 2 })])
+    const ops = loadOutbox('u-lost')
+    expect(ops.map((o) => o.sent)).toEqual([true, undefined])
+    // So deleting it sends a delete rather than cancelling the add, and an
+    // edit of it goes out after it rather than into it.
+    expect(enqueueOp(ops, del('a')).map((o) => o.kind)).toEqual(['add', 'add', 'delete'])
+    expect(enqueueOp(ops, update('a', 9, 'T9')).map((o) => o.kind)).toEqual(['add', 'add', 'update'])
+    // The ops behind it never went out: those still fold and cancel.
+    expect(enqueueOp(ops, del('b')).map((o) => o.opId)).toEqual([ops[0].opId])
   })
 
   it('shows a legacy edit as the database applies it: only its fields, status by the 003 rule', () => {

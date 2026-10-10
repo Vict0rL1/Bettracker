@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Bet, BetInput } from '../../../shared/types'
 import { normalizeInput } from '../lib/validate'
-import { addBet, addBets, deleteBet, getBets, subscribeToBets, updateBet, updateBetLegacy } from './bets'
+import { getBets, sendOp, subscribeToBets } from './bets'
 import { drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { isNetworkError } from './errors'
 import {
   applyOutbox,
   enqueueOp,
-  insertStamp,
   loadCache,
   loadOutbox,
   opSize,
@@ -40,15 +39,6 @@ export interface BetSync {
 
 const RETRY_INTERVAL_MS = 20_000
 const REALTIME_DEBOUNCE_MS = 400
-
-/** One queued op, sent. Resolves with the row the server returned, when there is one. */
-async function sendOp(op: PendingOp): Promise<Bet | null> {
-  if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
-  if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
-  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op))
-  else await deleteBet(op.id)
-  return null
-}
 
 /**
  * Offline-first bet state.
@@ -133,13 +123,15 @@ export function useBetSync(
       result = await drainOutbox({
         outbox: () => outboxRef.current,
         setOutbox,
-        markSent: (op) => setOutbox(outboxRef.current.map((o) => (o.opId === op.opId ? { ...o, sent: true } : o))),
+        setSent: (op, sent) =>
+          setOutbox(outboxRef.current.map((o) => (o.opId === op.opId ? { ...o, sent: sent ? true : undefined } : o))),
         send: sendOp,
-        applied: (op, row) => {
+        applied: (op, row, superseded) => {
           // A refused update lost to a newer edit elsewhere (or the bet is
           // gone). Nothing to retry: the refresh after the drain shows the
-          // version that won.
-          if (op.kind === 'update' && row === null) onNoticeRef.current?.('conflict')
+          // version that won. Unless a later change of this device for the
+          // same bet is still queued: that one has the last word.
+          if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
           setServer(reconcile(serverRef.current ?? [], op, row))
           setOffline(false)
           setBehind(false)

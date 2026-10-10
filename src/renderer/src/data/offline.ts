@@ -118,7 +118,14 @@ export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJs
  */
 export function loadOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
   const ops = readJson<PendingOp[]>(outboxKey(userId)) ?? []
-  return ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true } : op))
+  return ops
+    .map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true as const } : op))
+    // The head of a queue may have gone out with its answer lost. This
+    // version saves `sent` before a request leaves; one from before it did
+    // not, and its queue looks the same. So the head is taken as sent either
+    // way: never rewritten or cancelled, at the cost of a request at most (an
+    // edit queued behind it instead of folded in, a delete sent after it).
+    .map((op, i) => (i === 0 && !op.sent ? { ...op, sent: true as const } : op))
 }
 
 const fitsStatus = (status: BetStatus, amount: number | null): boolean =>

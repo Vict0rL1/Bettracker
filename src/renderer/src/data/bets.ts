@@ -3,6 +3,7 @@ import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../
 import { supabase } from '../lib/supabase'
 import { isValidDate, MAX_AMOUNT, normalizeInput, round2, type CleanBet } from '../lib/validate'
 import { describeError } from './errors'
+import { insertStamp, type PendingOp } from './offline'
 
 // The table keeps its original name: renaming it is not an additive migration
 // and every policy and index refers to it. Everywhere else these are bets.
@@ -88,7 +89,8 @@ export async function getBets(): Promise<Bet[]> {
  * Add one bet. `id` is a client-generated UUID so an offline retry of the same
  * insert is recognized as a duplicate instead of creating a second row.
  *
- * `queuedAt` is when the user logged it, written as `updated_at` so the
+ * `queuedAt` is the device time of its content (see insertStamp: when it was
+ * logged, or last edited before it was sent), written as `updated_at` so the
  * conflict check below compares device times only. Left to the server's
  * clock, the row could look newer than an edit the user made while the
  * insert was still on its way, and that edit would be refused.
@@ -192,6 +194,20 @@ export async function addBets(inputs: readonly { id: string; input: BetInput }[]
     written += count ?? chunk.length
   }
   return written
+}
+
+/**
+ * One queued op, sent. An insert is stamped with insertStamp (the device time
+ * of its content); an edit queued by a version from before 003 goes out the
+ * way that version sent it. Resolves with the row the server returned, when
+ * there is one.
+ */
+export async function sendOp(op: PendingOp): Promise<Bet | null> {
+  if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
+  if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
+  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op))
+  else await deleteBet(op.id)
+  return null
 }
 
 /**

@@ -101,10 +101,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 265 tests unitarios (vitest)
+npm test            # 281 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 39 comprobaciones Playwright, sin backend
+npm run test:e2e    # 40 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -275,9 +275,21 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   cola): haya respondido o no, puede estar en el servidor, así que nadie la
   reescribe ni la cancela; una edición o un borrado de esa apuesta hechos
   después se encolan detrás, y una edición se funde solo en la última
-  operación sin enviar de esa apuesta. Si el servidor rechaza un alta, se
-  van con ella las ediciones y borrados encolados para esa apuesta (que
-  solo podrían fallar, con un falso aviso de conflicto).
+  operación sin enviar de esa apuesta. La cabeza de la cola al arrancar
+  cuenta como enviada: una versión anterior no guardaba `sent` y su cola es
+  idéntica (cuesta como mucho una petición de más).
+- Si el servidor rechaza para siempre un alta en su primer intento (y no
+  como duplicada), la apuesta no llegó a existir: se van con ella las
+  ediciones encoladas para esa apuesta (solo podrían fallar, con un falso
+  aviso de conflicto). Los borrados y un Deshacer detrás se quedan (borrar
+  una fila que no existe no hace nada; el Deshacer es otra decisión del
+  usuario). Tras un intento anterior (pudo llegar) o en una importación
+  (pudo llegar un trozo) solo sale la operación rechazada. Si en su primer
+  intento la base la rechaza por falta de migración, se desmarca `sent`:
+  no se aplicó, así que borrarla aún la cancela.
+- Un `update` rechazado por la regla de conflicto no avisa de "edición más
+  reciente en otro dispositivo" si queda detrás otra operación de este
+  dispositivo para esa apuesta: esa tiene la última palabra.
 - Un alta lleva como `updated_at` la hora de su contenido en el dispositivo
   (la del registro o la de la última edición fundida en ella), no el
   `now()` del servidor: así una edición hecha mientras el alta viajaba no

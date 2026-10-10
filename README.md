@@ -271,7 +271,8 @@ same way, so an edit made while its insert is still on the way is never taken
 for an older one. If another
 device's later edit already landed, the older one is refused, dropped from the
 queue, and the app shows "A newer edit from another device was kept" before
-refreshing to the winning version. A retry of the same edit after a lost
+refreshing to the winning version (unless a later change to that bet from this
+device is still queued: that one has the last word). A retry of the same edit after a lost
 response still applies (its own timestamp satisfies the check), and a delete
 beats an edit in either order. Device clocks are trusted, which is the price
 of a conflict rule that needs no server-side logic — no extra column, no
@@ -280,12 +281,16 @@ trigger.
 **Offline.** The last-known rows are cached on the device for instant startup,
 and mutations go through a persistent outbox: applied to the UI immediately,
 replayed against Supabase in order on reconnect (entry ids are client-generated
-UUIDs, so a retried insert can never create a duplicate). Editing a
-not-yet-synced entry rewrites its queued insert; deleting one cancels it before
-the server ever hears about it. Once a change has gone out, though, it is left
-alone, even if its answer never came back (it may have landed): an edit or a
-delete made afterwards queues behind it and goes out after it, so nothing done
-while a request is out, or after one fails, is lost.
+UUIDs, so a retried insert can never create a duplicate). Editing an entry
+whose insert has not been sent yet rewrites that queued insert; deleting one
+cancels it before the server ever hears about it. Once a change has gone out,
+though, it is left alone, even if its answer never came back (it may have
+landed): an edit or a delete made afterwards queues behind it and goes out
+after it, so nothing done while a request is out, or after one fails, is lost.
+The change at the head of the queue when the app starts counts as gone out,
+since a version from before this rule did not record it. If the server
+refuses a new bet on its first try, the edits queued for it are dropped with
+it (they could only be refused too); a delete or an Undo queued for it stays.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read
