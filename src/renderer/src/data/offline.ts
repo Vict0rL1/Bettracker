@@ -14,18 +14,32 @@ import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput
  * of creating a second row.
  */
 
+/**
+ * `sent` marks an op whose request has gone out at least once. Whether that
+ * request failed or not, it may have reached the server, so the op is never
+ * rewritten or cancelled from then on (see enqueueOp).
+ */
 export type PendingOp =
-  | { opId: string; kind: 'add'; id: string; input: BetInput; queuedAt: string }
+  /** `editedAt`, when present, is the last edit folded into a not-yet-sent add. */
+  | { opId: string; kind: 'add'; id: string; input: BetInput; queuedAt: string; editedAt?: string; sent?: true }
   /**
    * `editedAt` is when the user made the edit — the conflict key, see data/bets.ts.
    * `legacy` marks an edit queued by a version from before migration 003: its
    * input only has the fields that version knew, and it is sent the way that
    * version sent it (see loadOutbox).
    */
-  | { opId: string; kind: 'update'; id: string; input: BetInput; editedAt: string; legacy?: true }
-  | { opId: string; kind: 'delete'; id: string }
+  | { opId: string; kind: 'update'; id: string; input: BetInput; editedAt: string; legacy?: true; sent?: true }
+  | { opId: string; kind: 'delete'; id: string; sent?: true }
   /** A CSV import: many rows in one op so it syncs as a few chunked requests. */
-  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: BetInput }[]; queuedAt: string }
+  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: BetInput }[]; queuedAt: string; sent?: true }
+
+/**
+ * The time an insert writes as `updated_at`: when its content was last set on
+ * the device (the add itself, or the last edit folded into it). Device time,
+ * like every edit's, so the conflict check compares like with like.
+ */
+export const insertStamp = (op: Extract<PendingOp, { kind: 'add' | 'bulk-add' }>): string =>
+  op.kind === 'add' ? (op.editedAt ?? op.queuedAt) : op.queuedAt
 
 export interface OfflineUser {
   id: string
@@ -104,7 +118,14 @@ export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJs
  */
 export function loadOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
   const ops = readJson<PendingOp[]>(outboxKey(userId)) ?? []
-  return ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true } : op))
+  return ops
+    .map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true as const } : op))
+    // The head of a queue may have gone out with its answer lost. This
+    // version saves `sent` before a request leaves; one from before it did
+    // not, and its queue looks the same. So the head is taken as sent either
+    // way: never rewritten or cancelled, at the cost of a request at most (an
+    // edit queued behind it instead of folded in, a delete sent after it).
+    .map((op, i) => (i === 0 && !op.sent ? { ...op, sent: true as const } : op))
 }
 
 const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
@@ -203,8 +224,8 @@ function fieldsFrom(input: BetInput): Pick<Bet, 'date' | 'amount' | 'stake' | 'o
 }
 
 /** The optimistic row an add/bulk-add member renders as before it reaches the server. */
-function optimisticRow(id: string, input: BetInput, queuedAt: string): Bet {
-  return { id, ...fieldsFrom(input), createdAt: queuedAt, updatedAt: queuedAt }
+function optimisticRow(id: string, input: BetInput, queuedAt: string, updatedAt: string = queuedAt): Bet {
+  return { id, ...fieldsFrom(input), createdAt: queuedAt, updatedAt }
 }
 
 /** What the UI shows: last-known server rows with pending local ops layered on top. */
@@ -212,7 +233,7 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
   const map = new Map(server.map((b) => [b.id, b]))
   for (const op of outbox) {
     if (op.kind === 'add') {
-      map.set(op.id, optimisticRow(op.id, op.input, op.queuedAt))
+      map.set(op.id, optimisticRow(op.id, op.input, op.queuedAt, insertStamp(op)))
     } else if (op.kind === 'bulk-add') {
       for (const { id, input } of op.entries) map.set(id, optimisticRow(id, input, op.queuedAt))
     } else if (op.kind === 'update') {
@@ -234,30 +255,39 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
  *  - deleting a not-yet-synced add cancels it entirely (the server never
  *    hears about it); deleting a synced bet drops its pending edits.
  *
+ * Only ops that have not been sent are collapsed. A `sent` op (its request
+ * went out, whether it answered or not) may already be on the server, so it
+ * is never rewritten or cancelled: an edit queues behind it, and a delete of
+ * its bet is queued even when the op is the add. An edit folds into the last
+ * op queued for its bet, never an earlier one, so the newest state is always
+ * what is sent last.
+ *
  * Rows inside a pending bulk-add are deliberately left alone: the import is
  * replayed as-is and the later edit/delete op applies on top, which costs one
  * extra request but keeps the import an all-or-nothing unit.
  */
 export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp): PendingOp[] {
+  const forBet = (o: PendingOp, id: string): boolean => o.kind !== 'bulk-add' && o.id === id
   if (op.kind === 'update') {
-    const i = outbox.findIndex((o) => (o.kind === 'add' || o.kind === 'update') && o.id === op.id)
-    if (i >= 0) {
+    let i = outbox.length - 1
+    while (i >= 0 && !forBet(outbox[i], op.id)) i--
+    const last = outbox[i]
+    if (last && !last.sent && (last.kind === 'add' || last.kind === 'update')) {
       const next = [...outbox]
-      const prev = next[i] as Extract<PendingOp, { kind: 'add' | 'update' }>
       // A legacy edit overtaken by a full one is a full edit from then on.
-      next[i] = prev.kind === 'add' ? { ...prev, input: op.input } : { ...prev, input: op.input, editedAt: op.editedAt, legacy: undefined }
+      next[i] = last.kind === 'add' ? { ...last, input: op.input, editedAt: op.editedAt } : { ...last, input: op.input, editedAt: op.editedAt, legacy: undefined }
       return next
     }
     return [...outbox, op]
   }
   if (op.kind === 'delete') {
-    const hadPendingAdd = outbox.some((o) => o.kind === 'add' && o.id === op.id)
-    // A queued delete means the row exists on the server: a later add for the
-    // same id is an Undo re-adding it, and deleting again must still reach the
-    // server. Only an add with no delete before it can be cancelled outright.
-    const hadQueuedDelete = outbox.some((o) => o.kind === 'delete' && o.id === op.id)
-    const filtered = outbox.filter((o) => o.kind === 'bulk-add' || o.id !== op.id)
-    return hadPendingAdd && !hadQueuedDelete ? filtered : [...filtered, op]
+    const mine = outbox.filter((o) => forBet(o, op.id))
+    // Only an add that never went out can be cancelled outright, and only if
+    // no delete is queued before it: then the row exists on the server and a
+    // later add is an Undo re-adding it, so deleting again must reach it.
+    const cancellable = mine.some((o) => !o.sent && o.kind === 'add') && !mine.some((o) => o.kind === 'delete')
+    const kept = outbox.filter((o) => !forBet(o, op.id) || o.sent)
+    return cancellable ? kept : [...kept, op]
   }
   return [...outbox, op]
 }
