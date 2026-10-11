@@ -1,6 +1,6 @@
 # BetTracker · Handoff
 
-Estado a fecha 2026-10-09. Este repositorio contiene solo BetTracker: su
+Estado a fecha 2026-10-11. Este repositorio contiene solo BetTracker: su
 código, sus migraciones, sus tests y su CI. El CI corre aquí desde 2084828
 (antes, en el repositorio de origen) y todo PR tiene que pasarlo entero:
 typecheck, tests unitarios, build, esquema SQL y la suite e2e.
@@ -50,11 +50,13 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 1. **Migraciones en Supabase**, en el SQL editor del proyecto:
    `supabase/migrations/002_stake_and_tags.sql` → `003_odds_and_status.sql`
-   → `004_user_settings_and_closing_odds.sql`. Las tres son aditivas y
-   re-ejecutables (`if not exists`, `drop … if exists` antes de cada
-   constraint, policy y trigger). `supabase/schema.sql` contiene lo mismo
-   acumulado por si prefieres ejecutar un solo archivo. La 001 ya estaba
-   aplicada antes de este trabajo.
+   → `004_user_settings_and_closing_odds.sql` → `005_bankroll_moves.sql`
+   (la 005, ingresos y retiradas, no depende de la 004: pueden ir en
+   cualquier orden). Todas son aditivas y re-ejecutables (`if not exists`,
+   `drop … if exists` antes de cada constraint, policy y trigger).
+   `supabase/schema.sql` contiene lo mismo acumulado por si prefieres
+   ejecutar un solo archivo. La 001 ya estaba aplicada antes de este
+   trabajo.
 2. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
    el proyecto que ya existe: Settings → Git, conectar este repositorio y
    poner el directorio raíz en `/`. Así se conservan el dominio y las
@@ -64,7 +66,9 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    con `npm run build:desktop`.
 3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
    conexión (una recarga basta); el escritorio hay que reinstalarlo.
-4. **Decidir la feature 4** (unidades y bankroll). Ver "Pendiente" abajo.
+4. **Revisar la feature 4** (unidades y bankroll, su propio PR) y las
+   preguntas que deja abiertas: ver "Feature 4 · preguntas abiertas"
+   abajo.
 
 ### Orden de despliegue seguro
 
@@ -88,6 +92,15 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
   app). Un ajuste cambiado entretanto espera igual: el diálogo de ajustes lo
   dice y la insignia muestra "Falta actualizar". Mientras tanto, no cerrar
   sesión en ese dispositivo: cerrar sesión borra su cola.
+- **La 005 tampoco es necesaria para arrancar.** Sin ella, leer los
+  ingresos y retiradas encuentra la tabla ausente y no es un error: el
+  servidor no tiene ninguno todavía (el bankroll cuenta solo el inicial y
+  las apuestas resueltas), no sale aviso, y la app vuelve a leer cada 20 s
+  para notar la migración. Un ingreso o una retirada hechos entretanto se
+  quedan en su propia cola ("Falta actualizar · n en cola", aviso una vez)
+  sin frenar la de apuestas, y se envían en cuanto corre la 005. Cerrar
+  sesión con cambios en cola pide un segundo clic, porque los borra del
+  dispositivo.
 - **Lo que un dispositivo tenga en cola al actualizarse se envía igual que
   lo habría enviado la versión antigua.** Esa versión guardaba las ediciones
   sin hora de edición y solo con los campos que conocía. Al cargar esa cola,
@@ -109,10 +122,10 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 306 tests unitarios (vitest)
+npm test            # 416 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 42 comprobaciones Playwright, sin backend
+npm run test:e2e    # 52 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -122,12 +135,15 @@ tirar, y la suite e2e.
 
 `supabase/tests/run.sh` monta la base de tres formas: (A) el esquema con el
 que se publicó la app (`supabase/tests/original_schema.sql`) con filas,
-subido con las migraciones 001→004, cada una dos veces; (B) lo mismo subido
+subido con las migraciones 001→005, cada una dos veces; (B) lo mismo subido
 con `schema.sql` dos veces; (C) una instalación desde cero con `schema.sql`
 dos veces y todas las migraciones encima, con filas escritas como las
 escribe una versión antigua (sin `status`). En A y B comprueba el backfill;
 en C, el trigger; en las tres, las escrituras de versiones antiguas y
-nuevas y las constraints. Luego compara las tres estructuras (tablas,
+nuevas, las constraints y, para `bankroll_moves`, la regla de conflicto, la
+cascada al borrar el usuario y las policies ejercidas como un usuario
+conectado (rol `authenticated`, que crea `stubs.sql`; por eso necesita un
+rol que pueda crear roles, como el `postgres` de CI). Luego compara las tres estructuras (tablas,
 columnas, constraints, índices, policies, trigger y función, y qué publica
 realtime; el orden de las columnas aparte, que migraciones aditivas no
 pueden igualar). Necesita
@@ -138,10 +154,14 @@ En local, como root: `su postgres -c 'bash supabase/tests/run.sh'`.
 La suite e2e construye a `dist-e2e/`, sirve con `vite preview` e inyecta un
 mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
 `localStorage`, de modo que lo que se ejercita es el camino real offline de la
-app. Con `backend: 'live'` o `'behind'` el mock es un pequeño servidor en
-memoria (apuestas y ajustes, altas, ediciones con la regla de conflicto,
-borrados, upserts; latencia y caída de conexión opcionales) para probar la
-sincronización de verdad. En este entorno hizo falta `NO_PROXY='*'` para que
+app. Con `backend: 'live'`, `'behind'` o `'behind-005'` el mock es un
+pequeño servidor en memoria (apuestas, ajustes e ingresos/retiradas; altas,
+ediciones con la regla de conflicto, borrados, upserts; latencia y caída de
+conexión opcionales) para probar la sincronización de verdad. `'behind'` es
+una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
+(`e2e:migrated-005` la "ejecuta"). La opción `moves` siembra la caché de
+ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
+cargado). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
@@ -206,7 +226,16 @@ Playwright llegara a `localhost`; en CI no.
 3. **Panel de pendientes** (`PendingPanel.tsx`): contador en la cabecera,
    lista de más antigua a más reciente, un toque resuelve, fecha pasada en
    ámbar.
-4. **Unidades y bankroll**: *pendiente de tu OK* (ver abajo).
+4. **Unidades y bankroll** (`lib/bankroll.ts`, `BankrollDialog.tsx`,
+   `StakeNote.tsx`, `data/moves.ts`, `data/useMoves.ts`, migración 005):
+   bankroll inicial + ingresos − retiradas + P/L resuelto = bankroll actual,
+   en un diálogo que lo desglosa y donde se añaden, editan y borran (con
+   Deshacer) ingresos y retiradas, offline vía su propia cola; mini-tarjeta
+   Bankroll en el panel; gráfico P/L o Bankroll (un solo eje, con lo
+   aportado en línea discontinua); nota bajo el stake con su porcentaje del
+   bankroll, ámbar por encima del 5 %, sin bloquear nunca; tamaño de unidad
+   e interruptor dólares/unidades en ajustes, con todo importe mostrado en
+   unidades (las casillas, la base y el CSV siguen en dólares).
 5. **CLV** (`closing_odds`, `lib/stats.ts`): cuota de cierre por apuesta en
    el modal del día; CLV = cuota / cierre − 1 por apuesta (historial, modal),
    media en una tarjeta ("batió el cierre n de m") y por fila del desglose;
@@ -233,37 +262,31 @@ Playwright llegara a `localhost`; en CI no.
 `unit_size`, `show_units`, `starting_bankroll`, `default_stake`,
 `loss_limit`. Capa `data/settings.ts` + `data/useSettings.ts`: misma regla de
 conflicto que las apuestas, caché offline y outbox de un solo parche
-fusionado. `unit_size`, `show_units` y `starting_bankroll` ya existen pero
-la interfaz aún no los usa (feature 4).
+fusionado. `unit_size`, `show_units` y `starting_bankroll` los usa la
+feature 4; el bankroll inicial se edita en el diálogo de bankroll.
 
-## Pendiente · feature 4 (unidades y bankroll)
+## Feature 4 · preguntas abiertas
 
-El plan de la fase 5 pide: ajustes de bankroll inicial y tamaño de unidad,
-interruptor dólares/unidades, **seguimiento de ingresos y retiradas** para
-que el bankroll cuadre, línea de bankroll en el gráfico y aviso (sin
-bloquear) cuando un stake supere el 5 % del bankroll actual.
+Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
+005). Quedan decisiones de producto que tomé por defecto y puedes cambiar:
 
-Propuesta de datos (migración `005_bankroll_moves.sql`, aditiva):
-
-```sql
-create table if not exists public.bankroll_moves (
-  id         uuid primary key,
-  user_id    uuid not null references auth.users (id) on delete cascade,
-  date       date not null,
-  amount     numeric(12, 2) not null check (amount <> 0),  -- + ingreso, − retirada
-  note       text not null default '',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
--- RLS como entries/user_settings, publicación realtime, índice (user_id, date).
-```
-
-Bankroll actual = `starting_bankroll` + Σ movimientos + P/L neto de las
-apuestas resueltas. Pendientes se muestran como "en juego". Unidades:
-`unit_size` aplicado a todo el historial (un solo tamaño, lo habitual).
-La capa offline sería un tercer par caché/outbox con los mismos helpers.
-La alternativa sin tabla (solo `starting_bankroll`) no cumple el punto de
-ingresos y retiradas; por eso la recomendación es la tabla.
+- **Dólares/unidades sincronizado** entre dispositivos (`show_units` en
+  `user_settings`, para lo que lo creó la 004), solo en Ajustes. Un
+  interruptor de un toque en el panel sería cómodo, pero entonces convendría
+  guardarlo por dispositivo: los ajustes comparten una sola clave de
+  conflicto, y un cambio frecuente ahí puede pisar una edición offline del
+  bankroll inicial hecha en otro dispositivo.
+- **Ingresos y retiradas no van en el CSV**, que sigue siendo solo de
+  apuestas e idéntico byte a byte. Un export de movimientos sería aparte.
+- **Los importes se escriben en dólares** aunque se muestren en unidades
+  (la nota bajo el stake da la cifra en unidades).
+- **Sin "pon tu saldo de hoy"**: el bankroll inicial es lo que había antes
+  de la primera apuesta (el diálogo dice su fecha).
+- **Conflicto de ajustes**: un cambio del bankroll inicial hecho offline en
+  un dispositivo se descarta (con el aviso de siempre) si entretanto otro
+  dispositivo cambió cualquier otro ajuste. Es la regla de toda la fila de
+  ajustes desde la 004; arreglarlo por campo pediría guardar la base de cada
+  parche y reintentar solo lo no tocado.
 
 ## Decisiones tomadas y por qué
 
@@ -331,6 +354,39 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   el estado.
 - El signo de un importe se valida ya redondeado a céntimos, como se
   guarda: 0.004 es un push de 0.00, no una ganada de 0.00.
+- Ingresos y retiradas en su propia tabla y su propia cola, con las mismas
+  reglas que las apuestas (`enqueueOp`, `drainOutbox`, `headAsSent` son
+  genéricos por tipo, sin copiar cuerpos): en una cola compartida, uno
+  frenado por la 005 frenaría todas las apuestas de detrás. Una lectura que
+  no encuentra la tabla es "aún no hay ninguno", sin aviso; solo una
+  escritura frenada avisa, una vez. Un movimiento que llega al servidor
+  antes de la primera lectura se sigue mostrando, pero no se guarda en
+  caché como si fuera la lista entera.
+- El bankroll tiene tres estados: *cargando* ("…", mientras no han cargado
+  en este dispositivo los ajustes y los movimientos), *sin configurar*
+  ("—", sin inicial ni movimientos) y conocido. Así una primera apertura
+  offline no enseña una cifra falsa. Cubre siempre todas las apuestas, sea
+  cual sea el rango; se calcula en céntimos enteros.
+- La nota del 5 % compara en céntimos (`stake × 20 > bankroll`): justo el
+  5 % no es "más del 5 %", y el porcentaje mostrado redondea hacia arriba
+  cuando está por encima (5.1 %, nunca "5.0 % · más del 5 %"). Ocupa
+  siempre su línea, para que los botones de debajo no se muevan al
+  escribir. En el modal del día solo aplica a apuestas de hoy en adelante o
+  pendientes, y al editar mide contra el bankroll de antes de esa apuesta.
+- Gráfico de bankroll como vista aparte (P/L o Bankroll), nunca con un
+  segundo eje; marcas redondas (`niceScale`) y puntos unidos en recto,
+  porque un ingreso es un salto, no una pendiente.
+- Las unidades son solo de presentación (`moneyFormat`, `useMoney`): un
+  único tamaño para todo el historial; quitar el tamaño apaga las unidades
+  en el mismo parche, para que ponerlo luego no las encienda por sorpresa.
+- Los montos de ajustes se validan ya redondeados (`parseMoneyBox`): un
+  valor que la base rechazara tiraría el parche entero. De paso, un límite
+  de pérdidas de 0.004 ya no se envía como 0 (rechazado) sino como "sin
+  límite". Las casillas de ajustes y del bankroll guardan lo escrito también
+  al cerrar con Esc o pulsando fuera.
+- Ingreso/Retirada y "en juego" en español; los avisos que nombran uno u
+  otro tienen clave propia por el género. El aviso de "guardado offline"
+  en español es neutro ("se guarda en este dispositivo").
 - La 003 se editó en su sitio (en vez de añadir una 005) para meter el
   trigger de compatibilidad, porque aún no se había ejecutado en ningún
   sitio; así el trigger existe desde el momento en que `status` pasa a ser
@@ -340,7 +396,7 @@ ingresos y retiradas; por eso la recomendación es la tabla.
 ## Mapa de archivos nuevos o muy cambiados
 
 ```
-src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat
+src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput
 src/renderer/src/lib/
   stats.ts      resumen, ROI, CLV, breakdown por tag/banda/día/mes
   bands.ts      bandas de cuota (único lugar)
@@ -349,19 +405,24 @@ src/renderer/src/lib/
   bulk.ts       planes de edición masiva y su inverso
   pending.ts    apuestas abiertas, orden y "pasada"
   lossLimit.ts  niveles del límite mensual
+  bankroll.ts   bankroll actual, serie diaria, nota del 5 %, avisos de movimientos
+  format.ts     formato de dinero en dólares o unidades (+ money.ts, el contexto)
+  chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   quick.ts      valores por defecto del registro rápido
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
+  moves.ts, useMoves.ts                   ingresos y retiradas: servidor y sincronización
   drain.ts                                vaciar la cola: qué sale y qué se queda
   errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
-  Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       41 comprobaciones
-supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
+  Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
+  BankrollDialog, StakeNote, BalanceChart (vista Bankroll)
+e2e/*.spec.ts                       52 comprobaciones
+supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```
