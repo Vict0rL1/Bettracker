@@ -205,7 +205,7 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
             <dt>
               <label htmlFor={startId}>{t('bank.start')}</label>
             </dt>
-            <dd>
+            <dd className="field">
               <div className="amount-wrap bank-start">
                 <span className="amount-cur">$</span>
                 <input

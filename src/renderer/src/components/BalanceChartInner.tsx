@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import type { ChartView } from '../lib/chartView'
+import { niceScale, type ChartView } from '../lib/chartView'
 import { humanDate, monthYearShort, shortDate } from '../lib/dates'
 import { scaledFormat } from '../lib/format'
 import { useLang } from '../lib/i18n'
@@ -47,17 +47,14 @@ export default function BalanceChartInner({ mode, data }: Props) {
     return [...idx].map((i) => data[i].date)
   }, [data])
 
-  // P/L always shows its zero line. A bankroll is fitted to its own range
-  // (padded a little), and shows zero only when it gets there.
-  const domain = useMemo((): [number, number] | [(n: number) => number, (n: number) => number] => {
-    if (!bankroll) return [(dataMin: number) => Math.min(0, dataMin), (dataMax: number) => Math.max(0, dataMax)]
+  // P/L always shows its zero line. A bankroll is fitted to its own range, on
+  // round ticks, and shows zero only when it gets there.
+  const yAxis = useMemo(() => {
+    if (!bankroll) return { domain: [(dataMin: number) => Math.min(0, dataMin), (dataMax: number) => Math.max(0, dataMax)] as [(n: number) => number, (n: number) => number], ticks: undefined, zero: true }
     const values = data.flatMap((p) => [p.balance, p.funded ?? p.balance])
-    const lo = Math.min(...values)
-    const hi = Math.max(...values)
-    const pad = (hi - lo) * 0.08 || Math.max(Math.abs(hi) * 0.05, 1)
-    return [lo - pad, hi + pad]
+    const { lo, hi, ticks } = niceScale(Math.min(...values), Math.max(...values))
+    return { domain: [lo, hi] as [number, number], ticks, zero: lo <= 0 && hi >= 0 }
   }, [bankroll, data])
-  const showZero = !bankroll || (typeof domain[0] === 'number' && typeof domain[1] === 'number' && domain[0] <= 0 && domain[1] >= 0)
 
   const spansYears = data.length > 1 && data[0].date.slice(0, 4) !== data[data.length - 1].date.slice(0, 4)
   const last = data.length > 0 ? data[data.length - 1] : null
@@ -90,10 +87,10 @@ export default function BalanceChartInner({ mode, data }: Props) {
           width={54}
           axisLine={false}
           tickLine={false}
-          domain={domain}
-          allowDataOverflow={false}
+          domain={yAxis.domain}
+          ticks={yAxis.ticks}
         />
-        {showZero && <ReferenceLine y={0} stroke="var(--grid-strong)" strokeWidth={1} />}
+        {yAxis.zero && <ReferenceLine y={0} stroke="var(--grid-strong)" strokeWidth={1} />}
         <Tooltip
           cursor={{ stroke: 'var(--grid-strong)', strokeWidth: 1 }}
           isAnimationActive={false}
@@ -131,7 +128,9 @@ export default function BalanceChartInner({ mode, data }: Props) {
           />
         )}
         <Area
-          type="monotone"
+          // A bankroll moves in steps (a deposit is not a slope), so its points
+          // are joined straight; the running P/L keeps its smooth curve.
+          type={bankroll ? 'linear' : 'monotone'}
           dataKey="balance"
           stroke={lineColor}
           strokeWidth={2}
