@@ -66,7 +66,7 @@ export function t(key: StringKey, vars?: Vars): string {
  * distinguish one from many the same way, so one/other is all we need; the
  * count is passed as `{n}` so a language could move it.
  */
-export function tn(base: 'bet' | 'day' | 'line' | 'freeBet', n: number, vars?: Vars): string {
+export function tn(base: 'bet' | 'day' | 'line' | 'freeBet' | 'change', n: number, vars?: Vars): string {
   const key = `${base}_${n === 1 ? 'one' : 'other'}` as StringKey
   return fill(DICT[current][key], { n, ...vars })
 }

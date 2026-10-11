@@ -12,6 +12,13 @@ export interface SettingsSync {
   dirty: boolean
   /** True while the database is missing the settings migration: a change waits for it, not for the connection. */
   blocked: boolean
+  /**
+   * The user's row is known: cached, read, or known not to exist yet (a
+   * database without the settings table has only the defaults). Until then
+   * `settings` holds defaults, which say nothing about, say, the starting
+   * bankroll.
+   */
+  loaded: boolean
   update: (patch: SettingsPatch) => void
 }
 
@@ -164,5 +171,5 @@ export function useSettings(
 
   const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}) }
 
-  return { settings, dirty: pending !== null, blocked, update }
+  return { settings, dirty: pending !== null, blocked, loaded: server !== null || blocked, update }
 }

@@ -1,8 +1,10 @@
 import { useMemo } from 'react'
 import type { Bet } from '../../../shared/types'
+import type { Bankroll } from '../lib/bankroll'
 import { monthLabel, monthYearShort, sameMonth, shortDate, currentMonth, type MonthKey } from '../lib/dates'
-import { fmtMoney, fmtMoneyCompact, fmtPct, fmtPctSigned, fmtProb, fmtStake } from '../lib/format'
+import { fmtMoney, fmtMoneyPlain, fmtPct, fmtPctSigned, fmtProb } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import { forMonth, isSmallSample, SMALL_SAMPLE, summarize, type Summary, type WinLoss } from '../lib/stats'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons'
 
@@ -13,9 +15,14 @@ interface Props {
   /** The range's name when one is chosen, null for all time. */
   rangeName: string | null
   ym: MonthKey
+  /** Always over every bet, whatever the range: a bankroll is a balance, not a period. */
+  bankroll: Bankroll
+  /** No session or no connection: a bankroll still loading waits for one. */
+  offline: boolean
   onPrev: () => void
   onNext: () => void
   onResetMonth: () => void
+  onOpenBankroll: () => void
 }
 
 const tone = (n: number): string => (n > 0 ? 'win' : n < 0 ? 'loss' : 'flat')
@@ -26,20 +33,35 @@ interface MiniProps {
   sub: string
   toneClass?: string
   title?: string
+  /** Makes the whole tile a button. */
+  onClick?: () => void
+  className?: string
 }
 
-function Mini({ label, value, sub, toneClass = '', title }: MiniProps) {
-  return (
-    <div className="mini" title={title}>
+function Mini({ label, value, sub, toneClass = '', title, onClick, className = '' }: MiniProps) {
+  const body = (
+    <>
       <span className="stat-label">{label}</span>
       <span className={`mini-value ${toneClass}`}>{value}</span>
       <span className="mini-sub">{sub}</span>
+    </>
+  )
+  return onClick ? (
+    <button type="button" className={`mini mini-btn ${className}`} title={title} onClick={onClick}>
+      {body}
+    </button>
+  ) : (
+    <div className={`mini ${className}`} title={title}>
+      {body}
     </div>
   )
 }
 
-export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNext, onResetMonth }: Props) {
+export default function HeroStats({ bets, lifetime, rangeName, ym, bankroll, offline, onPrev, onNext, onResetMonth, onOpenBankroll }: Props) {
   const { t, tn } = useLang()
+  const money = useMoney()
+  // In units the big figures carry the exact dollars on hover.
+  const dollarsTitle = (n: number): string | undefined => (money.unit === null ? undefined : fmtMoney(n))
   const month = useMemo(() => summarize(forMonth(bets, ym)), [bets, ym])
 
   /** "9W–8L" / "9G–8P", with pushes when there are any. */
@@ -61,8 +83,8 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
   // the two numbers from looking like they contradict each other.
   const roiSub = roi
     ? t('hero.roiSub', {
-        profit: fmtMoney(roi.profit),
-        staked: fmtStake(roi.staked),
+        profit: money.signed(roi.profit),
+        staked: money.stake(roi.staked),
         counted:
           roi.missing > 0
             ? t('hero.roiSubset', { counted: roi.counted, total: tn('bet', roi.counted + roi.missing) })
@@ -79,7 +101,16 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
           bets: tn('bet', lifetime.bets),
           days: tn('day', lifetime.dayCount),
           month: monthYearShort(lifetime.first ?? '')
-        }) + (lifetime.pendingCount > 0 ? t('hero.riding', { n: lifetime.pendingCount, amount: fmtStake(lifetime.pendingStaked) }) : '')
+        }) + (lifetime.pendingCount > 0 ? t('hero.riding', { n: lifetime.pendingCount, amount: money.stake(lifetime.pendingStaked) }) : '')
+
+  const bankrollValue = bankroll.known ? money.bankroll(bankroll.current) : bankroll.reason === 'unset' ? '—' : '…'
+  const bankrollSub = bankroll.known
+    ? bankroll.inPlay > 0
+      ? t('hero.bankrollRiding', { amount: money.stake(bankroll.inPlay) })
+      : t('hero.bankrollFunded', { amount: money.bankroll(bankroll.funded) })
+    : bankroll.reason === 'unset'
+      ? t('hero.bankrollSetUp')
+      : t(offline ? 'hero.bankrollOffline' : 'hero.bankrollLoading')
 
   return (
     <section className="hero">
@@ -100,7 +131,9 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
             </button>
           </div>
         </div>
-        <div className={`hero-value ${tone(month.total)}`}>{fmtMoney(month.total)}</div>
+        <div className={`hero-value ${tone(month.total)}`} title={dollarsTitle(month.total)}>
+          {money.signed(month.total)}
+        </div>
         <div className="stat-sub">{monthSub}</div>
       </article>
 
@@ -108,7 +141,9 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
         <div className="stat-head">
           <span className="stat-label">{rangeName ? t('hero.rangePL', { range: rangeName }) : t('hero.lifetimePL')}</span>
         </div>
-        <div className={`life-value ${tone(lifetime.total)}`}>{fmtMoney(lifetime.total)}</div>
+        <div className={`life-value ${tone(lifetime.total)}`} title={dollarsTitle(lifetime.total)}>
+          {money.signed(lifetime.total)}
+        </div>
         <div className="stat-sub">{lifetimeSub}</div>
       </article>
 
@@ -123,7 +158,7 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
             )}
             {lifetime.avgStake !== null && (
               <span className="chip chip-static" title={t('hero.avgStakeTitle')}>
-                {t('hero.avgStake', { amount: fmtStake(lifetime.avgStake) })}
+                {t('hero.avgStake', { amount: money.stake(lifetime.avgStake) })}
               </span>
             )}
           </span>
@@ -135,7 +170,7 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
             <>
               <br />
               <span className="bonus" title={t('hero.bonusTitle')}>
-                {t('hero.bonus', { profit: fmtMoney(bonus.profit), freeBets: tn('freeBet', bonus.count) })}
+                {t('hero.bonus', { profit: money.signed(bonus.profit), freeBets: tn('freeBet', bonus.count) })}
               </span>
             </>
           )}
@@ -143,6 +178,15 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
       </article>
 
       <article className="card mini-card">
+        <Mini
+          className="mini-bankroll"
+          label={t('hero.bankroll')}
+          value={bankrollValue}
+          toneClass={bankroll.known && bankroll.current <= 0 ? 'loss' : ''}
+          sub={bankrollSub}
+          title={t('hero.bankrollTitle') + (bankroll.known && money.unit !== null ? ` (${fmtMoneyPlain(bankroll.current)})` : '')}
+          onClick={onOpenBankroll}
+        />
         <Mini
           label={t('hero.strike')}
           value={lifetime.strike === null ? '—' : fmtPct(lifetime.strike)}
@@ -180,19 +224,19 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
         />
         <Mini
           label={t('hero.bestDay')}
-          value={lifetime.best ? fmtMoneyCompact(lifetime.best.total) : '—'}
+          value={lifetime.best ? money.compact(lifetime.best.total) : '—'}
           toneClass={lifetime.best ? 'win' : ''}
           sub={lifetime.best ? shortDate(lifetime.best.date) : t('hero.nothingYet')}
         />
         <Mini
           label={t('hero.worstDay')}
-          value={lifetime.worst ? fmtMoneyCompact(lifetime.worst.total) : '—'}
+          value={lifetime.worst ? money.compact(lifetime.worst.total) : '—'}
           toneClass={lifetime.worst ? 'loss' : ''}
           sub={lifetime.worst ? shortDate(lifetime.worst.date) : t('hero.nothingYet')}
         />
         <Mini
           label={t('hero.drawdown')}
-          value={lifetime.drawdown > 0 ? `-${fmtStake(lifetime.drawdown)}` : '—'}
+          value={lifetime.drawdown > 0 ? `-${money.stake(lifetime.drawdown)}` : '—'}
           toneClass={lifetime.drawdown > 0 ? 'loss' : ''}
           sub={lifetime.drawdown > 0 ? t('hero.drawdownSub') : t('hero.drawdownNone')}
           title={t('hero.drawdownTitle')}

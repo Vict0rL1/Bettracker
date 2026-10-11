@@ -1,5 +1,6 @@
-import { fmtPct, fmtStake } from '../lib/format'
+import { fmtPct } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import type { LossState } from '../lib/lossLimit'
 import { CloseIcon } from './icons'
 
@@ -16,8 +17,9 @@ interface Props {
  */
 export default function LossBanner({ state, onChangeLimit, onDismiss }: Props) {
   const { t } = useLang()
+  const money = useMoney()
   if (state.level === 'none' || state.limit === null) return null
-  const vars = { loss: fmtStake(state.loss), limit: fmtStake(state.limit), pct: fmtPct(state.ratio * 100) }
+  const vars = { loss: money.stake(state.loss), limit: money.stake(state.limit), pct: fmtPct(state.ratio * 100) }
   return (
     <div className={`loss-banner ${state.level}`} role={state.level === 'over' ? 'alert' : 'status'}>
       <span className="loss-text">{state.level === 'over' ? t('loss.over', vars) : t('loss.near', vars)}</span>
