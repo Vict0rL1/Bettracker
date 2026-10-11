@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_AMOUNT, MAX_ODDS, isValidDate, normalizeInput, storableOdds, suggestedAmount } from './validate'
+import { MAX_AMOUNT, MAX_ODDS, isValidDate, normalizeInput, normalizeMove, roundCents, storableOdds, suggestedAmount } from './validate'
 
 describe('isValidDate', () => {
   it('accepts a real calendar date', () => {
@@ -172,5 +172,34 @@ describe('suggestedAmount', () => {
     expect(suggestedAmount('won', null, 1.91)).toBeNull()
     expect(suggestedAmount('lost', null, 1.91)).toBeNull()
     expect(suggestedAmount('pending', 100, 1.91)).toBeNull()
+  })
+})
+
+describe('normalizeMove — a deposit or withdrawal before it is queued', () => {
+  it('keeps the sign: + deposit, − withdrawal, in cents', () => {
+    expect(normalizeMove({ date: '2026-03-01', amount: 500 })).toEqual({ date: '2026-03-01', amount: 500, note: '' })
+    expect(normalizeMove({ date: '2026-03-01', amount: -120.5, note: '  rent  ' })).toEqual({ date: '2026-03-01', amount: -120.5, note: 'rent' })
+  })
+
+  it('rounds a withdrawal by its size, so it matches the same deposit', () => {
+    for (const typed of [12.345, 0.005, 1.005, 99.995]) {
+      expect(normalizeMove({ date: '2026-03-01', amount: -typed }).amount).toBe(-normalizeMove({ date: '2026-03-01', amount: typed }).amount)
+    }
+    expect(roundCents(-12.346)).toBe(-12.35)
+    expect(roundCents(0)).toBe(0)
+  })
+
+  it('refuses what the database would: zero once rounded, out of range, not a number, not a date', () => {
+    expect(() => normalizeMove({ date: '2026-03-01', amount: 0 })).toThrow(/zero/)
+    expect(() => normalizeMove({ date: '2026-03-01', amount: 0.004 })).toThrow(/zero/)
+    expect(() => normalizeMove({ date: '2026-03-01', amount: -0.004 })).toThrow(/zero/)
+    expect(() => normalizeMove({ date: '2026-03-01', amount: MAX_AMOUNT + 1 })).toThrow(/range/)
+    expect(() => normalizeMove({ date: '2026-03-01', amount: -(MAX_AMOUNT + 1) })).toThrow(/range/)
+    expect(() => normalizeMove({ date: '2026-03-01', amount: Number.NaN })).toThrow(/finite/)
+    expect(() => normalizeMove({ date: '2026-02-30', amount: 5 })).toThrow(/calendar date/)
+  })
+
+  it('caps the note like a bet note', () => {
+    expect(normalizeMove({ date: '2026-03-01', amount: 5, note: 'x'.repeat(600) }).note).toHaveLength(500)
   })
 })

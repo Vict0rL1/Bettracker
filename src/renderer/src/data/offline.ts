@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput, type BetStatus, type Settings, type SettingsPatch } from '../../../shared/types'
+import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput, type BetStatus, type MoveInput, type Settings, type SettingsPatch } from '../../../shared/types'
 
 /**
  * Device-local persistence for offline support.
@@ -32,6 +32,12 @@ export type PendingOp<I = BetInput> =
   | { opId: string; kind: 'delete'; id: string; sent?: true }
   /** A CSV import: many rows in one op so it syncs as a few chunked requests. */
   | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; sent?: true }
+
+/**
+ * A queued deposit or withdrawal: the same op shapes and rules as bets. Only
+ * add, update and delete are ever built for moves (no import, no legacy).
+ */
+export type MoveOp = PendingOp<MoveInput>
 
 /**
  * The time an insert writes as `updated_at`: when its content was last set on

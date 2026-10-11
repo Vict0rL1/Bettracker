@@ -1,4 +1,4 @@
-import { isBetStatus, statusForAmount, type BetInput, type BetStatus } from '../../../shared/types'
+import { isBetStatus, statusForAmount, type BetInput, type BetStatus, type MoveInput } from '../../../shared/types'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -164,4 +164,31 @@ export function suggestedAmount(status: BetStatus, stake: number | null, odds: n
     case 'pending':
       return null
   }
+}
+
+/**
+ * Round a signed amount to cents the way the database does: by its size, then
+ * the sign. round2 rounds halves up (-12.345 → -12.34), so a withdrawal and a
+ * deposit of the same typed amount would otherwise store different sizes.
+ */
+export const roundCents = (n: number): number => (n < 0 ? -round2(-n) : round2(n))
+
+export interface CleanMove {
+  date: string
+  amount: number
+  note: string
+}
+
+/**
+ * Validate and clean a deposit or withdrawal before it is queued. Throws on
+ * bad input. The amount is checked once rounded to cents, as stored: 0.004
+ * is 0, which the database refuses.
+ */
+export function normalizeMove(input: MoveInput): CleanMove {
+  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new Error('Amount must be a finite number')
+  const amount = roundCents(input.amount)
+  if (amount === 0) throw new Error('Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount is out of range')
+  return { date: input.date, amount, note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH) }
 }
