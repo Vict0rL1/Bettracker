@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Checks the schema files against a real, throwaway Postgres:
-#   A. the original schema upgraded with migrations 001..004, each run twice;
+#   A. the original schema upgraded with migrations 001..005, each run twice;
 #   B. the original schema upgraded by running schema.sql, twice;
 #   C. a fresh install from schema.sql (twice), then every migration on top;
 # then runs checks.sql on each (backfill, writes from older and current app
-# versions, constraints) and compares the three resulting structures.
+# versions, constraints, deposits and withdrawals, row-level security for a
+# signed-in user) and compares the three resulting structures.
 #
 # Needs psql, createdb, dropdb and pg_dump on PATH, with the usual PG*
 # variables pointing at a server where it may create and drop databases
-# (they are all named bettracker_test_*). Locally, as root:
+# (they are all named bettracker_test_*) and create the `authenticated` role
+# if it isn't there yet (stubs.sql). Locally, as root:
 #   su postgres -c 'bash supabase/tests/run.sh'
 set -euo pipefail
 
@@ -35,7 +37,7 @@ structure() {
 
 export PGOPTIONS='-c client_min_messages=error'
 
-echo "A. original schema, then 001..004 (each twice)"
+echo "A. original schema, then 001..005 (each twice)"
 fresh bettracker_test_migrations
 run bettracker_test_migrations "$HERE/original_schema.sql"
 run bettracker_test_migrations "$HERE/seed.sql"

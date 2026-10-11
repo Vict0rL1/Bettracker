@@ -1,7 +1,9 @@
 -- BetTracker database schema.
 -- Run this once in your Supabase project: SQL Editor -> New query -> paste -> Run.
--- It creates the entries table, locks it down so each user only sees their own
--- rows, and turns on realtime so devices stay in sync.
+-- It creates the tables (the bets, per-user settings, deposits and
+-- withdrawals), locks them down so each user only sees their own rows, and
+-- turns on realtime so devices stay in sync. It is safe to run again, and on
+-- an older install it does what migrations 001..005 do.
 
 create table if not exists public.entries (
   id         uuid primary key default gen_random_uuid(),
@@ -207,6 +209,54 @@ create policy "settings are private - delete"
 do $$
 begin
   alter publication supabase_realtime add table public.user_settings;
+exception
+  when duplicate_object then null;
+end $$;
+
+-- Deposits and withdrawals (migration 005): + money put in, − money taken out,
+-- never 0. The bankroll is the starting bankroll plus every move plus the
+-- settled bets. updated_at is the device's edit time, the conflict key, as
+-- for bets.
+create table if not exists public.bankroll_moves (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  date       date not null,
+  -- + deposit, − withdrawal; never 0 (checked after numeric(12,2) rounding)
+  amount     numeric(12, 2) not null,
+  note       text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint bankroll_moves_amount_nonzero check (amount <> 0)
+);
+
+create index if not exists bankroll_moves_user_date_idx on public.bankroll_moves (user_id, date);
+
+alter table public.bankroll_moves enable row level security;
+
+drop policy if exists "moves are private - select" on public.bankroll_moves;
+create policy "moves are private - select"
+  on public.bankroll_moves for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "moves are private - insert" on public.bankroll_moves;
+create policy "moves are private - insert"
+  on public.bankroll_moves for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "moves are private - update" on public.bankroll_moves;
+create policy "moves are private - update"
+  on public.bankroll_moves for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "moves are private - delete" on public.bankroll_moves;
+create policy "moves are private - delete"
+  on public.bankroll_moves for delete
+  using (auth.uid() = user_id);
+
+do $$
+begin
+  alter publication supabase_realtime add table public.bankroll_moves;
 exception
   when duplicate_object then null;
 end $$;
