@@ -1,24 +1,33 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, type Bet } from '../../../shared/types'
+import { DEFAULT_SETTINGS, type BankrollMove, type Bet } from '../../../shared/types'
 import { bet } from '../test-utils'
 import {
+  applyMoveOutbox,
   applyOutbox,
   clearUserData,
   enqueueOp,
   headAsSent,
   insertStamp,
   hydrateBet,
+  hydrateMove,
   loadCache,
+  loadMoveCache,
+  loadMoveOutbox,
   loadOutbox,
   loadSettingsCache,
   loadSettingsOutbox,
   opSize,
   reconcile,
+  reconcileMove,
   saveCache,
+  saveMoveCache,
+  saveMoveOutbox,
   saveOutbox,
   saveSettingsCache,
   saveSettingsOutbox,
   sortBets,
+  sortMoves,
+  type MoveOp,
   type PendingOp
 } from './offline'
 
@@ -441,5 +450,135 @@ describe('reconcile', () => {
   it('does not duplicate rows when an import is replayed', () => {
     const first = reconcile([], bulk(['x']), null)
     expect(reconcile(first, bulk(['x']), null)).toHaveLength(1)
+  })
+})
+
+describe('deposits and withdrawals', () => {
+  const mv = (over: Partial<BankrollMove> & { id: string }): BankrollMove => ({ date: '2026-03-01', amount: 100, note: '', createdAt: 'C', updatedAt: 'U', ...over })
+  type AddMoveOp = Extract<MoveOp, { kind: 'add' }>
+  const addMove = (id: string, amount: number, over: Partial<AddMoveOp> = {}): AddMoveOp => ({
+    opId: `op-${id}`,
+    kind: 'add',
+    id,
+    input: { date: '2026-03-02', amount, note: 'n' },
+    queuedAt: 'Q',
+    ...over
+  })
+  const editMove = (id: string, amount: number, editedAt = 'E'): MoveOp => ({ opId: `op-u-${id}`, kind: 'update', id, input: { date: '2026-03-05', amount, note: 'edited' }, editedAt })
+  const delMove = (id: string): MoveOp => ({ opId: `op-d-${id}`, kind: 'delete', id })
+
+  describe('hydrateMove', () => {
+    it('keeps a good row and fills what is missing with empty text', () => {
+      expect(hydrateMove({ id: 'm', date: '2026-03-01', amount: -120.5 })).toEqual({ id: 'm', date: '2026-03-01', amount: -120.5, note: '', createdAt: '', updatedAt: '' })
+      expect(hydrateMove(mv({ id: 'm', note: 'payday' }))).toEqual(mv({ id: 'm', note: 'payday' }))
+    })
+
+    it('drops a row that would poison the bankroll', () => {
+      expect(hydrateMove(null)).toBeNull()
+      expect(hydrateMove('m')).toBeNull()
+      expect(hydrateMove({ date: '2026-03-01', amount: 5 })).toBeNull() // no id
+      expect(hydrateMove({ id: 7, date: '2026-03-01', amount: 5 })).toBeNull()
+      expect(hydrateMove({ id: 'm', date: '2026-02-30', amount: 5 })).toBeNull()
+      expect(hydrateMove({ id: 'm', amount: 5 })).toBeNull()
+      expect(hydrateMove({ id: 'm', date: '2026-03-01', amount: 0 })).toBeNull()
+      expect(hydrateMove({ id: 'm', date: '2026-03-01', amount: Number.NaN })).toBeNull()
+      expect(hydrateMove({ id: 'm', date: '2026-03-01', amount: '5' })).toBeNull()
+      expect(hydrateMove({ id: 'm', date: '2026-03-01' })).toBeNull()
+    })
+  })
+
+  describe('cache and outbox', () => {
+    it('is null, not empty, on a device that never loaded the moves', () => {
+      expect(loadMoveCache('u1')).toBeNull()
+      saveMoveCache('u1', [])
+      expect(loadMoveCache('u1')).toEqual([])
+    })
+
+    it('round-trips per user, dropping rows it cannot use', () => {
+      const rows = [mv({ id: 'a' }), mv({ id: 'b', amount: -40 })]
+      saveMoveCache('u1', rows)
+      expect(loadMoveCache('u1')).toEqual(rows)
+      expect(loadMoveCache('u2')).toBeNull()
+      localStorage.setItem('bettracker:moves:u3', JSON.stringify([mv({ id: 'a' }), { id: 'bad', date: 'x', amount: 5 }, { id: 'c', date: '2026-03-01', amount: 9 }]))
+      expect(loadMoveCache('u3')?.map((m) => m.id)).toEqual(['a', 'c'])
+    })
+
+    it('reads a stored value that is not a list as never loaded', () => {
+      localStorage.setItem('bettracker:moves:u1', JSON.stringify({ id: 'a' }))
+      expect(loadMoveCache('u1')).toBeNull()
+    })
+
+    it('takes the head of a stored queue as sent', () => {
+      expect(loadMoveOutbox('u1')).toEqual([])
+      saveMoveOutbox('u1', [addMove('a', 50), addMove('b', -20)])
+      expect(loadMoveOutbox('u1').map((o) => o.sent)).toEqual([true, undefined])
+    })
+
+    it('keeps its own keys, apart from the bets and the settings', () => {
+      saveMoveCache('u1', [mv({ id: 'a' })])
+      saveMoveOutbox('u1', [addMove('b', 5)])
+      expect(localStorage.getItem('bettracker:moves:u1')).not.toBeNull()
+      expect(localStorage.getItem('bettracker:moves-outbox:u1')).not.toBeNull()
+      expect(loadCache('u1')).toBeNull()
+      expect(loadOutbox('u1')).toEqual([])
+    })
+
+    it('is wiped on sign-out with the rest', () => {
+      saveMoveCache('u1', [mv({ id: 'a' })])
+      saveMoveOutbox('u1', [addMove('b', 5)])
+      clearUserData('u1')
+      expect(localStorage.getItem('bettracker:moves:u1')).toBeNull()
+      expect(localStorage.getItem('bettracker:moves-outbox:u1')).toBeNull()
+      expect(loadMoveCache('u1')).toBeNull()
+    })
+  })
+
+  it('sortMoves orders by date, then creation, then id', () => {
+    const rows = [mv({ id: 'c', date: '2026-03-02', createdAt: 'T1' }), mv({ id: 'b', createdAt: 'T2' }), mv({ id: 'z', createdAt: 'T1' }), mv({ id: 'a', createdAt: 'T1' })]
+    expect(sortMoves(rows).map((m) => m.id)).toEqual(['a', 'z', 'b', 'c'])
+  })
+
+  describe('applyMoveOutbox', () => {
+    it('shows a queued add, created when queued and stamped with the time of its content', () => {
+      expect(applyMoveOutbox([], [addMove('a', 250)])).toEqual([{ id: 'a', date: '2026-03-02', amount: 250, note: 'n', createdAt: 'Q', updatedAt: 'Q' }])
+      expect(applyMoveOutbox([], [addMove('a', 250, { editedAt: 'E' })])[0]).toMatchObject({ createdAt: 'Q', updatedAt: 'E' })
+      expect(applyMoveOutbox([], [{ ...addMove('a', -5), input: { date: '2026-03-02', amount: -5 } }])[0].note).toBe('')
+    })
+
+    it('lays an edit over the row, stamped with the edit time, and skips one whose row is gone', () => {
+      const server = [mv({ id: 'a', amount: 100, note: 'old', createdAt: 'C0' })]
+      expect(applyMoveOutbox(server, [editMove('a', -60, 'E9')])).toEqual([{ id: 'a', date: '2026-03-05', amount: -60, note: 'edited', createdAt: 'C0', updatedAt: 'E9' }])
+      expect(applyMoveOutbox(server, [editMove('missing', 5)])).toEqual(server)
+    })
+
+    it('hides a queued delete, applies ops in order and sorts the result', () => {
+      const server = [mv({ id: 'b', date: '2026-03-03' }), mv({ id: 'a', date: '2026-03-01' })]
+      expect(applyMoveOutbox(server, [delMove('a')]).map((m) => m.id)).toEqual(['b'])
+      expect(applyMoveOutbox(server, []).map((m) => m.id)).toEqual(['a', 'b'])
+      expect(applyMoveOutbox([], [addMove('x', 5), editMove('x', 7), delMove('x')])).toEqual([])
+    })
+
+    it('ignores an import, which is never built for moves', () => {
+      const bulk: MoveOp = { opId: 'imp', kind: 'bulk-add', entries: [{ id: 'x', input: { date: '2026-03-01', amount: 5 } }], queuedAt: 'Q' }
+      expect(applyMoveOutbox([mv({ id: 'a' })], [bulk]).map((m) => m.id)).toEqual(['a'])
+    })
+  })
+
+  describe('reconcileMove', () => {
+    it('puts the row the server returned in place of the optimistic one, sorted', () => {
+      const saved = mv({ id: 'a', date: '2026-03-01', updatedAt: 'S' })
+      const server = [mv({ id: 'b', date: '2026-03-04' }), mv({ id: 'a', date: '2026-03-09' })]
+      expect(reconcileMove(server, addMove('a', 100), saved)).toEqual([saved, server[0]])
+      expect(reconcileMove([], editMove('n', 3), mv({ id: 'n' })).map((m) => m.id)).toEqual(['n'])
+    })
+
+    it('removes a deleted row', () => {
+      expect(reconcileMove([mv({ id: 'a' }), mv({ id: 'b' })], delMove('a'), null).map((m) => m.id)).toEqual(['b'])
+    })
+
+    it('leaves the server state alone when an edit returned no row', () => {
+      const server = [mv({ id: 'a', note: 'theirs' })]
+      expect(reconcileMove(server, editMove('a', 9), null)).toEqual(server)
+    })
   })
 })
