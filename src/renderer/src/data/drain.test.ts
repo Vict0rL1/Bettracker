@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { Bet, Settings } from '../../../shared/types'
+import type { BankrollMove, Bet, MoveInput, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { combinedStatus, drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
-import { MigrationNeededError } from './errors'
-import { applyOutbox, enqueueOp, insertStamp, type PendingOp, type PendingSettings } from './offline'
+import { afterFailedRead, combinedStatus, drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
+import { describeError, MigrationNeededError } from './errors'
+import { applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
 const add = (id: string): PendingOp => ({ opId: `op-${id}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' })
 const del = (id: string): PendingOp => ({ opId: `op-del-${id}`, kind: 'delete', id })
@@ -221,6 +221,92 @@ describe('combinedStatus — one badge for several queues', () => {
     expect(combinedStatus(['syncing', 'behind'])).toBe('syncing')
     expect(combinedStatus(['behind', 'syncing', 'synced'])).toBe('syncing')
     expect(combinedStatus(['synced', 'synced', 'synced'])).toBe('synced')
+  })
+})
+
+describe('afterFailedRead — what a failed read of the moves leaves on screen', () => {
+  const cached = [{ id: 'm' }]
+  const noTable = () => describeError({ message: "Could not find the table 'public.bankroll_moves' in the schema cache" })
+
+  it('keeps the device copy when the server is unreachable, says offline, reports nothing', () => {
+    expect(afterFailedRead(offline(), cached)).toEqual({ offline: true, server: cached, tableMissing: false, report: false })
+    // Never loaded on this device: still nothing known.
+    expect(afterFailedRead(offline(), null)).toEqual({ offline: true, server: null, tableMissing: false, report: false })
+  })
+
+  it('reads a missing table as no moves yet, keeps a device copy from before, and reports nothing', () => {
+    expect(afterFailedRead(noTable(), null)).toEqual({ offline: false, server: [], tableMissing: true, report: false })
+    expect(afterFailedRead(noTable(), cached)).toEqual({ offline: false, server: cached, tableMissing: true, report: false })
+    // As Postgres words it, before PostgREST reads the error.
+    expect(afterFailedRead(new Error('relation "public.bankroll_moves" does not exist'), null).tableMissing).toBe(true)
+  })
+
+  it('reports any other refusal and keeps the device copy', () => {
+    expect(afterFailedRead(refused(), cached)).toEqual({ offline: false, server: cached, tableMissing: false, report: true })
+    expect(afterFailedRead(refused(), null)).toEqual({ offline: false, server: null, tableMissing: false, report: true })
+  })
+})
+
+describe('the queue rules on deposits and withdrawals', () => {
+  const addMv = (id: string, amount: number): MoveOp => ({ opId: `add-${id}`, kind: 'add', id, input: { date: '2026-03-01', amount }, queuedAt: 'Q' })
+  const editMv = (id: string, amount: number, editedAt: string): MoveOp => ({ opId: `edit-${id}-${editedAt}`, kind: 'update', id, input: { date: '2026-03-01', amount, note: 'fixed' }, editedAt })
+  const delMv = (id: string): MoveOp => ({ opId: `del-${id}`, kind: 'delete', id })
+  const row = (op: Extract<MoveOp, { kind: 'add' }>): BankrollMove => ({ id: op.id, date: op.input.date, amount: op.input.amount, note: op.input.note ?? '', createdAt: op.queuedAt, updatedAt: insertStamp(op) })
+
+  it('folds an edit into a queued add, which then carries the edit time', () => {
+    const out = enqueueOp<MoveInput>([addMv('a', 500)], editMv('a', 450, 'E'))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'add', input: { amount: 450, note: 'fixed' }, editedAt: 'E' })
+    expect(applyMoveOutbox([], out)[0]).toMatchObject({ amount: 450, updatedAt: 'E' })
+  })
+
+  it('cancels an add that never went out when it is deleted, and sends a delete after a sent one', () => {
+    expect(enqueueOp<MoveInput>([addMv('a', 500)], delMv('a'))).toEqual([])
+    const sent: MoveOp = { ...addMv('a', 500), sent: true }
+    expect(enqueueOp<MoveInput>([sent], delMv('a'))).toEqual([sent, delMv('a')])
+  })
+
+  it('drains moves in order, folding each answer into the server state', async () => {
+    let queue: MoveOp[] = [addMv('a', 500), addMv('b', -120.5), delMv('a')]
+    let server: BankrollMove[] = []
+    const hooks: DrainHooks<MoveInput, BankrollMove> = {
+      outbox: () => queue,
+      setOutbox: (next) => {
+        queue = next
+      },
+      setSent: () => {},
+      send: async (op) => (op.kind === 'add' ? row(op) : null),
+      applied: (op, result) => {
+        server = reconcileMove(server, op, result)
+      },
+      rejected: () => {}
+    }
+    expect(await drainOutbox<MoveInput, BankrollMove>(hooks)).toEqual({ stop: 'done', processed: 3 })
+    expect(server.map((m) => [m.id, m.amount])).toEqual([['b', -120.5]])
+    expect(queue).toEqual([])
+  })
+
+  it('keeps every move queued while the table is missing', async () => {
+    let queue: MoveOp[] = [addMv('a', 500), editMv('a', 400, 'E')]
+    const hooks: DrainHooks<MoveInput, BankrollMove> = {
+      outbox: () => queue,
+      setOutbox: (next) => {
+        queue = next
+      },
+      setSent: (op, sent) => {
+        queue = queue.map((o) => (o.opId === op.opId ? { ...o, sent: sent ? true : undefined } : o))
+      },
+      send: async () => {
+        throw describeError({ message: "Could not find the table 'public.bankroll_moves' in the schema cache" })
+      },
+      applied: () => {},
+      rejected: () => {}
+    }
+    const out = await drainOutbox<MoveInput, BankrollMove>(hooks)
+    expect(out.stop).toBe('behind')
+    expect(queue.map((o) => o.opId)).toEqual(['add-a', 'edit-a-E'])
+    // Refused before it could apply: still cancellable.
+    expect(queue[0].sent).toBeUndefined()
   })
 })
 

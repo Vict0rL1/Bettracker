@@ -5,10 +5,10 @@ import type { PendingOp, PendingSettings } from './offline'
 /**
  * Replaying queued changes against the server.
  *
- * The hooks (useBetSync, useSettings) own the state; these functions own the
- * decisions: what leaves the queue, what stays, and when to stop. They take
- * their I/O as arguments so every branch can be tested without React or
- * Supabase.
+ * The hooks (useBetSync, useSettings, useMoves) own the state; these
+ * functions own the decisions: what leaves the queue, what stays, when to
+ * stop, and what a failed read leaves on screen. They take their I/O as
+ * arguments so every branch can be tested without React or Supabase.
  */
 
 /**
@@ -126,6 +126,32 @@ export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushRe
     h.setPending(null)
     return { stop: 'rejected', error: err }
   }
+}
+
+/**
+ * What a failed read of a table that a migration adds (the moves of 005)
+ * leaves behind:
+ *  - unreachable: the device copy stays and the badge says offline;
+ *  - the table is missing: the database has no moves yet, so an empty list is
+ *    the truth (a device copy from before is kept). `tableMissing` lets the
+ *    hook keep looking for the migration. Nothing is reported: reads happen on
+ *    every boot and resume, and the hint is for a change that waits on it;
+ *  - refused for any other reason: the device copy stays and it is reported.
+ * `server` is the snapshot to show from now on; `tableMissing` false says
+ * nothing about the table either way.
+ */
+export interface FailedRead<T> {
+  offline: boolean
+  server: T[] | null
+  tableMissing: boolean
+  report: boolean
+}
+
+export function afterFailedRead<T>(err: unknown, cached: T[] | null): FailedRead<T> {
+  const failure = classifySyncError(err)
+  if (failure === 'offline') return { offline: true, server: cached, tableMissing: false, report: false }
+  if (failure === 'behind') return { offline: false, server: cached ?? [], tableMissing: true, report: false }
+  return { offline: false, server: cached, tableMissing: false, report: true }
 }
 
 /** What the header badge shows. 'behind': changes wait on a missing migration. */
