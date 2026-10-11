@@ -5,6 +5,7 @@ import {
   applyOutbox,
   clearUserData,
   enqueueOp,
+  headAsSent,
   insertStamp,
   hydrateBet,
   loadCache,
@@ -245,6 +246,14 @@ describe('loadOutbox — queues written by older versions', () => {
   it('leaves an edit that has its time alone', () => {
     saveOutbox('u-now', [del('x'), update('a', 5, 'T1')])
     expect(loadOutbox('u-now', 'LATER')[1]).toEqual(update('a', 5, 'T1'))
+  })
+
+  it('headAsSent marks only the head, and only when it is not marked yet', () => {
+    expect(headAsSent([]).length).toBe(0)
+    const ops = headAsSent([del('a'), del('b')])
+    expect(ops.map((o) => o.sent)).toEqual([true, undefined])
+    const already = [{ ...del('a'), sent: true as const }]
+    expect(headAsSent(already)[0]).toBe(already[0])
   })
 
   it('takes the head of the queue as sent: it may have gone out with its answer lost', () => {

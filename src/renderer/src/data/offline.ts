@@ -19,26 +19,26 @@ import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type Bet, type BetInput
  * request failed or not, it may have reached the server, so the op is never
  * rewritten or cancelled from then on (see enqueueOp).
  */
-export type PendingOp =
+export type PendingOp<I = BetInput> =
   /** `editedAt`, when present, is the last edit folded into a not-yet-sent add. */
-  | { opId: string; kind: 'add'; id: string; input: BetInput; queuedAt: string; editedAt?: string; sent?: true }
+  | { opId: string; kind: 'add'; id: string; input: I; queuedAt: string; editedAt?: string; sent?: true }
   /**
    * `editedAt` is when the user made the edit — the conflict key, see data/bets.ts.
    * `legacy` marks an edit queued by a version from before migration 003: its
    * input only has the fields that version knew, and it is sent the way that
    * version sent it (see loadOutbox).
    */
-  | { opId: string; kind: 'update'; id: string; input: BetInput; editedAt: string; legacy?: true; sent?: true }
+  | { opId: string; kind: 'update'; id: string; input: I; editedAt: string; legacy?: true; sent?: true }
   | { opId: string; kind: 'delete'; id: string; sent?: true }
   /** A CSV import: many rows in one op so it syncs as a few chunked requests. */
-  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: BetInput }[]; queuedAt: string; sent?: true }
+  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; sent?: true }
 
 /**
  * The time an insert writes as `updated_at`: when its content was last set on
  * the device (the add itself, or the last edit folded into it). Device time,
  * like every edit's, so the conflict check compares like with like.
  */
-export const insertStamp = (op: Extract<PendingOp, { kind: 'add' | 'bulk-add' }>): string =>
+export const insertStamp = <I>(op: Extract<PendingOp<I>, { kind: 'add' | 'bulk-add' }>): string =>
   op.kind === 'add' ? (op.editedAt ?? op.queuedAt) : op.queuedAt
 
 export interface OfflineUser {
@@ -118,15 +118,19 @@ export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJs
  */
 export function loadOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
   const ops = readJson<PendingOp[]>(outboxKey(userId)) ?? []
-  return ops
-    .map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true as const } : op))
-    // The head of a queue may have gone out with its answer lost. This
-    // version saves `sent` before a request leaves; one from before it did
-    // not, and its queue looks the same. So the head is taken as sent either
-    // way: never rewritten or cancelled, at the cost of a request at most (an
-    // edit queued behind it instead of folded in, a delete sent after it).
-    .map((op, i) => (i === 0 && !op.sent ? { ...op, sent: true as const } : op))
+  return headAsSent(ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true as const } : op)))
 }
+
+/**
+ * The head of a stored queue may have gone out with its answer lost. This
+ * version saves `sent` before a request leaves; one from before it did not,
+ * and its queue looks the same (and a save can fail when storage is full).
+ * So the head is taken as sent either way: never rewritten or cancelled, at
+ * the cost of a request at most (an edit queued behind it instead of folded
+ * in, a delete sent after it).
+ */
+export const headAsSent = <T extends { sent?: true }>(ops: readonly T[]): T[] =>
+  ops.map((op, i) => (i === 0 && !op.sent ? { ...op, sent: true as const } : op))
 
 const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
   status === 'pending' ? amount === null : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 : amount === 0)
@@ -203,7 +207,7 @@ const byDateThenCreated = (a: Bet, b: Bet): number => {
 export const sortBets = (bets: readonly Bet[]): Bet[] => [...bets].sort(byDateThenCreated)
 
 /** How many rows a pending op will write (used for the "queued" badge). */
-export const opSize = (op: PendingOp): number => (op.kind === 'bulk-add' ? op.entries.length : 1)
+export const opSize = <I>(op: PendingOp<I>): number => (op.kind === 'bulk-add' ? op.entries.length : 1)
 
 /** The fields an input carries over onto a row, in the row's shape. */
 function fieldsFrom(input: BetInput): Pick<Bet, 'date' | 'amount' | 'stake' | 'odds' | 'closingOdds' | 'status' | 'note' | 'sport' | 'book' | 'betType'> {
@@ -266,8 +270,8 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
  * replayed as-is and the later edit/delete op applies on top, which costs one
  * extra request but keeps the import an all-or-nothing unit.
  */
-export function enqueueOp(outbox: readonly PendingOp[], op: PendingOp): PendingOp[] {
-  const forBet = (o: PendingOp, id: string): boolean => o.kind !== 'bulk-add' && o.id === id
+export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: PendingOp<I>): PendingOp<I>[] {
+  const forBet = (o: PendingOp<I>, id: string): boolean => o.kind !== 'bulk-add' && o.id === id
   if (op.kind === 'update') {
     let i = outbox.length - 1
     while (i >= 0 && !forBet(outbox[i], op.id)) i--

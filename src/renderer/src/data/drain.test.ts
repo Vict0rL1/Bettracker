@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Bet, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
+import { combinedStatus, drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
 import { MigrationNeededError } from './errors'
 import { applyOutbox, enqueueOp, insertStamp, type PendingOp, type PendingSettings } from './offline'
 
@@ -204,6 +204,23 @@ describe('syncStatus — the badge', () => {
   it('says behind when the queue waits on a migration, syncing otherwise', () => {
     expect(at({ queued: 1, behind: true })).toBe('behind')
     expect(at({ queued: 1 })).toBe('syncing')
+  })
+})
+
+describe('combinedStatus — one badge for several queues', () => {
+  it('is what the bets say when nothing else is queued', () => {
+    for (const s of ['synced', 'syncing', 'offline', 'behind'] as const) expect(combinedStatus([s, 'synced'])).toBe(s)
+  })
+
+  it('says behind when only a held-back queue waits', () => {
+    expect(combinedStatus(['synced', 'behind'])).toBe('behind')
+  })
+
+  it('puts offline first, then a queue on its way, then one held back', () => {
+    expect(combinedStatus(['behind', 'offline'])).toBe('offline')
+    expect(combinedStatus(['syncing', 'behind'])).toBe('syncing')
+    expect(combinedStatus(['behind', 'syncing', 'synced'])).toBe('syncing')
+    expect(combinedStatus(['synced', 'synced', 'synced'])).toBe('synced')
   })
 })
 

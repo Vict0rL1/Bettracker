@@ -15,6 +15,7 @@ import SettingsDialog from './components/SettingsDialog'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
+import { combinedStatus } from './data/drain'
 import { useBetSync } from './data/useBetSync'
 import { useSettings } from './data/useSettings'
 import { retagPlan, settlePlan, type TagPatch } from './lib/bulk'
@@ -69,7 +70,7 @@ export default function App() {
   const { settings, dirty: settingsDirty, blocked: settingsBlocked, update: updateSettings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
   // A settings change waiting on a migration is a queued change too: the badge
   // says so even when no bet is queued.
-  const badgeStatus = status === 'synced' && settingsDirty && settingsBlocked ? 'behind' : status
+  const badgeStatus = combinedStatus([status, settingsDirty && settingsBlocked ? 'behind' : 'synced'])
 
   useEffect(() => {
     if (!loading && (!activeUserId || bets !== null)) {

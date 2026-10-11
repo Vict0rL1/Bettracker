@@ -1,4 +1,4 @@
-import type { Bet, Settings } from '../../../shared/types'
+import type { Bet, BetInput, Settings } from '../../../shared/types'
 import { classifySyncError } from './errors'
 import type { PendingOp, PendingSettings } from './offline'
 
@@ -23,27 +23,27 @@ export type DrainResult =
   | { stop: 'offline'; processed: number }
   | { stop: 'behind'; processed: number; error: unknown }
 
-export interface DrainHooks {
+export interface DrainHooks<I = BetInput, R = Bet> {
   /** The queue as it is now. Read before every op: the user can add to it while a request is out. */
-  outbox: () => readonly PendingOp[]
-  setOutbox: (next: PendingOp[]) => void
+  outbox: () => readonly PendingOp<I>[]
+  setOutbox: (next: PendingOp<I>[]) => void
   /**
    * Mark an op `sent` just before its first request goes out (from then on
    * it may reach the server whatever the answer, so enqueueOp must never
    * rewrite or cancel it), or unmark it when that first request was refused
    * before it could apply. The mark is saved with the queue.
    */
-  setSent: (op: PendingOp, sent: boolean) => void
+  setSent: (op: PendingOp<I>, sent: boolean) => void
   /** Send one op; resolves with the row the server returned, if any. */
-  send: (op: PendingOp) => Promise<Bet | null>
+  send: (op: PendingOp<I>) => Promise<R | null>
   /**
    * The op reached the server. `superseded`: another op for the same bet is
    * still queued behind it, so a refused update is not the last word on
    * that bet (no "newer edit elsewhere" notice for it).
    */
-  applied: (op: PendingOp, result: Bet | null, superseded: boolean) => void
+  applied: (op: PendingOp<I>, result: R | null, superseded: boolean) => void
   /** The server refused the op for good; it has already left the queue. */
-  rejected: (op: PendingOp, err: unknown) => void
+  rejected: (op: PendingOp<I>, err: unknown) => void
 }
 
 /**
@@ -52,10 +52,10 @@ export interface DrainHooks {
  * it was out the user may have queued more, so whatever is first by then may
  * be a different op.
  */
-export async function drainOutbox(h: DrainHooks): Promise<DrainResult> {
+export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): Promise<DrainResult> {
   let processed = 0
-  const without = (op: PendingOp): PendingOp[] => h.outbox().filter((o) => o.opId !== op.opId)
-  const forBet = (o: PendingOp, op: PendingOp): boolean => o.kind !== 'bulk-add' && op.kind !== 'bulk-add' && o.id === op.id
+  const without = (op: PendingOp<I>): PendingOp<I>[] => h.outbox().filter((o) => o.opId !== op.opId)
+  const forBet = (o: PendingOp<I>, op: PendingOp<I>): boolean => o.kind !== 'bulk-add' && op.kind !== 'bulk-add' && o.id === op.id
   for (let op = h.outbox()[0]; op !== undefined; op = h.outbox()[0]) {
     const firstTry = !op.sent
     if (firstTry) h.setSent(op, true)
@@ -141,6 +141,17 @@ export function syncStatus(s: { canSync: boolean; offline: boolean; queued: numb
   if (!s.canSync || s.offline) return 'offline'
   if (s.queued === 0) return 'synced'
   return s.behind ? 'behind' : 'syncing'
+}
+
+/**
+ * One badge for several queues (the bets, the settings patch …): the first of
+ * offline, syncing, behind that any of them is in, else synced. A queue held
+ * back by a missing migration does not hide another that is on its way.
+ * Callers pass 'synced' for a queue with nothing in it.
+ */
+export function combinedStatus(parts: readonly SyncStatus[]): SyncStatus {
+  for (const s of ['offline', 'syncing', 'behind'] as const) if (parts.includes(s)) return s
+  return 'synced'
 }
 
 /**
