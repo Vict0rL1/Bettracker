@@ -46,6 +46,21 @@ export function entry(over: Partial<SeedEntry> & { id: string; date: string; amo
   }
 }
 
+/** A deposit (+) or withdrawal (−) as the app caches it (camelCase). */
+export interface SeedMove {
+  id: string
+  date: string
+  amount: number
+  note: string
+  createdAt: string
+  updatedAt: string
+}
+
+export function move(over: Partial<SeedMove> & { id: string; date: string; amount: number }): SeedMove {
+  const t = `${over.date}T09:00:00.000Z`
+  return { note: '', createdAt: t, updatedAt: t, ...over }
+}
+
 /** Three bets: one legacy win without a stake, one loss, one win — enough for every stat to be non-trivial. */
 export const SEED: SeedEntry[] = [
   entry({ id: 'a', date: '2026-08-01', amount: 200, note: 'legacy', sport: 'NBA', book: 'DK', betType: 'Parlay' }),
@@ -67,18 +82,22 @@ window.__supabaseMock = {
 `
 
 /**
- * A signed-in session against a small in-memory server: the bets and the
- * settings row, and the PostgREST behaviour the app relies on — inserts (a
- * duplicate id is 23505), updates guarded by `updated_at <= editedAt` (the
- * conflict rule), deletes and upserts. Its state lives in localStorage so it
- * survives reloads, like a real database:
+ * A signed-in session against a small in-memory server: the bets, the
+ * settings row and the deposits and withdrawals, and the PostgREST behaviour
+ * the app relies on — inserts (a duplicate id is 23505), updates guarded by
+ * `updated_at <= editedAt` (the conflict rule), deletes and upserts. Its state
+ * lives in localStorage so it survives reloads, like a real database:
  *  - `e2e:rows`      the bets;
  *  - `e2e:settings`  the user_settings row, if any;
+ *  - `e2e:moves`     the bankroll_moves rows;
  *  - `e2e:migrated`  unset = the database is missing migration 004: reads
  *                    work, every add or edit (they all name closing_odds) is
  *                    refused (PGRST204), deletes go through, and the settings
  *                    table is missing (PGRST205). Setting it stands for
  *                    running the migration;
+ *  - `e2e:migrated-005`  unset = the database is missing migration 005: the
+ *                    bankroll_moves table is missing, so every request for
+ *                    it, reads and deletes too, is refused (PGRST205);
  *  - `e2e:latency`   milliseconds before each answer, to leave a request on
  *                    the wire while the test keeps using the app;
  *  - `e2e:writes`    how many write requests have been answered, so a test
@@ -97,6 +116,7 @@ const MOCK_SERVER = `
   const saveRows = (r) => localStorage.setItem('e2e:rows', JSON.stringify(r))
   const NO_COLUMN = { message: "Could not find the 'closing_odds' column of 'entries' in the schema cache", code: 'PGRST204' }
   const NO_TABLE = { message: "Could not find the table 'public.user_settings' in the schema cache", code: 'PGRST205' }
+  const NO_MOVES_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
   const stamp = (row) => ({ created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...row })
   const settingsRow = () => JSON.parse(localStorage.getItem('e2e:settings') || 'null')
   const saveSettingsRow = (r) => localStorage.setItem('e2e:settings', JSON.stringify(r))
@@ -118,6 +138,34 @@ const MOCK_SERVER = `
     }
     return { data: null, error: { message: 'e2e harness: settings ' + q.action + ' is not modelled', code: 'E2E' } }
   }
+  const moveRows = () => JSON.parse(localStorage.getItem('e2e:moves') || '[]')
+  const saveMoveRows = (r) => localStorage.setItem('e2e:moves', JSON.stringify(r))
+  function moves(q) {
+    if (localStorage.getItem('e2e:migrated-005') !== '1') return { data: null, error: NO_MOVES_TABLE }
+    const all = moveRows()
+    if (q.action === 'select') {
+      if (q.eq.id === undefined) return { data: all, error: null }
+      return { data: all.find((r) => r.id === q.eq.id) || null, error: null }
+    }
+    if (q.action === 'insert') {
+      if (all.some((r) => r.id === q.payload.id)) return { data: null, error: { message: 'duplicate key value violates unique constraint "bankroll_moves_pkey"', code: '23505' } }
+      const row = stamp(q.payload)
+      saveMoveRows([...all, row])
+      return { data: row, error: null }
+    }
+    if (q.action === 'update') {
+      const i = all.findIndex((r) => r.id === q.eq.id && (q.lte === undefined || r.updated_at <= q.lte))
+      if (i < 0) return { data: null, error: null }
+      all[i] = { ...all[i], ...q.payload }
+      saveMoveRows(all)
+      return { data: all[i], error: null }
+    }
+    if (q.action === 'delete') {
+      saveMoveRows(all.filter((r) => r.id !== q.eq.id))
+      return { data: null, error: null, count: all.length - moveRows().length }
+    }
+    return { data: null, error: { message: 'e2e harness: moves ' + q.action + ' is not modelled', code: 'E2E' } }
+  }
   function answer(q) {
     // Postgres refuses a conflict check against something that is no time (an edit with no editedAt).
     if (q.lteSet && (typeof q.lte !== 'string' || isNaN(Date.parse(q.lte)))) {
@@ -126,6 +174,7 @@ const MOCK_SERVER = `
     if (localStorage.getItem('e2e:down') === '1') return { data: null, error: { message: 'TypeError: Failed to fetch', code: '' } }
     if (q.action !== 'select') localStorage.setItem('e2e:writes', String(Number(localStorage.getItem('e2e:writes') || 0) + 1))
     if (q.table === 'user_settings') return settings(q)
+    if (q.table === 'bankroll_moves') return moves(q)
     const all = rows()
     if (q.action === 'select') {
       if (q.eq.id === undefined) return { data: all, error: null }
@@ -211,11 +260,18 @@ export interface BootOptions {
   /** Cached user settings, as the app would have stored them. */
   settings?: Record<string, unknown>
   /**
+   * Deposits and withdrawals: cached on the device and, with a backend, on
+   * the server. Without it the device has never loaded any (a device that
+   * has just been upgraded) and the server has none.
+   */
+  moves?: SeedMove[]
+  /**
    * 'none' (default): no session, so the app runs on its device copy alone.
-   * 'behind': signed in, against a database missing migration 004 (MOCK_SERVER).
+   * 'behind': signed in, against a database missing migrations 004 and 005 (MOCK_SERVER).
+   * 'behind-005': signed in, against a database that has 004 but is missing 005.
    * 'live': signed in, against an up-to-date database (MOCK_SERVER).
    */
-  backend?: 'none' | 'behind' | 'live'
+  backend?: 'none' | 'behind' | 'behind-005' | 'live'
   /** With a backend: milliseconds before each answer. */
   latencyMs?: number
   /** A queue of changes waiting to sync, as the app (or an older version of it) stored it. */
@@ -234,21 +290,35 @@ const toSettingsRow = (s: Record<string, unknown>) => ({
   updated_at: '2026-01-01T00:00:00.000Z'
 })
 
+/** A seed move as the bankroll_moves row it would be (snake_case). */
+const toMoveRow = (m: SeedMove) => ({
+  id: m.id,
+  user_id: USER.id,
+  date: m.date,
+  amount: m.amount,
+  note: m.note,
+  created_at: m.createdAt,
+  updated_at: m.updatedAt
+})
+
 export async function install(context: BrowserContext, opts: BootOptions = {}): Promise<void> {
   const entries = opts.entries ?? SEED
   const backend = opts.backend ?? 'none'
+  const has004 = backend === 'live' || backend === 'behind-005'
   const server =
     backend === 'none'
       ? null
       : {
           rows: entries.map(toRow),
-          migrated: backend === 'live',
+          migrated: has004,
+          migrated005: backend === 'live',
           latencyMs: opts.latencyMs ?? 0,
           // A migrated server holds the settings the device has cached.
-          settingsRow: backend === 'live' && opts.settings ? toSettingsRow(opts.settings) : null
+          settingsRow: has004 && opts.settings ? toSettingsRow(opts.settings) : null,
+          moveRows: (opts.moves ?? []).map(toMoveRow)
         }
   await context.addInitScript(
-    ({ mock, user, entries, server, theme, settings, outbox }) => {
+    ({ mock, user, entries, server, theme, settings, moves, outbox }) => {
       // eslint-disable-next-line no-eval
       eval(mock)
       if (localStorage.getItem('e2e:seeded')) return
@@ -257,9 +327,12 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
       localStorage.setItem(`bettracker:cache:${user.id}`, JSON.stringify(entries))
       localStorage.setItem('bettracker:theme', theme)
       if (settings) localStorage.setItem(`bettracker:settings:${user.id}`, JSON.stringify(settings))
+      if (moves) localStorage.setItem(`bettracker:moves:${user.id}`, JSON.stringify(moves))
       if (server) {
         localStorage.setItem('e2e:rows', JSON.stringify(server.rows))
+        localStorage.setItem('e2e:moves', JSON.stringify(server.moveRows))
         if (server.migrated) localStorage.setItem('e2e:migrated', '1')
+        if (server.migrated005) localStorage.setItem('e2e:migrated-005', '1')
         localStorage.setItem('e2e:latency', String(server.latencyMs))
         if (server.settingsRow) localStorage.setItem('e2e:settings', JSON.stringify(server.settingsRow))
       }
@@ -272,6 +345,7 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
       server,
       theme: opts.theme ?? 'dark',
       settings: opts.settings ?? null,
+      moves: opts.moves ?? null,
       outbox: opts.outbox ?? null
     }
   )
