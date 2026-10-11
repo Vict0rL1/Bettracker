@@ -195,7 +195,7 @@ export function normalizeMove(input: MoveInput): CleanMove {
 
 /**
  * A money box in the settings (unit size, starting bankroll, default stake):
- * null when cleared, the amount in cents, or 'invalid' for anything the
+ * null when cleared, the amount rounded to cents, or 'invalid' for anything the
  * database would refuse. Zero is judged once rounded, as stored: 0.004 is 0,
  * and a unit size of 0 would be refused, taking every other change merged
  * into the same settings patch down with it.

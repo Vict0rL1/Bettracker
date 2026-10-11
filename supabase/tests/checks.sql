@@ -185,7 +185,7 @@ end $$;
 -- operation, broadcast by realtime, indexed for the per-user date reads.
 do $$ begin
   assert (select relrowsecurity from pg_class where oid = 'public.bankroll_moves'::regclass), 'moves have row-level security';
-  assert (select count(*) from pg_policies where schemaname = 'public' and tablename = 'bankroll_moves' and policyname like 'moves are private - %') = 4, 'four move policies';
+  assert (select count(*) from pg_policies where schemaname = 'public' and tablename = 'bankroll_moves') = 4, 'four move policies, and no other';
   assert exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'bankroll_moves'), 'moves are broadcast';
   assert to_regclass('public.bankroll_moves_user_date_idx') is not null, 'moves are indexed by user and date';
 end $$;
@@ -219,6 +219,19 @@ begin
     raise exception 'a move was handed to someone else';
   exception when insufficient_privilege then null;
   end;
+  -- With a WHERE, Postgres applies the select policy too, which would hide a
+  -- loose update or delete policy. Without one, only those two decide.
+  begin
+    update public.bankroll_moves set user_id = '00000000-0000-0000-0000-000000000001';
+    raise exception 'a move was handed to someone else (no where)';
+  exception when insufficient_privilege then null;
+  end;
+  update public.bankroll_moves set note = 'mine';
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered edit touches only the user''s own moves';
+  delete from public.bankroll_moves;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered delete removes only the user''s own moves';
 end $$;
 rollback;
 do $$ begin

@@ -15,7 +15,11 @@ import {
 } from './offline'
 
 export interface MoveSync {
-  /** Server rows with queued changes applied. Empty until loaded. */
+  /**
+   * Server rows with queued changes applied. Before the first snapshot, only
+   * what this device queued (or sent since): pass it on as the bankroll's
+   * moves only when `loaded`.
+   */
   moves: BankrollMove[]
   /** A snapshot exists: a cache, a successful read, or the [] a missing table means. */
   loaded: boolean
@@ -60,6 +64,10 @@ export function useMoves(
   // A read went through, so the table exists: only then is there anything to
   // subscribe to.
   const [tableReady, setTableReady] = useState(false)
+  // Moves that reached the server before this device had any snapshot. They
+  // keep showing until the first read brings the whole list, but are never
+  // cached and never make the list count as loaded.
+  const [landed, setLanded] = useState<BankrollMove[]>([])
 
   const serverRef = useRef<BankrollMove[] | null>(null)
   const outboxRef = useRef<MoveOp[]>([])
@@ -139,6 +147,7 @@ export function useMoves(
           // not the list, and a cache of it would read as a known bankroll.
           // The refresh after the drain brings the whole list.
           if (serverRef.current !== null) setServer(reconcileMove(serverRef.current, op, row))
+          else setLanded((rows) => reconcileMove(rows, op, row))
           setOffline(false)
           setBehind(false)
         },
@@ -173,6 +182,7 @@ export function useMoves(
     noticeRef.current.clear()
     setBehindState(false)
     setTableReady(false)
+    setLanded([])
     if (!userId) return
     const cached = loadMoveCache(userId)
     const pending = loadMoveOutbox(userId)
@@ -272,7 +282,7 @@ export function useMoves(
 
   // Queued changes show even before the first snapshot: a deposit made on a
   // device that has never loaded the list is still the user's deposit.
-  const moves = useMemo(() => applyMoveOutbox(server ?? [], outbox), [server, outbox])
+  const moves = useMemo(() => applyMoveOutbox(server ?? landed, outbox), [server, landed, outbox])
 
   const status = syncStatus({ canSync, offline, queued: outbox.length, behind })
 

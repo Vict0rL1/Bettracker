@@ -59,6 +59,14 @@ describe('bankrollNow', () => {
     expect(b.current).toBe(1629.75)
   })
 
+  it('leaves a move that rounds to no cents out of both tallies', () => {
+    // The database can't hold one; a hand-edited cache could.
+    const b = known(bankrollNow([], [move({ amount: 0.004 }), move({ amount: -0.004 })], 10))
+    expect(b.deposits).toEqual({ count: 0, sum: 0 })
+    expect(b.withdrawals).toEqual({ count: 0, sum: 0 })
+    expect(b.current).toBe(10)
+  })
+
   it('counts a move dated in the future already', () => {
     expect(known(bankrollNow([], [move({ date: '2099-01-01', amount: -40 })], 100)).current).toBe(60)
   })
