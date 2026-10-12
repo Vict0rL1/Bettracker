@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react'
 import type { Bet, OddsFormat } from '../../../shared/types'
 import { bandBounds, bandRangeText, type BandKey } from '../lib/bands'
 import { monthYearShort } from '../lib/dates'
-import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
+import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import { breakdown, GROUPINGS, type Grouping, type TagKey } from '../lib/stats'
 import type { StringKey } from '../lib/strings'
 
@@ -29,6 +30,7 @@ const tone = (n: number): string => (n > 0 ? 'win' : n < 0 ? 'loss' : 'push')
 
 export default function Breakdown({ bets, oddsFormat }: Props) {
   const { t, tn } = useLang()
+  const money = useMoney()
   const [tab, setTab] = useState<Grouping>('sport')
   const rows = useMemo(() => breakdown(bets, tab), [bets, tab])
 
@@ -85,7 +87,7 @@ export default function Breakdown({ bets, oddsFormat }: Props) {
                 <span className="bd-label" title={titleOf(r.label)}>
                   {labelOf(r.label)}
                 </span>
-                <span className={`bd-profit ${tone(r.profit)}`}>{fmtMoney(r.profit)}</span>
+                <span className={`bd-profit ${tone(r.profit)}`}>{money.signed(r.profit)}</span>
               </div>
               <div className="bd-bar" aria-hidden="true">
                 <span className={`bd-fill ${tone(r.profit)}`} style={{ width: `${(Math.abs(r.profit) / peak) * 100}%` }} />
@@ -110,7 +112,7 @@ export default function Breakdown({ bets, oddsFormat }: Props) {
                 >
                   {r.roi === null
                     ? t('bd.noRoi')
-                    : t('bd.roiOn', { pct: fmtPctSigned(r.roi), staked: fmtStake(r.staked) }) + (r.roiBets < r.bets ? ` (${r.roiBets}/${r.bets})` : '')}
+                    : t('bd.roiOn', { pct: fmtPctSigned(r.roi), staked: money.stake(r.staked) }) + (r.roiBets < r.bets ? ` (${r.roiBets}/${r.bets})` : '')}
                 </span>
                 {r.clv !== null && (
                   <span className={`bd-clv ${tone(r.clv)}`} title={t('bd.clvTitle', { n: r.clvBets })}>

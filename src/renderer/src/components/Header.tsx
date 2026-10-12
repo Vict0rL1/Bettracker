@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SyncStatus } from '../data/useBetSync'
 import { useLang } from '../lib/i18n'
 import type { Theme } from '../lib/theme'
@@ -11,6 +11,8 @@ interface Props {
   queuedCount: number
   /** Bets still waiting for a result. */
   pendingCount: number
+  /** Changes this device has not got to the server yet (bets, deposits and withdrawals, settings). */
+  unsynced: number
   canExport: boolean
   theme: Theme
   onExport: () => void
@@ -27,6 +29,7 @@ export default function Header({
   status,
   queuedCount,
   pendingCount,
+  unsynced,
   canExport,
   theme,
   onExport,
@@ -37,8 +40,23 @@ export default function Header({
   onLogToday,
   onSignOut
 }: Props) {
-  const { t, toggle: toggleLang } = useLang()
+  const { t, tn, toggle: toggleLang } = useLang()
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Signing out wipes this device's copy, queue included. With changes still
+  // waiting (offline, or held back by a missing migration) the first click
+  // only says so; a second one within a few seconds signs out anyway.
+  const [confirmSignOut, setConfirmSignOut] = useState(false)
+  useEffect(() => {
+    if (!confirmSignOut) return
+    const timer = setTimeout(() => setConfirmSignOut(false), 4000)
+    return () => clearTimeout(timer)
+  }, [confirmSignOut])
+  const signOut = (): void => {
+    if (unsynced > 0 && !confirmSignOut) setConfirmSignOut(true)
+    else onSignOut()
+  }
+  const signOutTitle = unsynced > 0 ? t('header.signOutUnsyncedTitle', { changes: tn('change', unsynced) }) : t('header.signOut')
 
   const badge =
     status === 'synced'
@@ -115,9 +133,14 @@ export default function Header({
               {email}
             </span>
           )}
-          <button type="button" className="btn btn-ghost btn-signout" onClick={onSignOut} title={t('header.signOut')}>
-            {t('header.signOut')}
+          <button type="button" className={`btn btn-ghost btn-signout ${confirmSignOut ? 'confirming' : ''}`} onClick={signOut} title={signOutTitle}>
+            {confirmSignOut ? t('header.signOutUnsynced') : t('header.signOut')}
           </button>
+          {confirmSignOut && (
+            <span className="visually-hidden" role="alert">
+              {signOutTitle}
+            </span>
+          )}
         </div>
       </div>
     </header>

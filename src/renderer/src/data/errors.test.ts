@@ -13,6 +13,12 @@ describe('isMigrationNeededError', () => {
     expect(isMigrationNeededError(new Error("Could not find the table 'public.user_settings' in the schema cache"))).toBe(true)
   })
 
+  it('recognises a missing deposits and withdrawals table (005 not run)', () => {
+    expect(isMigrationNeededError(new Error('relation "public.bankroll_moves" does not exist'))).toBe(true)
+    expect(isMigrationNeededError(new Error("Could not find the table 'public.bankroll_moves' in the schema cache"))).toBe(true)
+    expect(classifySyncError(describeError({ message: "Could not find the table 'public.bankroll_moves' in the schema cache" }))).toBe('behind')
+  })
+
   it('recognises the one-bet-per-day constraint that 001 removes', () => {
     expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "entries_user_id_date_key"'))).toBe(true)
   })
@@ -21,6 +27,10 @@ describe('isMigrationNeededError', () => {
     expect(isMigrationNeededError(new Error('permission denied for table entries'))).toBe(false)
     expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "entries_pkey"'))).toBe(false)
     expect(isMigrationNeededError(new Error('new row for relation "entries" violates check constraint "entries_odds_gt_one"'))).toBe(false)
+    // The table is there; the row is what was refused.
+    expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "bankroll_moves_pkey"'))).toBe(false)
+    expect(isMigrationNeededError(new Error('new row for relation "bankroll_moves" violates check constraint "bankroll_moves_amount_nonzero"'))).toBe(false)
+    expect(isMigrationNeededError(new Error('permission denied for table bankroll_moves'))).toBe(false)
   })
 })
 

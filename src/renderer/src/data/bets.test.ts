@@ -7,18 +7,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const state = vi.hoisted(() => ({
   result: { data: null as unknown, error: null as { message: string; code?: string } | null, count: null as number | null },
+  /** Answers for the next requests, in order; `result` once they run out. */
+  queued: [] as { data: unknown; error: { message: string; code?: string } | null; count: number | null }[],
   calls: [] as { method: string; args: unknown[] }[]
 }))
 
 vi.mock('../lib/supabase', () => {
   const chain: Record<string, unknown> = {}
-  for (const m of ['from', 'select', 'insert', 'update', 'upsert', 'delete', 'eq', 'lte', 'order', 'single', 'maybeSingle']) {
+  for (const m of ['from', 'select', 'insert', 'update', 'upsert', 'delete', 'eq', 'lte', 'order', 'range', 'single', 'maybeSingle']) {
     chain[m] = (...args: unknown[]) => {
       state.calls.push({ method: m, args })
       return chain
     }
   }
-  chain.then = (resolve: (v: unknown) => void) => resolve(state.result)
+  chain.then = (resolve: (v: unknown) => void) => resolve(state.queued.shift() ?? state.result)
   return {
     supabase: {
       ...chain,
@@ -35,6 +37,7 @@ const call = (method: string) => state.calls.find((c) => c.method === method)
 beforeEach(() => {
   state.calls = []
   state.result = { data: null, error: null, count: null }
+  state.queued = []
 })
 
 describe('updateBet — last write wins by edit time', () => {
@@ -136,6 +139,51 @@ describe('sendOp — one queued op, as it goes out', () => {
     expect(await sendOp({ opId: 'o', kind: 'delete', id: 'a' })).toBeNull()
     expect(call('delete')).toBeDefined()
     expect(call('eq')?.args).toEqual(['id', 'a'])
+  })
+})
+
+describe('reading every row, page by page', () => {
+  const rows = (n: number, from = 0) =>
+    Array.from({ length: n }, (_, i) => ({ id: `r${from + i}`, date: '2026-03-01', amount: '1', status: 'won', note: '', created_at: 'c', updated_at: 'u' }))
+  const ranges = () => state.calls.filter((c) => c.method === 'range').map((c) => c.args)
+
+  it('keeps asking until the counted total is in, past the 1,000 rows one answer holds', async () => {
+    state.queued = [
+      { data: rows(1000), error: null, count: 1150 },
+      { data: rows(150, 1000), error: null, count: 1150 }
+    ]
+    const bets = await getBets()
+    expect(bets).toHaveLength(1150)
+    expect(bets[1149].id).toBe('r1149')
+    expect(ranges()).toEqual([
+      [0, 999],
+      [1000, 1999]
+    ])
+    // Ordered on something unique, so pages neither skip nor repeat a row.
+    expect(state.calls.filter((c) => c.method === 'order').map((c) => c.args[0])).toEqual(['date', 'created_at', 'id', 'date', 'created_at', 'id'])
+  })
+
+  it('without a count, stops at the first short page', async () => {
+    state.queued = [
+      { data: rows(1000), error: null, count: null },
+      { data: rows(3, 1000), error: null, count: null }
+    ]
+    expect(await getBets()).toHaveLength(1003)
+    expect(ranges()).toHaveLength(2)
+  })
+
+  it('asks once for a history that fits in one page', async () => {
+    state.result = { data: rows(12), error: null, count: 12 }
+    expect(await getBets()).toHaveLength(12)
+    expect(ranges()).toEqual([[0, 999]])
+  })
+
+  it('fails the whole read when a later page fails, rather than returning part of it', async () => {
+    state.queued = [
+      { data: rows(1000), error: null, count: 1500 },
+      { data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' }, count: null }
+    ]
+    await expect(getBets()).rejects.toThrow(/timeout/)
   })
 })
 

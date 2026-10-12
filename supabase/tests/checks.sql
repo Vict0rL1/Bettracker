@@ -125,4 +125,126 @@ do $$ begin
   assert (select count(*) from public.entries where date = '2026-08-04') = 3, 'many bets per day';
   assert to_regclass('public.user_settings') is not null, 'user_settings exists';
 end $$;
+
+-- 8. Deposits and withdrawals (005). The amount is signed and stored in
+-- cents, rounded by size then sign as the app rounds it; the device's
+-- updated_at (the conflict key) is kept as sent.
+insert into public.bankroll_moves (id, user_id, date, amount, note, updated_at) values
+  ('40000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '2026-08-01', 500, 'deposit', '2026-08-01 09:00:00+00'),
+  ('40000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', '2026-08-09', -120.50, 'withdrawal', '2026-08-09 09:00:00+00');
+insert into public.bankroll_moves (id, user_id, date, amount) values
+  ('40000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000001', '2026-08-10', -0.005);
+do $$ begin
+  assert (select sum(amount) from public.bankroll_moves where note in ('deposit', 'withdrawal')) = 379.50, 'deposit plus withdrawal';
+  assert (select updated_at from public.bankroll_moves where note = 'withdrawal') = '2026-08-09 09:00:00+00', 'the device''s updated_at is kept';
+  assert (select note from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000003') = '', 'a move with no note gets an empty one';
+  assert (select amount from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000003') = -0.01, 'half a cent out is a cent, like half a cent in';
+end $$;
+
+-- 8b. A move is never 0, also once rounded to cents, and always has an amount.
+do $$ begin
+  begin
+    insert into public.bankroll_moves (user_id, date, amount) values ('00000000-0000-0000-0000-000000000001', '2026-08-10', 0);
+    raise exception 'a move of 0 was accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.bankroll_moves (user_id, date, amount) values ('00000000-0000-0000-0000-000000000001', '2026-08-10', 0.004);
+    raise exception 'a move that rounds to 0 was accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.bankroll_moves (user_id, date, amount) values ('00000000-0000-0000-0000-000000000001', '2026-08-10', null);
+    raise exception 'a move with no amount was accepted';
+  exception when not_null_violation then null;
+  end;
+end $$;
+
+-- 8c. The conflict rule the app sends with every edit (apply only if the row
+-- is not newer): a later edit lands, a resend of it too, an earlier one
+-- doesn't, whatever the row said before.
+do $$
+declare n int;
+begin
+  update public.bankroll_moves set amount = -100, note = 'withdrawal, edited', updated_at = '2026-08-09 12:00:00+00'
+   where id = '40000000-0000-0000-0000-000000000002' and updated_at <= '2026-08-09 12:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'a later edit applies';
+  update public.bankroll_moves set amount = -100, note = 'withdrawal, edited', updated_at = '2026-08-09 12:00:00+00'
+   where id = '40000000-0000-0000-0000-000000000002' and updated_at <= '2026-08-09 12:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'the same edit sent again applies';
+  update public.bankroll_moves set amount = -200, note = 'stale', updated_at = '2026-08-09 11:00:00+00'
+   where id = '40000000-0000-0000-0000-000000000002' and updated_at <= '2026-08-09 11:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 0, 'an earlier edit is refused';
+  assert (select note from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000002') = 'withdrawal, edited', 'the later edit stands';
+end $$;
+
+-- 8d. Private and live like the bets: row-level security on, one policy per
+-- operation, broadcast by realtime, indexed for the per-user date reads.
+do $$ begin
+  assert (select relrowsecurity from pg_class where oid = 'public.bankroll_moves'::regclass), 'moves have row-level security';
+  assert (select count(*) from pg_policies where schemaname = 'public' and tablename = 'bankroll_moves') = 4, 'four move policies, and no other';
+  assert exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'bankroll_moves'), 'moves are broadcast';
+  assert to_regclass('public.bankroll_moves_user_date_idx') is not null, 'moves are indexed by user and date';
+end $$;
+
+-- 8e. ...and the policies hold for a signed-in user (the role the app's
+-- requests run as; see stubs.sql): they see, change and remove only their own
+-- moves, and cannot file one under someone else. Rolled back.
+insert into auth.users values ('00000000-0000-0000-0000-000000000003') on conflict do nothing;
+begin;
+set local role authenticated;
+set local request.jwt.claim.sub = '00000000-0000-0000-0000-000000000003';
+do $$
+declare n int;
+begin
+  assert (select count(*) from public.bankroll_moves) = 0, 'another user''s moves are hidden';
+  insert into public.bankroll_moves (user_id, date, amount) values ('00000000-0000-0000-0000-000000000003', '2026-08-10', 25);
+  assert (select count(*) from public.bankroll_moves) = 1, 'a user sees their own move';
+  update public.bankroll_moves set note = 'not mine' where id = '40000000-0000-0000-0000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s move cannot be edited';
+  delete from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s move cannot be removed';
+  begin
+    insert into public.bankroll_moves (user_id, date, amount) values ('00000000-0000-0000-0000-000000000001', '2026-08-10', 25);
+    raise exception 'a move under someone else''s id was accepted';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.bankroll_moves set user_id = '00000000-0000-0000-0000-000000000001' where user_id = '00000000-0000-0000-0000-000000000003';
+    raise exception 'a move was handed to someone else';
+  exception when insufficient_privilege then null;
+  end;
+  -- With a WHERE, Postgres applies the select policy too, which would hide a
+  -- loose update or delete policy. Without one, only those two decide.
+  begin
+    update public.bankroll_moves set user_id = '00000000-0000-0000-0000-000000000001';
+    raise exception 'a move was handed to someone else (no where)';
+  exception when insufficient_privilege then null;
+  end;
+  update public.bankroll_moves set note = 'mine';
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered edit touches only the user''s own moves';
+  delete from public.bankroll_moves;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered delete removes only the user''s own moves';
+end $$;
+rollback;
+do $$ begin
+  assert (select note from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000001') = 'deposit', 'the other user left the deposit alone';
+end $$;
+
+-- 8f. Deleting an account takes its moves with it, and only its moves.
+insert into auth.users values ('00000000-0000-0000-0000-000000000002') on conflict do nothing;
+insert into public.bankroll_moves (id, user_id, date, amount) values
+  ('40000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000002', '2026-08-10', 50);
+delete from auth.users where id = '00000000-0000-0000-0000-000000000002';
+do $$ begin
+  assert not exists (select 1 from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000004'), 'a deleted user''s moves go with them';
+  assert (select count(*) from public.bankroll_moves where user_id = '00000000-0000-0000-0000-000000000001') = 3, 'other users'' moves stay';
+end $$;
 select 'checks passed' as result;

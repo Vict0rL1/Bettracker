@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { daysInMonth, firstWeekday, humanDate, monthLabel, toDateStr, todayStr, type MonthKey } from '../lib/dates'
-import { fmtMoney, fmtMoneyCompact } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import type { DaySummary } from '../lib/stats'
 
 interface Props {
@@ -19,6 +19,7 @@ function kindOf(day: DaySummary | undefined): 'win' | 'loss' | 'push' | 'pending
 
 export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
   const { t } = useLang()
+  const money = useMoney()
   const cells = useMemo<(number | null)[]>(() => {
     const blanks: (number | null)[] = Array.from({ length: firstWeekday(ym) }, () => null)
     const days = Array.from({ length: daysInMonth(ym) }, (_, i) => i + 1)
@@ -49,7 +50,7 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
           const kind = kindOf(summary)
           const parts: string[] = [humanDate(date)]
           if (summary) {
-            if (summary.scored > 0) parts.push(summary.total === 0 ? t('cal.pushTip') : fmtMoney(summary.total))
+            if (summary.scored > 0) parts.push(summary.total === 0 ? t('cal.pushTip') : money.signed(summary.total))
             if (summary.count > 1) parts.push(t('cal.betsTip', { n: summary.count }))
             if (summary.pending > 0) parts.push(t('cal.pendingTip', { n: summary.pending }))
           } else {
@@ -67,7 +68,7 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
                 )}
               </span>
               {summary && summary.scored > 0 && (
-                <span className="cal-amt">{summary.total === 0 ? t('cal.pushCell') : fmtMoneyCompact(summary.total)}</span>
+                <span className="cal-amt">{summary.total === 0 ? t('cal.pushCell') : money.compact(summary.total)}</span>
               )}
               {summary && summary.scored === 0 && summary.pending > 0 && <span className="cal-amt">{t('cal.openCell')}</span>}
               {summary && summary.scored > 0 && summary.pending > 0 && <i className="cal-dot" aria-hidden="true" />}
