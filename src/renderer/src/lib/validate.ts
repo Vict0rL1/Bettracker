@@ -1,4 +1,4 @@
-import { isBetStatus, statusForAmount, type BetInput, type BetStatus } from '../../../shared/types'
+import { isBetStatus, statusForAmount, type BetInput, type BetStatus, type MoveInput, type Settings, type SettingsPatch } from '../../../shared/types'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -164,4 +164,65 @@ export function suggestedAmount(status: BetStatus, stake: number | null, odds: n
     case 'pending':
       return null
   }
+}
+
+/**
+ * Round a signed amount to cents the way the database does: by its size, then
+ * the sign. round2 rounds halves up (-12.345 → -12.34), so a withdrawal and a
+ * deposit of the same typed amount would otherwise store different sizes.
+ */
+export const roundCents = (n: number): number => (n < 0 ? -round2(-n) : round2(n))
+
+export interface CleanMove {
+  date: string
+  amount: number
+  note: string
+}
+
+/**
+ * Validate and clean a deposit or withdrawal before it is queued. Throws on
+ * bad input. The amount is checked once rounded to cents, as stored: 0.004
+ * is 0, which the database refuses.
+ */
+export function normalizeMove(input: MoveInput): CleanMove {
+  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new Error('Amount must be a finite number')
+  const amount = roundCents(input.amount)
+  if (amount === 0) throw new Error('Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount is out of range')
+  return { date: input.date, amount, note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH) }
+}
+
+/**
+ * A money box in the settings (unit size, starting bankroll, default stake):
+ * null when cleared, the amount rounded to cents, or 'invalid' for anything the
+ * database would refuse. Zero is judged once rounded, as stored: 0.004 is 0,
+ * and a unit size of 0 would be refused, taking every other change merged
+ * into the same settings patch down with it.
+ */
+export function parseMoneyBox(text: string, opts: { allowZero: boolean }): number | null | 'invalid' {
+  const trimmed = text.trim()
+  if (trimmed === '') return null
+  const n = parseFloat(trimmed)
+  if (!Number.isFinite(n) || n < 0 || n > MAX_AMOUNT) return 'invalid'
+  const rounded = round2(n)
+  if (rounded === 0) return opts.allowZero ? 0 : 'invalid'
+  return rounded
+}
+
+/** Dollars per unit when amounts show in units; null shows dollars. */
+export const effectiveUnit = (s: Pick<Settings, 'showUnits' | 'unitSize'>): number | null =>
+  s.showUnits && s.unitSize !== null && s.unitSize > 0 ? s.unitSize : null
+
+/**
+ * What committing the unit size box sends: a patch, null when nothing
+ * changed, or 'revert' to put the saved value back in a box holding nonsense.
+ * Clearing the unit also turns units off, since there is nothing left to
+ * count them in.
+ */
+export function unitSizePatch(text: string, s: Pick<Settings, 'unitSize' | 'showUnits'>): SettingsPatch | null | 'revert' {
+  const value = parseMoneyBox(text, { allowZero: false })
+  if (value === 'invalid') return 'revert'
+  if (value === null) return s.unitSize === null && !s.showUnits ? null : { unitSize: null, showUnits: false }
+  return value === s.unitSize ? null : { unitSize: value }
 }

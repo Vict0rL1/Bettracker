@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_SETTINGS, type Settings, type SettingsPatch } from '../../../shared/types'
 import { loadSettingsCache, loadSettingsOutbox, saveSettingsCache, saveSettingsOutbox, type PendingSettings } from './offline'
-import { migrationNotice, pushSettings } from './drain'
+import { migrationNotice, pushSettings, retryPlan } from './drain'
 import { classifySyncError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
 
@@ -12,6 +12,13 @@ export interface SettingsSync {
   dirty: boolean
   /** True while the database is missing the settings migration: a change waits for it, not for the connection. */
   blocked: boolean
+  /**
+   * The user's row is known: cached, read, or known not to exist yet (a
+   * database without the settings table has only the defaults). Until then
+   * `settings` holds defaults, which say nothing about, say, the starting
+   * bankroll.
+   */
+  loaded: boolean
   update: (patch: SettingsPatch) => void
 }
 
@@ -31,7 +38,12 @@ export function useSettings(
 ): SettingsSync {
   const [server, setServerState] = useState<Settings | null>(null)
   const [pending, setPendingState] = useState<PendingSettings | null>(null)
-  const [blocked, setBlocked] = useState(false)
+  const [blocked, setBlockedState] = useState(false)
+  const blockedRef = useRef(false)
+  const setBlocked = useCallback((next: boolean) => {
+    blockedRef.current = next
+    setBlockedState(next)
+  }, [])
   const serverRef = useRef<Settings | null>(null)
   const pendingRef = useRef<PendingSettings | null>(null)
   const syncingRef = useRef(false)
@@ -142,7 +154,11 @@ export function useSettings(
       if (document.visibilityState === 'visible') kick()
     }
     const timer = setInterval(() => {
-      if (pendingRef.current) void syncNow()
+      // Read again while the row has never been read (a failed first read on a
+      // connection the browser still thinks is up sends no online event).
+      const plan = retryPlan({ queued: pendingRef.current !== null, loaded: serverRef.current !== null || blockedRef.current })
+      if (plan === 'read') kick()
+      else if (plan === 'drain') void syncNow()
     }, RETRY_INTERVAL_MS)
     window.addEventListener('online', kick)
     document.addEventListener('visibilitychange', onVisible)
@@ -164,5 +180,5 @@ export function useSettings(
 
   const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}) }
 
-  return { settings, dirty: pending !== null, blocked, update }
+  return { settings, dirty: pending !== null, blocked, loaded: server !== null || blocked, update }
 }

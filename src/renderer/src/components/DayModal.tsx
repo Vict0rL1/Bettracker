@@ -1,13 +1,16 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Bet, BetInput, BetStatus, OddsFormat } from '../../../shared/types'
 import { toInput } from '../lib/bulk'
-import { humanDate } from '../lib/dates'
-import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
+import { stakeNoteApplies } from '../lib/bankroll'
+import { humanDate, todayStr } from '../lib/dates'
+import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import { formatOdds, ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
 import { clvOf, round2, total as sumTotal } from '../lib/stats'
 import { MAX_AMOUNT, storableOdds, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
+import StakeNote from './StakeNote'
 
 export interface TagSuggestions {
   sport: string[]
@@ -20,6 +23,8 @@ interface Props {
   bets: Bet[]
   oddsFormat: OddsFormat
   suggestions: TagSuggestions
+  /** The current bankroll, or null while it is unknown: a stake still riding is measured against it. */
+  bankroll: number | null
   onAdd: (input: BetInput) => Promise<void>
   onUpdate: (id: string, input: BetInput) => Promise<void>
   onDelete: (id: string) => Promise<void>
@@ -34,8 +39,9 @@ export const toneOf = (s: BetStatus): string => (s === 'won' ? 'win' : s === 'lo
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, onUpdate, onDelete, onClose }: Props) {
+export default function DayModal({ date, bets, oddsFormat, suggestions, bankroll, onAdd, onUpdate, onDelete, onClose }: Props) {
   const { t, tn } = useLang()
+  const money = useMoney()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [status, setStatus] = useState<BetStatus>('won')
   const [amountStr, setAmountStr] = useState('')
@@ -63,6 +69,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
   const [stakeOptional, setStakeOptional] = useState(false)
   const titleId = useId()
   const listId = useId()
+  const noteId = useId()
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null
@@ -182,6 +189,12 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
 
   const signedAmount: number | null = status === 'pending' ? null : status === 'won' ? round2(amount) : status === 'lost' ? -round2(amount) : 0
 
+  // The bankroll before the bet being edited: its own settled result is
+  // already in the current figure, and a stake is measured against what was
+  // there before it, not after.
+  const edited = editingId === null ? undefined : bets.find((b) => b.id === editingId)
+  const bankrollBefore = bankroll === null ? null : round2(bankroll - (edited?.amount ?? 0))
+
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!canSave) return
@@ -279,7 +292,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
           <>
             <div className="day-total-row">
               <span className="day-total-label">{t('modal.dayTotal')}</span>
-              <span className={`day-total ${dayTotal > 0 ? 'win' : dayTotal < 0 ? 'loss' : 'push'}`}>{fmtMoney(dayTotal)}</span>
+              <span className={`day-total ${dayTotal > 0 ? 'win' : dayTotal < 0 ? 'loss' : 'push'}`}>{money.signed(dayTotal)}</span>
             </div>
 
             <ul className="bet-list">
@@ -289,14 +302,14 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
                 return (
                   <li key={b.id} className={`bet-item ${editingId === b.id ? 'editing' : ''}`}>
                     <span className={`bet-amt ${toneOf(b.status)}`}>
-                      {b.status === 'pending' || b.amount === 0 ? t(`status.${b.status}`) : fmtMoney(b.amount ?? 0)}
+                      {b.status === 'pending' || b.amount === 0 ? t(`status.${b.status}`) : money.signed(b.amount ?? 0)}
                     </span>
                     <span className="bet-body">
                       <span className="bet-note">{b.note || <span className="td-none">{t('modal.noNote')}</span>}</span>
                       <span className="bet-meta">
                         {b.stake !== null && (
                           <span className="bet-stake">
-                            {t(b.status === 'pending' ? 'modal.riding' : 'modal.risked', { amount: fmtStake(b.stake) })}
+                            {t(b.status === 'pending' ? 'modal.riding' : 'modal.risked', { amount: money.stake(b.stake) })}
                             {b.odds !== null && ` @ ${formatOdds(b.odds, oddsFormat)}`}
                             {ret !== null && (b.status === 'won' || b.status === 'lost') && ` · ${fmtPctSigned(ret)}`}
                             {b.odds !== null && b.closingOdds !== null && ` · ${t('modal.clv', { pct: fmtPctSigned(clvOf(b.odds, b.closingOdds)) })}`}
@@ -373,6 +386,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
                   required={!stakeOptional}
                   placeholder="0.00"
                   value={stakeStr}
+                  aria-describedby={noteId}
                   onChange={(e) => handleStake(e.target.value)}
                   autoFocus
                 />
@@ -474,6 +488,13 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, onAdd, o
               <option key={v} value={v} />
             ))}
           </datalist>
+
+          <StakeNote
+            id={noteId}
+            stake={stakeValid ? parsedStake : null}
+            current={bankrollBefore}
+            applies={stakeNoteApplies(date, status, todayStr())}
+          />
 
           <div className="bet-submit">
             <p className="hint">{hint}</p>

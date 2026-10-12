@@ -3,6 +3,7 @@ import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../
 import { supabase } from '../lib/supabase'
 import { isValidDate, MAX_AMOUNT, normalizeInput, round2, type CleanBet } from '../lib/validate'
 import { describeError } from './errors'
+import { readAll } from './readAll'
 import { insertStamp, type PendingOp } from './offline'
 
 // The table keeps its original name: renaming it is not an additive migration
@@ -76,13 +77,16 @@ async function currentUserId(): Promise<string> {
 }
 
 export async function getBets(): Promise<Bet[]> {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select('*')
-    .order('date', { ascending: true })
-    .order('created_at', { ascending: true })
-  if (error) throw describeError(error)
-  return (data as Row[]).map(toBet)
+  const rows = await readAll<Row>((from, to) =>
+    supabase
+      .from(TABLE)
+      .select('*', { count: 'exact' })
+      .order('date', { ascending: true })
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+  return rows.map(toBet)
 }
 
 /**

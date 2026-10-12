@@ -2,8 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Bet, BetStatus, OddsFormat } from '../../../shared/types'
 import type { TagPatch } from '../lib/bulk'
 import { humanDate } from '../lib/dates'
-import { fmtMoney, fmtPctSigned, fmtStake } from '../lib/format'
+import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import { formatOdds } from '../lib/odds'
 import { clvOf, tagValues } from '../lib/stats'
 import { suggestedAmount } from '../lib/validate'
@@ -41,6 +42,7 @@ function compareNullable(a: number | null, b: number | null, dir: number): numbe
 
 export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSettle, onBulkRetag, onBulkSettle, onBulkDelete }: Props) {
   const { t, tn } = useLang()
+  const money = useMoney()
   const listId = useId()
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -332,9 +334,9 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                           <td>
                             <span className={`pill ${tone}`}>{t(`status.${b.status}`)}</span>
                           </td>
-                          <td className="td-stake">{b.stake === null ? <span className="td-none">—</span> : fmtStake(b.stake)}</td>
+                          <td className="td-stake">{b.stake === null ? <span className="td-none">—</span> : money.stake(b.stake)}</td>
                           <td className="td-stake td-odds">{b.odds === null ? <span className="td-none">—</span> : formatOdds(b.odds, oddsFormat)}</td>
-                          <td className={`td-amt ${tone}`}>{b.amount === null ? <span className="td-none">—</span> : fmtMoney(b.amount)}</td>
+                          <td className={`td-amt ${tone}`}>{b.amount === null ? <span className="td-none">—</span> : money.signed(b.amount)}</td>
                           <td className={`td-roi ${ret === null ? '' : ret > 0 ? 'win' : ret < 0 ? 'loss' : ''}`}>
                             {ret === null ? <span className="td-none">—</span> : fmtPctSigned(ret)}
                           </td>

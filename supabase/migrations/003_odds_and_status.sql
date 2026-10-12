@@ -21,7 +21,7 @@
 -- No new column is needed. `updated_at` is now set by the client to the
 -- moment the user made the edit (not the moment it synced), and an update is
 -- applied only if the row's updated_at is not newer — last write wins, by
--- when the edit was made. See bettracker/README.md ("Conflicts").
+-- when the edit was made. See README.md ("Conflicts").
 
 alter table public.entries add column if not exists odds   numeric(8, 3);
 alter table public.entries add column if not exists status text;

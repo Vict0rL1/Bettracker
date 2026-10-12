@@ -39,6 +39,7 @@
   --backdrop: rgba(4, 8, 13, 0.72);
   --red-text: #ff8a9c;
   --shadow-pop: rgba(0, 0, 0, 0.4);
+  --tip-bg: rgba(13, 19, 25, 0.96);
   --focus: rgba(0, 229, 125, 0.55);
   --focus-ring: rgba(0, 229, 125, 0.14);
 
@@ -102,6 +103,7 @@
   --input-bg: #ffffff;
   --backdrop: rgba(15, 23, 42, 0.38);
   --red-text: #b3183a;
+  --tip-bg: rgba(255, 255, 255, 0.97);
   --focus: rgba(0, 127, 71, 0.6);
   --focus-ring: rgba(0, 127, 71, 0.16);
 
@@ -683,7 +685,8 @@ h2 {
 .mini-card {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  /* Eight tiles: they fill the 8-, 4- and 2-column layouts exactly. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 16px 16px;
   align-content: center;
 }
@@ -703,6 +706,9 @@ h2 {
   font-size: var(--fs-xl);
   font-weight: 700;
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mini-value.win {
@@ -941,7 +947,8 @@ h2 {
 }
 
 .chart-tip {
-  background: rgba(13, 19, 25, 0.96);
+  background: var(--tip-bg);
+  color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
@@ -2482,5 +2489,302 @@ tbody tr.is-selected {
     min-width: 0;
     width: 100%;
     gap: 8px;
+  }
+}
+
+/* ---- units and bankroll ---- */
+
+/* A tile that opens something: the whole tile is the button. */
+.mini-btn {
+  margin: -6px -8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.mini-btn:hover {
+  background: var(--tint-2);
+}
+
+.mini-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The stake note keeps its line even when empty, so nothing below it moves
+   while the stake is typed. */
+.stake-note {
+  min-height: 1.45em;
+  margin: -4px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stake-note.over {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.seg.seg-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.seg-btn:disabled:hover {
+  color: var(--text-2);
+}
+
+.settings-unit {
+  max-width: 200px;
+}
+
+.settings-bankroll-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-bankroll-value {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-card .card-head {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.chart-setup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+/* Phones stretch every .btn (flex: 1); in this column that would make it tall. */
+.chart-setup .btn {
+  flex: none;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-line {
+  display: inline-block;
+  width: 18px;
+  border-top: 2px solid var(--text-2);
+}
+
+.legend-line.win {
+  border-top-color: var(--green);
+}
+
+.legend-line.loss {
+  border-top-color: var(--red);
+}
+
+.legend-line.legend-dashed {
+  border-top: 2px dashed var(--text-3);
+}
+
+.bank-modal {
+  width: 560px;
+  gap: 16px;
+}
+
+.bank-current {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--tint-1);
+  border: 1px solid var(--border);
+}
+
+.bank-figure {
+  font-size: var(--fs-2xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.bank-figure.loss {
+  color: var(--red);
+}
+
+.bank-units {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.bank-ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.bank-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bank-line dt,
+.bank-start-label {
+  font-size: var(--fs-md);
+  color: var(--text-2);
+}
+
+.bank-sums {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.bank-line dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bank-line dd.win {
+  color: var(--green);
+}
+
+.bank-line dd.loss {
+  color: var(--red);
+}
+
+.bank-total {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.bank-total dt {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.bank-start {
+  width: 160px;
+}
+
+.bank-ledger .hint {
+  margin: 0;
+}
+
+.bank-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Money in or out is not a result: the chosen kind is marked in neutral ink, never win or loss colours. */
+.bank-form .seg-btn.active {
+  background: var(--tint-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.bank-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.move-date[aria-invalid='true'] {
+  border-color: var(--red);
+}
+
+.move-hints {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--amber);
+}
+
+.move-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.move-section h3 {
+  margin: 0;
+}
+
+.move-amt {
+  min-width: 96px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.move-date-label {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.btn-signout.confirming {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+@media (max-width: 640px) {
+  .chart-controls {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .bank-form .bet-submit .move-save {
+    width: 100%;
+    justify-content: center;
   }
 }
