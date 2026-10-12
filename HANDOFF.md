@@ -101,10 +101,10 @@ Por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 281 tests unitarios (vitest)
+npm test            # 306 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 40 comprobaciones Playwright, sin backend
+npm run test:e2e    # 42 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -166,7 +166,8 @@ Playwright llegara a `localhost`; en CI no.
   compatibilidad de `status`); se confían los relojes de los dispositivos.
 - CSV: columnas `date,status,stake,odds,closing_odds,amount,sport,book,bet_type,note`,
   alias de otros trackers, columna `result` numérica detectada como importe.
-  Exportaciones antiguas (sin estas columnas) importan sin cambios.
+  Exportaciones antiguas (sin estas columnas) importan sin cambios. Las
+  cuotas se leen en decimal, americano o fraccionario (ver "Decisiones").
 - `hydrateBet` rellena cachés antiguas (sin stake/odds/status/closingOdds).
 
 ### Fase 3 · seguridad
@@ -270,6 +271,24 @@ ingresos y retiradas; por eso la recomendación es la tabla.
   borrado de una apuesta restaurada conserva su `delete` en cola (bug
   encontrado y corregido en la feature 8).
 - Semana de domingo a sábado, como el calendario.
+- Import CSV de cuotas: las fracciones (`3/2`) y los precios con signo
+  (`+150`, `-110`, `-110.00`, `+2,500`) dicen su formato; un número sin signo
+  es decimal, salvo dos casos ambiguos: un valor entero desde 100 (`150` o
+  `150.00` puede ser +150 sin el `+`, que Excel quita, o una cuota decimal de
+  150, y así la escriben nuestras propias exportaciones) y `1,200` (miles o
+  coma decimal). Se decide una vez por archivo y para las dos columnas de
+  cuota: un export nuestro (se reconoce por su cabecera) es decimal, salvo
+  que alguien haya escrito a mano cuotas americanas en él; una cabecera que
+  nombra el formato manda; si no, precios con signo válidos y ningún
+  decimal → americano; decimales válidos y ningún signo → decimal; ambos →
+  esa línea se informa en vez de adivinar; ninguno → si hay algún `1,200`,
+  decimal (coma decimal, como la caja de cuota), y si no, el formato de
+  cuota del usuario. Solo cuenta como pista una cuota que se puede guardar
+  (`storableOdds`): una errata no inclina el archivo.
+- Una cuota se valida ya redondeada a 3 decimales, como la guarda la base
+  (`storableOdds`, en `lib/validate.ts`): 1.0004 se marca inválida en el
+  formulario y se rechaza en el import, en vez de pasar y que la base la
+  rechace como 1.000 (lo que tiraba el import entero).
 - La cola quita cada operación enviada por su `opId`, nunca por posición.
   Una operación que ya salió una vez queda marcada `sent` (guardado con la
   cola): haya respondido o no, puede estar en el servidor, así que nadie la
@@ -334,7 +353,7 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjeta CLV), Toast (acción)
-e2e/*.spec.ts                       39 comprobaciones
+e2e/*.spec.ts                       41 comprobaciones
 supabase/migrations/00{2,3,4}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

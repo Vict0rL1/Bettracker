@@ -292,7 +292,7 @@ export default function App() {
   const handleImport = useCallback(
     async (file: File) => {
       try {
-        const { rows, errors, skipped, noStake } = parseBetsCsv(await file.text())
+        const { rows, errors, skipped, noStake } = parseBetsCsv(await file.text(), settings.oddsFormat)
         if (rows.length === 0) {
           setToast({ kind: 'error', text: errors[0] ?? t('toast.importNothing') })
           return
@@ -306,7 +306,7 @@ export default function App() {
         showError(err)
       }
     },
-    [sync, savedNote, showError, t, tn]
+    [sync, savedNote, showError, t, tn, settings.oddsFormat]
   )
 
   if (loading) return <Boot />
