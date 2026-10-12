@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BankrollMove, Bet, BetStatus } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { bankrollNow, bankrollSeries, moveHints, stakeNote, stakeNoteApplies, STAKE_WARN_RATIO, type Bankroll } from './bankroll'
+import { bankrollNow, bankrollSeries, firstBetDate, moveHints, stakeNote, stakeNoteApplies, STAKE_WARN_RATIO, type Bankroll } from './bankroll'
 import { shiftDays } from './range'
 
 let seq = 0
@@ -338,6 +338,13 @@ describe('moveHints', () => {
     expect(moveHints({ date: '2026-03-01', amount: 300 }, [], noStart)).toEqual([])
     // No bets yet: nothing to be before.
     expect(moveHints({ date: '2026-03-01', amount: 300 }, [], bankrollNow([], [], 1000))).toEqual([])
+    // A starting bankroll of $0 covers nothing.
+    expect(moveHints({ date: '2026-03-01', amount: 300 }, [], bankrollNow(bets, [], 0))).toEqual([])
+  })
+
+  it('firstBetDate is the earliest bet of any status, null with none', () => {
+    expect(firstBetDate([bet({ date: '2026-03-09', status: 'pending' }), bet({ date: '2026-03-05', amount: 10 })])).toBe('2026-03-05')
+    expect(firstBetDate([])).toBeNull()
   })
 
   it('reports every hint that applies, and only duplicates while the bankroll is unknown', () => {

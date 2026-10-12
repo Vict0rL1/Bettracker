@@ -32,17 +32,39 @@ export function saveChartView(view: ChartView): void {
 /**
  * Round bounds and about four ticks for a range of values: steps of 1, 2,
  * 2.5 or 5 times a power of ten, so the axis reads $1k, $1.2k, $1.4k rather
- * than wherever the data happens to end.
+ * than wherever the data happens to end. `resolution` is the finest step the
+ * labels can tell apart (the k labels keep one decimal, so 100 from 1,000
+ * up): the step is always a multiple of it, so no two ticks read the same.
  */
-export function niceScale(min: number, max: number): { lo: number; hi: number; ticks: number[] } {
+export function niceScale(min: number, max: number, resolution = 0): { lo: number; hi: number; ticks: number[] } {
   const span = max - min || Math.abs(max) || 1
   const raw = span / 4
-  const mag = 10 ** Math.floor(Math.log10(raw))
-  const norm = raw / mag
-  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
+  const fits = (c: number): boolean => resolution === 0 || Math.abs(c / resolution - Math.round(c / resolution)) < 1e-9
+  let step = 0
+  for (let mag = 10 ** Math.floor(Math.log10(raw)); step === 0; mag *= 10) {
+    for (const k of [1, 2, 2.5, 5]) {
+      const c = k * mag
+      if (c >= raw && c >= resolution && fits(c)) {
+        step = c
+        break
+      }
+    }
+  }
   const lo = Math.floor(min / step) * step
-  const hi = Math.ceil(max / step) * step === lo ? lo + step : Math.ceil(max / step) * step
+  const top = Math.ceil(max / step) * step
+  const hi = top === lo ? lo + step : top
   const ticks: number[] = []
   for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 1e6) / 1e6)
   return { lo, hi, ticks }
+}
+
+/**
+ * The bankroll axis: niceScale at the resolution its labels have — whole
+ * dollars (or hundredths of a unit) below 1,000, tenths of a thousand from
+ * there up, judged on the ticks themselves, which may reach past the data.
+ */
+export function bankrollAxis(min: number, max: number, units: boolean): { lo: number; hi: number; ticks: number[] } {
+  const fine = units ? 0.01 : 1
+  const scale = niceScale(min, max, Math.max(Math.abs(min), Math.abs(max)) >= 1000 ? 100 : fine)
+  return Math.max(Math.abs(scale.lo), Math.abs(scale.hi)) >= 1000 ? niceScale(min, max, 100) : scale
 }

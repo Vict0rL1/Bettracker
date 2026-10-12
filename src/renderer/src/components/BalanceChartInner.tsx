@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { niceScale, type ChartView } from '../lib/chartView'
+import { bankrollAxis, type ChartView } from '../lib/chartView'
 import { humanDate, monthYearShort, shortDate } from '../lib/dates'
 import { scaledFormat } from '../lib/format'
 import { useLang } from '../lib/i18n'
@@ -52,9 +52,9 @@ export default function BalanceChartInner({ mode, data }: Props) {
   const yAxis = useMemo(() => {
     if (!bankroll) return { domain: [(dataMin: number) => Math.min(0, dataMin), (dataMax: number) => Math.max(0, dataMax)] as [(n: number) => number, (n: number) => number], ticks: undefined, zero: true }
     const values = data.flatMap((p) => [p.balance, p.funded ?? p.balance])
-    const { lo, hi, ticks } = niceScale(Math.min(...values), Math.max(...values))
+    const { lo, hi, ticks } = bankrollAxis(Math.min(...values), Math.max(...values), money.unit !== null)
     return { domain: [lo, hi] as [number, number], ticks, zero: lo <= 0 && hi >= 0 }
-  }, [bankroll, data])
+  }, [bankroll, data, money.unit])
 
   const spansYears = data.length > 1 && data[0].date.slice(0, 4) !== data[data.length - 1].date.slice(0, 4)
   const last = data.length > 0 ? data[data.length - 1] : null

@@ -210,6 +210,13 @@ export function stakeNote(stake: number | null, current: number | null): StakeNo
  */
 export const stakeNoteApplies = (date: string, status: BetStatus, today: string): boolean => date >= today || status === 'pending'
 
+/** The date of the earliest bet, whatever its status, or null with no bets. */
+export function firstBetDate(bets: readonly Bet[]): string | null {
+  let first: string | null = null
+  for (const b of bets) if (first === null || b.date < first) first = b.date
+  return first
+}
+
 /**
  * Soft checks on a deposit or withdrawal being saved; they never block.
  * - duplicate: another move on the same date for the same amount, the shape
@@ -217,7 +224,8 @@ export const stakeNoteApplies = (date: string, status: BetStatus, today: string)
  * - belowZero: saving it leaves the bankroll below zero and lower than it is
  *   now (a deposit into a bankroll that is already negative is no mistake);
  * - beforeStart: a deposit on or before the first bet, when a starting
- *   bankroll is set — the starting bankroll is usually that money already.
+ *   bankroll above zero is set — the starting bankroll is usually that money
+ *   already (a start of $0 covers nothing).
  */
 export type MoveHint = 'duplicate' | 'belowZero' | 'beforeStart'
 
@@ -230,7 +238,7 @@ export function moveHints(draft: { date: string; amount: number }, moves: readon
     const old = editingId === undefined ? undefined : moves.find((m) => m.id === editingId)
     const changeC = draftC - (old ? toCents(old.amount) : 0)
     if (changeC < 0 && toCents(b.current) + changeC < 0) hints.push('belowZero')
-    if (draftC > 0 && b.startSet && b.firstBetDate !== null && draft.date <= b.firstBetDate) hints.push('beforeStart')
+    if (draftC > 0 && b.startSet && b.start > 0 && b.firstBetDate !== null && draft.date <= b.firstBetDate) hints.push('beforeStart')
   }
   return hints
 }
