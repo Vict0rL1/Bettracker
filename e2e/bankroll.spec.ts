@@ -37,6 +37,7 @@ test.describe('bankroll', () => {
     await expect(dialog.locator('.move-item')).toHaveCount(2)
     // Money in and out is never painted as a win or a loss.
     await expect(dialog.locator('.move-item').first().locator('.move-amt')).toHaveText('-$120.50')
+    await expect(dialog.locator('.move-item .move-amt.win, .move-item .move-amt.loss')).toHaveCount(0)
 
     // Deleting asks twice, and the toast offers it back.
     const del = dialog.locator('.move-item').first().locator('.btn-icon.danger')
@@ -74,7 +75,7 @@ test.describe('bankroll', () => {
     await expect(note).toHaveText('5.0% of your $1,180 bankroll')
     await expect(note).not.toHaveClass(/over/)
     await stake.fill('59.01')
-    await expect(note).toHaveText('5.1% of your $1,180 bankroll · over 5%')
+    await expect(note).toHaveText('Over 5% · 5.1% of your $1,180 bankroll')
     await expect(note).toHaveClass(/over/)
     // Whatever the note says, the result buttons stay where they were.
     expect(await lost.boundingBox()).toEqual(before)
@@ -91,7 +92,19 @@ test.describe('bankroll', () => {
     // Aug 1 is past and the form says WON: history, nothing to measure.
     await expect(modal.locator('.stake-note')).toHaveText('')
     await modal.locator('.bet-form .seg-btn.pending').click()
-    await expect(modal.locator('.stake-note')).toHaveText('8.5% of your $1,180 bankroll · over 5%')
+    await expect(modal.locator('.stake-note')).toHaveText('Over 5% · 8.5% of your $1,180 bankroll')
+  })
+
+  test('editing a settled bet measures its stake against the bankroll before that bet', async ({ page }) => {
+    // Lost $60 today: the bankroll is $1,120 after it, $1,180 before.
+    const lost = entry({ id: 'x', date: today, amount: -60, stake: 60, sport: 'MLB' })
+    await boot(page, { entries: [...SEED, lost], settings: START, moves: [] })
+    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,120')
+    await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
+    const modal = page.locator('.day-modal')
+    await modal.locator('.bet-item .btn-icon').first().click()
+    await expect(modal.locator('.field input').first()).toHaveValue('60')
+    await expect(modal.locator('.stake-note')).toHaveText('Over 5% · 5.1% of your $1,180 bankroll')
   })
 
   test('the chart draws the bankroll, with the money put in as a dashed line', async ({ page }) => {
@@ -100,6 +113,9 @@ test.describe('bankroll', () => {
     await card.locator('.chart-view .scope-btn', { hasText: 'Bankroll' }).click()
     await expect(card.locator('h2')).toHaveText('Bankroll')
     await expect(card.locator('.recharts-wrapper')).toHaveCount(1)
+    // Two lines: the bankroll, and the money put in (dashed).
+    await expect(card.locator('.recharts-area')).toHaveCount(2)
+    await expect(card.locator('.recharts-area-curve[stroke-dasharray="4 4"]')).toHaveCount(1)
     await expect(card.locator('.chart-legend li')).toHaveText(['Bankroll', 'Put in'])
     // The view is remembered on this device.
     await reload(page)
@@ -130,9 +146,10 @@ test.describe('bankroll', () => {
     await boot(page, { backend: 'behind-005', settings: START })
     const badge = page.locator('.sync-badge')
     await expect(badge).toHaveText('Synced')
-    // The missing table is not an error on read.
-    await expect(page.locator('.toast')).toHaveCount(0)
+    // The read found the table missing (the tile resolves from '…' once it
+    // has), and that is not an error.
     await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,180')
+    expect(await page.locator('.toast').count()).toBe(0)
 
     await page.locator('.mini-bankroll').click()
     const dialog = page.locator('.bank-modal')
@@ -168,5 +185,45 @@ test.describe('bankroll', () => {
     const mini = page.locator('.mini-bankroll')
     await expect(mini.locator('.mini-value')).toHaveText('$1,180')
     await expect(mini.locator('.mini-sub')).toHaveText('$40.00 riding')
+    // Settled as a loss from the pending panel: now it counts.
+    await page.locator('.pending-btn').click()
+    await page.locator('.pend-item .settle-btn.loss').first().click()
+    await expect(mini.locator('.mini-value')).toHaveText('$1,140')
+  })
+
+  test('a device that has not loaded its data shows the bankroll as not known yet, not a wrong figure', async ({ page }) => {
+    // Offline, never read its deposits and withdrawals.
+    await boot(page, { settings: START })
+    const mini = page.locator('.mini-bankroll')
+    await expect(mini.locator('.mini-value')).toHaveText('…')
+    await expect(mini.locator('.mini-sub')).toHaveText('loads when online')
+    await mini.click()
+    await expect(page.locator('.bank-modal .move-section .hint')).toHaveText('Your deposits and withdrawals load the next time you’re online.')
+  })
+
+  test('nor before its settings have loaded (the starting bankroll is one)', async ({ page }) => {
+    await boot(page, { moves: [] })
+    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('…')
+  })
+
+  test('closing the dialog never sends back a start nobody typed', async ({ page }) => {
+    await boot(page, { backend: 'live', settings: START, moves: [] })
+    await page.locator('.mini-bankroll').click()
+    const start = page.locator('.bank-modal .bank-start input')
+    await expect(start).toHaveValue('1000')
+    // Another device sets the start to $1,500; this one hears about it while the dialog is open.
+    await page.evaluate(() => {
+      const row = JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as Record<string, unknown>
+      localStorage.setItem('e2e:settings', JSON.stringify({ ...row, starting_bankroll: 1500, updated_at: '2026-06-01T00:00:00.000Z' }))
+      window.dispatchEvent(new Event('online'))
+    })
+    await expect(start).toHaveValue('1500')
+    const writes = await page.evaluate(() => Number(localStorage.getItem('e2e:writes') ?? 0))
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.bank-modal')).toHaveCount(0)
+    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,680')
+    expect(await page.evaluate(() => Number(localStorage.getItem('e2e:writes') ?? 0))).toBe(writes)
+    const row = await page.evaluate(() => JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { starting_bankroll: number })
+    expect(row.starting_bankroll).toBe(1500)
   })
 })

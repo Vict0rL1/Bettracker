@@ -58,6 +58,27 @@ test.describe('units', () => {
     expect(queued).toContain('"showUnits":false')
   })
 
+  test('closing Settings sends back no box nobody typed in, even after the settings changed elsewhere', async ({ page }) => {
+    await boot(page, { backend: 'live', settings: { lossLimit: 100, unitSize: 20 } })
+    await page.click('.settings-btn')
+    const dialog = page.locator('.settings-modal')
+    await expect(dialog.locator('.settings-loss input')).toHaveValue('100')
+    // Another device raises the limit and changes the unit while this dialog is open.
+    await page.evaluate(() => {
+      const row = JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as Record<string, unknown>
+      localStorage.setItem('e2e:settings', JSON.stringify({ ...row, loss_limit: 500, unit_size: 25, updated_at: '2026-06-01T00:00:00.000Z' }))
+      window.dispatchEvent(new Event('online'))
+    })
+    await expect(dialog.locator('.settings-loss input')).toHaveValue('500')
+    await expect(dialog.locator('.settings-unit input')).toHaveValue('25')
+    const writes = await page.evaluate(() => Number(localStorage.getItem('e2e:writes') ?? 0))
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+    expect(await page.evaluate(() => Number(localStorage.getItem('e2e:writes') ?? 0))).toBe(writes)
+    const row = await page.evaluate(() => JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { loss_limit: number; unit_size: number })
+    expect(row).toMatchObject({ loss_limit: 500, unit_size: 25 })
+  })
+
   test('a value typed into a settings box is kept when the dialog is closed with Escape', async ({ page }) => {
     await boot(page)
     await page.click('.settings-btn')
