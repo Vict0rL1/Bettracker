@@ -27,32 +27,62 @@ export interface DrainHooks {
   /** The queue as it is now. Read before every op: the user can add to it while a request is out. */
   outbox: () => readonly PendingOp[]
   setOutbox: (next: PendingOp[]) => void
+  /**
+   * Mark an op `sent` just before its first request goes out (from then on
+   * it may reach the server whatever the answer, so enqueueOp must never
+   * rewrite or cancel it), or unmark it when that first request was refused
+   * before it could apply. The mark is saved with the queue.
+   */
+  setSent: (op: PendingOp, sent: boolean) => void
   /** Send one op; resolves with the row the server returned, if any. */
   send: (op: PendingOp) => Promise<Bet | null>
-  /** The op reached the server. */
-  applied: (op: PendingOp, result: Bet | null) => void
+  /**
+   * The op reached the server. `superseded`: another op for the same bet is
+   * still queued behind it, so a refused update is not the last word on
+   * that bet (no "newer edit elsewhere" notice for it).
+   */
+  applied: (op: PendingOp, result: Bet | null, superseded: boolean) => void
   /** The server refused the op for good; it has already left the queue. */
   rejected: (op: PendingOp, err: unknown) => void
 }
 
-/** Send the queued bet ops in order until the queue is empty or one can't go through. */
+/**
+ * Send the queued bet ops in order until the queue is empty or one can't go
+ * through. A sent op leaves the queue by its opId, never by position: while
+ * it was out the user may have queued more, so whatever is first by then may
+ * be a different op.
+ */
 export async function drainOutbox(h: DrainHooks): Promise<DrainResult> {
   let processed = 0
+  const without = (op: PendingOp): PendingOp[] => h.outbox().filter((o) => o.opId !== op.opId)
+  const forBet = (o: PendingOp, op: PendingOp): boolean => o.kind !== 'bulk-add' && op.kind !== 'bulk-add' && o.id === op.id
   for (let op = h.outbox()[0]; op !== undefined; op = h.outbox()[0]) {
+    const firstTry = !op.sent
+    if (firstTry) h.setSent(op, true)
     try {
       const result = await h.send(op)
-      h.applied(op, result)
-      h.setOutbox(h.outbox().slice(1))
+      h.applied(op, result, h.outbox().some((o) => o.opId !== op.opId && forBet(o, op)))
+      h.setOutbox(without(op))
       processed++
     } catch (err) {
       const failure = classifySyncError(err)
       // Unreachable, or the database is missing a migration: keep the op, and
       // everything queued after it, in order, for the next attempt.
       if (failure === 'offline') return { stop: 'offline', processed }
-      if (failure === 'behind') return { stop: 'behind', processed, error: err }
+      if (failure === 'behind') {
+        // Refused before it could apply: a first attempt never landed.
+        if (firstTry) h.setSent(op, false)
+        return { stop: 'behind', processed, error: err }
+      }
       // The server rejected this op (validation, RLS, row gone). Drop it so it
-      // can't block the queue, surface the error, and keep going.
-      h.setOutbox(h.outbox().slice(1))
+      // can't block the queue, surface the error, and keep going. An add
+      // refused on its first attempt (not as a duplicate) never made its bet,
+      // so the edits queued for it go too: sent, they would come back refused,
+      // as a false "newer edit" notice. Not after an earlier attempt (it may
+      // have landed), and not for an import (earlier chunks may have landed);
+      // deletes stay either way, as a delete of a missing row is harmless.
+      const neverMade = op.kind === 'add' && firstTry && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
+      h.setOutbox(without(op).filter((o) => !(neverMade && o.kind === 'update' && forBet(o, op))))
       h.rejected(op, err)
     }
   }

@@ -5,6 +5,7 @@ import {
   applyOutbox,
   clearUserData,
   enqueueOp,
+  insertStamp,
   hydrateBet,
   loadCache,
   loadOutbox,
@@ -236,14 +237,27 @@ describe('loadOutbox — queues written by older versions', () => {
     ]
     localStorage.setItem('bettracker:outbox:legacy', JSON.stringify(legacy))
     const ops = loadOutbox('legacy', '2026-10-09T12:00:00.000Z')
-    expect(ops[0]).toEqual(legacy[0])
+    expect(ops[0]).toEqual({ ...legacy[0], sent: true })
     expect(ops[1]).toEqual({ ...legacy[1], editedAt: '2026-10-09T12:00:00.000Z', legacy: true })
     expect(ops[2]).toEqual(legacy[2])
   })
 
   it('leaves an edit that has its time alone', () => {
-    saveOutbox('u-now', [update('a', 5, 'T1')])
-    expect(loadOutbox('u-now', 'LATER')).toEqual([update('a', 5, 'T1')])
+    saveOutbox('u-now', [del('x'), update('a', 5, 'T1')])
+    expect(loadOutbox('u-now', 'LATER')[1]).toEqual(update('a', 5, 'T1'))
+  })
+
+  it('takes the head of the queue as sent: it may have gone out with its answer lost', () => {
+    // That version kept no `sent`: the add at the head may already be on the server.
+    saveOutbox('u-lost', [add('a', { amount: 1 }), add('b', { amount: 2 })])
+    const ops = loadOutbox('u-lost')
+    expect(ops.map((o) => o.sent)).toEqual([true, undefined])
+    // So deleting it sends a delete rather than cancelling the add, and an
+    // edit of it goes out after it rather than into it.
+    expect(enqueueOp(ops, del('a')).map((o) => o.kind)).toEqual(['add', 'add', 'delete'])
+    expect(enqueueOp(ops, update('a', 9, 'T9')).map((o) => o.kind)).toEqual(['add', 'add', 'update'])
+    // The ops behind it never went out: those still fold and cancel.
+    expect(enqueueOp(ops, del('b')).map((o) => o.opId)).toEqual([ops[0].opId])
   })
 
   it('shows a legacy edit as the database applies it: only its fields, status by the 003 rule', () => {
@@ -326,6 +340,62 @@ describe('enqueueOp', () => {
     expect(applyOutbox([bet({ id: 'a', amount: 7 })], out)).toEqual([])
     // A second delete of the same synced bet is not queued twice.
     expect(enqueueOp([del('a')], del('a'))).toEqual([del('a')])
+  })
+
+  describe('once an op has been sent', () => {
+    // Sent: its request went out (and may be out still, or may have failed),
+    // so it may be on the server whatever the answer.
+    const sent = <T extends PendingOp>(op: T): T => ({ ...op, sent: true })
+
+    it('queues an edit behind a sent add, instead of rewriting it', () => {
+      const a = sent(add('a', { amount: 10 }))
+      expect(enqueueOp([a], update('a', 55))).toEqual([a, update('a', 55)])
+    })
+
+    it('queues a newer edit behind a sent edit, and folds later ones into that newer one', () => {
+      const u = sent(update('a', 1, 'T1'))
+      const out = enqueueOp([u], update('a', 2, 'T2'))
+      expect(out).toEqual([u, update('a', 2, 'T2')])
+      const later = enqueueOp(out, update('a', 3, 'T3'))
+      expect(later).toHaveLength(2)
+      expect(later[0]).toBe(u)
+      expect(later[1]).toMatchObject({ kind: 'update', input: { amount: 3 }, editedAt: 'T3' })
+    })
+
+    it('folds an edit into the last op for the bet, never an earlier one', () => {
+      // The sent add failed and stays queued, with an edit already behind it.
+      const queue = [sent(add('a', { amount: 10 })), update('a', 20, 'T2')]
+      const out = enqueueOp(queue, update('a', 30, 'T3'))
+      expect(out[0]).toBe(queue[0])
+      expect(out[1]).toMatchObject({ kind: 'update', input: { amount: 30 }, editedAt: 'T3' })
+      expect(applyOutbox([], out).map((b) => b.amount)).toEqual([30])
+    })
+
+    it('cannot cancel a sent add: the delete is queued after it', () => {
+      const a = sent(add('a'))
+      expect(enqueueOp([a, add('b')], del('a'))).toEqual([a, add('b'), del('a')])
+    })
+
+    it('keeps a sent edit when its bet is deleted, and drops the ones still waiting', () => {
+      const u = sent(update('a', 1, 'T1'))
+      expect(enqueueOp([u, add('c'), update('a', 2, 'T2')], del('a'))).toEqual([u, add('c'), del('a')])
+    })
+
+    it('leaves the queue alone for other bets', () => {
+      const a = sent(add('a'))
+      const out = enqueueOp([a, add('b')], update('b', 9))
+      expect(out[0]).toBe(a)
+      expect(out[1]).toMatchObject({ kind: 'add', id: 'b', input: { amount: 9 } })
+      expect(out).toHaveLength(2)
+    })
+
+    it('stamps an add with the last edit folded into it, for the insert and the optimistic row', () => {
+      const out = enqueueOp([add('a')], update('a', 9, 'T9'))
+      expect(out[0]).toMatchObject({ kind: 'add', queuedAt: '2026-01-01T10:00:00.000Z', editedAt: 'T9' })
+      expect(insertStamp(out[0] as Extract<PendingOp, { kind: 'add' }>)).toBe('T9')
+      expect(insertStamp(add('b') as Extract<PendingOp, { kind: 'add' }>)).toBe('2026-01-01T10:00:00.000Z')
+      expect(applyOutbox([], out)[0]).toMatchObject({ createdAt: '2026-01-01T10:00:00.000Z', updatedAt: 'T9' })
+    })
   })
 })
 

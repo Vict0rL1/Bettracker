@@ -3,6 +3,7 @@ import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../
 import { supabase } from '../lib/supabase'
 import { isValidDate, MAX_AMOUNT, normalizeInput, round2, type CleanBet } from '../lib/validate'
 import { describeError } from './errors'
+import { insertStamp, type PendingOp } from './offline'
 
 // The table keeps its original name: renaming it is not an additive migration
 // and every policy and index refers to it. Everywhere else these are bets.
@@ -87,11 +88,17 @@ export async function getBets(): Promise<Bet[]> {
 /**
  * Add one bet. `id` is a client-generated UUID so an offline retry of the same
  * insert is recognized as a duplicate instead of creating a second row.
+ *
+ * `queuedAt` is the device time of its content (see insertStamp: when it was
+ * logged, or last edited before it was sent), written as `updated_at` so the
+ * conflict check below compares device times only. Left to the server's
+ * clock, the row could look newer than an edit the user made while the
+ * insert was still on its way, and that edit would be refused.
  */
-export async function addBet(input: BetInput, id?: string): Promise<Bet> {
+export async function addBet(input: BetInput, id?: string, queuedAt?: string): Promise<Bet> {
   const clean = normalizeInput(input)
   const user_id = await currentUserId()
-  const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}) }
+  const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}), ...(queuedAt ? { updated_at: queuedAt } : {}) }
   const { data, error } = await supabase.from(TABLE).insert(payload).select().single()
   if (error) {
     if (error.code === '23505' && id) {
@@ -169,11 +176,13 @@ export async function deleteBet(id: string): Promise<boolean> {
  * Insert many bets at once (CSV import). Rows are sent in chunks so a large
  * file doesn't hit request-size limits, and ids are client-generated so a
  * partially-applied import can be re-run without duplicating rows.
+ * `queuedAt` is written as each row's `updated_at`, as in addBet.
  */
-export async function addBets(inputs: readonly { id: string; input: BetInput }[]): Promise<number> {
+export async function addBets(inputs: readonly { id: string; input: BetInput }[], queuedAt?: string): Promise<number> {
   if (inputs.length === 0) return 0
   const user_id = await currentUserId()
-  const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)) }))
+  const stamp = queuedAt ? { updated_at: queuedAt } : {}
+  const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)), ...stamp }))
 
   const CHUNK = 250
   let written = 0
@@ -185,6 +194,20 @@ export async function addBets(inputs: readonly { id: string; input: BetInput }[]
     written += count ?? chunk.length
   }
   return written
+}
+
+/**
+ * One queued op, sent. An insert is stamped with insertStamp (the device time
+ * of its content); an edit queued by a version from before 003 goes out the
+ * way that version sent it. Resolves with the row the server returned, when
+ * there is one.
+ */
+export async function sendOp(op: PendingOp): Promise<Bet | null> {
+  if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
+  if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
+  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op))
+  else await deleteBet(op.id)
+  return null
 }
 
 /**

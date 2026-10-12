@@ -27,7 +27,7 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { addBet, getBets, updateBet, updateBetLegacy } from './bets'
+import { addBet, addBets, getBets, sendOp, updateBet, updateBetLegacy } from './bets'
 import { MigrationNeededError } from './errors'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
@@ -60,6 +60,29 @@ describe('updateBet — last write wins by edit time', () => {
   })
 })
 
+describe('inserts carry the time they were queued', () => {
+  // The conflict check compares the row's updated_at with the device time of
+  // an edit. Left to the server's now(), an insert can land "after" an edit
+  // the user made while it was on the wire, and that edit would be refused.
+  it('addBet writes the queued time as updated_at', async () => {
+    state.result = { data: { id: 'id-1', date: '2026-03-01', amount: '5', status: 'won', note: '', created_at: 'c', updated_at: 'Q' }, error: null, count: null }
+    await addBet({ date: '2026-03-01', amount: 5 }, 'id-1', 'Q')
+    expect(call('insert')?.args[0]).toMatchObject({ id: 'id-1', updated_at: 'Q' })
+  })
+
+  it('addBets writes it on every imported row', async () => {
+    state.result = { data: null, error: null, count: 2 }
+    await addBets(
+      [
+        { id: 'x', input: { date: '2026-03-01', amount: 5 } },
+        { id: 'y', input: { date: '2026-03-02', amount: -5 } }
+      ],
+      'Q'
+    )
+    expect(call('upsert')?.args[0]).toEqual([expect.objectContaining({ id: 'x', updated_at: 'Q' }), expect.objectContaining({ id: 'y', updated_at: 'Q' })])
+  })
+})
+
 describe('updateBetLegacy — an edit queued by a version from before 003', () => {
   it('sends only the fields that version knew, never status, odds or closing odds', async () => {
     state.result = { data: { id: 'a', date: '2026-03-01', amount: null, status: 'pending', odds: '2.1', note: 'fixed', created_at: 'c', updated_at: 'L' }, error: null, count: null }
@@ -79,6 +102,40 @@ describe('updateBetLegacy — an edit queued by a version from before 003', () =
     await expect(updateBetLegacy('a', { date: 'nope', amount: 1 }, 'L')).rejects.toThrow(/calendar date/)
     await expect(updateBetLegacy('a', { date: '2026-03-01', amount: Number.NaN }, 'L')).rejects.toThrow(/finite/)
     expect(state.calls).toHaveLength(0)
+  })
+})
+
+describe('sendOp — one queued op, as it goes out', () => {
+  const row = { id: 'a', date: '2026-03-01', amount: '5', status: 'won', note: '', created_at: 'c', updated_at: 'E' }
+
+  it('stamps an add with the time of its content: the last edit folded into it, else when it was queued', async () => {
+    state.result = { data: row, error: null, count: null }
+    await sendOp({ opId: 'o', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q', editedAt: 'E' })
+    expect(call('insert')?.args[0]).toMatchObject({ id: 'a', updated_at: 'E' })
+    state.calls = []
+    await sendOp({ opId: 'o', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' })
+    expect(call('insert')?.args[0]).toMatchObject({ id: 'a', updated_at: 'Q' })
+  })
+
+  it('sends a legacy edit the way that version did, and any other edit in full', async () => {
+    state.result = { data: row, error: null, count: null }
+    await sendOp({ opId: 'o', kind: 'update', id: 'a', input: { date: '2026-03-01', amount: 5, note: '' }, editedAt: 'L', legacy: true })
+    expect(call('update')?.args[0]).toEqual({ date: '2026-03-01', amount: 5, note: '', updated_at: 'L' })
+    state.calls = []
+    const out = await sendOp({ opId: 'o', kind: 'update', id: 'a', input: { date: '2026-03-01', amount: 5, note: '' }, editedAt: 'E' })
+    expect(call('update')?.args[0]).toMatchObject({ amount: 5, status: 'won', updated_at: 'E' })
+    expect(out?.id).toBe('a')
+  })
+
+  it('stamps every row of an import with its queued time, and returns no row for it or for a delete', async () => {
+    state.result = { data: null, error: null, count: 1 }
+    expect(await sendOp({ opId: 'o', kind: 'bulk-add', entries: [{ id: 'x', input: { date: '2026-03-01', amount: 5 } }], queuedAt: 'Q' })).toBeNull()
+    expect((call('upsert')?.args[0] as { updated_at: string }[])[0].updated_at).toBe('Q')
+    state.calls = []
+    state.result = { data: null, error: null, count: null }
+    expect(await sendOp({ opId: 'o', kind: 'delete', id: 'a' })).toBeNull()
+    expect(call('delete')).toBeDefined()
+    expect(call('eq')?.args).toEqual(['id', 'a'])
   })
 })
 
