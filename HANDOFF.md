@@ -122,10 +122,10 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ```bash
 npm ci
-npm test            # 416 tests unitarios (vitest)
+npm test            # 429 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 52 comprobaciones Playwright, sin backend
+npm run test:e2e    # 57 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -143,7 +143,8 @@ en C, el trigger; en las tres, las escrituras de versiones antiguas y
 nuevas, las constraints y, para `bankroll_moves`, la regla de conflicto, la
 cascada al borrar el usuario y las policies ejercidas como un usuario
 conectado (rol `authenticated`, que crea `stubs.sql`; por eso necesita un
-rol que pueda crear roles, como el `postgres` de CI). Luego compara las tres estructuras (tablas,
+superusuario, como el `postgres` de CI: hace falta crear el rol y luego
+poder hacer `set role` a él). Luego compara las tres estructuras (tablas,
 columnas, constraints, índices, policies, trigger y función, y qué publica
 realtime; el orden de las columnas aparte, que migraciones aditivas no
 pueden igualar). Necesita
@@ -234,8 +235,12 @@ Playwright llegara a `localhost`; en CI no.
    Bankroll en el panel; gráfico P/L o Bankroll (un solo eje, con lo
    aportado en línea discontinua); nota bajo el stake con su porcentaje del
    bankroll, ámbar por encima del 5 %, sin bloquear nunca; tamaño de unidad
-   e interruptor dólares/unidades en ajustes, con todo importe mostrado en
-   unidades (las casillas, la base y el CSV siguen en dólares).
+   e interruptor dólares/unidades en ajustes, con todo importe del panel,
+   el gráfico, el calendario, el historial, el desglose, los pendientes y
+   el aviso de pérdidas mostrado en unidades. Siguen en dólares las
+   casillas, el diálogo de bankroll y la fila Bankroll de ajustes (donde el
+   dinero se escribe; la cifra actual lleva al lado sus unidades), la base
+   y el CSV.
 5. **CLV** (`closing_odds`, `lib/stats.ts`): cuota de cierre por apuesta en
    el modal del día; CLV = cuota / cierre − 1 por apuesta (historial, modal),
    media en una tarjeta ("batió el cierre n de m") y por fila del desglose;
@@ -346,14 +351,23 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   parece más antigua, y la regla de conflicto compara siempre horas de
   dispositivo.
 - Una operación que la base rechaza porque le falta una migración se queda
-  en la cola (como sin conexión) en vez de descartarse; cada cola (apuestas
-  y ajustes) da el aviso una vez por episodio (hasta que una petición pasa o
-  la cola se vacía), no en
-  cada reintento. `data/drain.ts` decide qué sale de la cola y qué se queda,
-  qué muestra la insignia y cuándo repetir el aviso; los hooks solo guardan
-  el estado.
+  en la cola (como sin conexión) en vez de descartarse; cada cola
+  (apuestas, ajustes, ingresos y retiradas) da el aviso una vez por episodio
+  (hasta que una petición pasa o la cola se vacía), no en cada reintento.
+  `data/drain.ts` decide qué sale de la cola y qué se queda, qué muestra la
+  insignia, cuándo repetir el aviso, dónde va una fila que llega antes de la
+  primera lectura (`foldApplied`) y qué hace el reintento lento
+  (`retryPlan`); los hooks guardan el estado y aplican esas decisiones.
 - El signo de un importe se valida ya redondeado a céntimos, como se
   guarda: 0.004 es un push de 0.00, no una ganada de 0.00.
+- Las lecturas completas (apuestas e ingresos/retiradas) van por páginas
+  (`data/readAll.ts`): Supabase devuelve como mucho 1.000 filas por
+  petición y corta el resto sin avisar, así que con más de 1.000 apuestas el
+  historial, el P/L y el bankroll perdían las más nuevas.
+- Una casilla de ajustes o del bankroll inicial sigue al valor guardado
+  hasta que el usuario escribe en ella (`useBox`), y al cerrar solo se
+  guarda si la tocó: así un ajuste que se carga o cambia en otro dispositivo
+  con el diálogo abierto no se pisa al cerrarlo.
 - Ingresos y retiradas en su propia tabla y su propia cola, con las mismas
   reglas que las apuestas (`enqueueOp`, `drainOutbox`, `headAsSent` son
   genéricos por tipo, sin copiar cuerpos): en una cola compartida, uno
@@ -408,6 +422,7 @@ src/renderer/src/lib/
   bankroll.ts   bankroll actual, serie diaria, nota del 5 %, avisos de movimientos
   format.ts     formato de dinero en dólares o unidades (+ money.ts, el contexto)
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
+  useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
   quick.ts      valores por defecto del registro rápido
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
@@ -415,6 +430,7 @@ src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
   moves.ts, useMoves.ts                   ingresos y retiradas: servidor y sincronización
+  readAll.ts                              leer todas las filas, por páginas
   drain.ts                                vaciar la cola: qué sale y qué se queda
   errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
 src/renderer/src/components/
@@ -422,7 +438,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll)
-e2e/*.spec.ts                       52 comprobaciones
+e2e/*.spec.ts                       57 comprobaciones
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

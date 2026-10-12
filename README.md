@@ -232,9 +232,10 @@ be edited or deleted, with Undo; they work offline and sync like bets. They
 are not bets: they never count in P/L, ROI, streaks or the loss limit, and
 they are never painted as wins or losses. Pending bets add nothing until they
 settle; their stakes show as *riding*. The bankroll always covers every bet,
-whatever date range is chosen. Until a starting bankroll or a deposit exists
-it reads *—*; on a device that has not loaded your deposits and withdrawals
-yet (a first start offline) it reads *…* rather than a wrong figure.
+whatever date range is chosen. With no starting bankroll and no deposit or
+withdrawal it reads *—*; on a device that has not loaded your settings or
+your deposits and withdrawals yet (a first start offline) it reads *…*
+rather than a wrong figure.
 
 **The chart** switches between **P/L** (the running result, from 0) and
 **Bankroll** (the bankroll as a level, with the money put in — start plus

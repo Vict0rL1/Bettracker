@@ -9,8 +9,9 @@
 #
 # Needs psql, createdb, dropdb and pg_dump on PATH, with the usual PG*
 # variables pointing at a server where it may create and drop databases
-# (they are all named bettracker_test_*) and create the `authenticated` role
-# if it isn't there yet (stubs.sql). Locally, as root:
+# (they are all named bettracker_test_*) as a superuser: stubs.sql creates the
+# `authenticated` role if it isn't there yet, and checks.sql switches to it
+# (set role), which a role that merely created it may not do. Locally, as root:
 #   su postgres -c 'bash supabase/tests/run.sh'
 set -euo pipefail
 
