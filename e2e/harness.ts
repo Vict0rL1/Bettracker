@@ -209,7 +209,7 @@ const MOCK_SERVER = `
   function from(table) {
     const q = { table, action: 'select', payload: null, eq: {}, lte: undefined }
     const chain = {
-      select() { return chain }, order() { return chain }, single() { return chain }, maybeSingle() { return chain },
+      select() { return chain }, order() { return chain }, range() { return chain }, single() { return chain }, maybeSingle() { return chain },
       eq(c, v) { q.eq[c] = v; return chain },
       lte(c, v) { q.lte = v; q.lteSet = true; return chain },
       insert(p) { q.action = 'insert'; q.payload = p; return chain },

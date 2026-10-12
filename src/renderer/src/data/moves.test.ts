@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../lib/supabase', () => {
   const chain: Record<string, unknown> = {}
-  for (const m of ['from', 'select', 'insert', 'update', 'delete', 'eq', 'lte', 'order', 'single', 'maybeSingle', 'channel', 'on', 'subscribe', 'removeChannel']) {
+  for (const m of ['from', 'select', 'insert', 'update', 'delete', 'eq', 'lte', 'order', 'range', 'single', 'maybeSingle', 'channel', 'on', 'subscribe', 'removeChannel']) {
     chain[m] = (...args: unknown[]) => {
       state.calls.push({ method: m, args })
       return chain
@@ -49,7 +49,21 @@ describe('getMoves', () => {
       { id: 'm2', date: '2026-03-01', amount: 500, note: '', createdAt: 'C', updatedAt: 'S' }
     ])
     expect(call('from')?.args).toEqual(['bankroll_moves'])
-    expect(calls('order').map((c) => c.args[0])).toEqual(['date', 'created_at'])
+    expect(calls('order').map((c) => c.args[0])).toEqual(['date', 'created_at', 'id'])
+    expect(calls('range').map((c) => c.args)).toEqual([[0, 999]])
+  })
+
+  it('reads page by page until the counted total is in', async () => {
+    const page = (n: number, from: number) => Array.from({ length: n }, (_, i) => ({ ...ROW, id: `m${from + i}` }))
+    state.replies = [
+      { data: page(1000, 0), error: null, count: 1001 },
+      { data: page(1, 1000), error: null, count: 1001 }
+    ]
+    expect(await getMoves()).toHaveLength(1001)
+    expect(calls('range').map((c) => c.args)).toEqual([
+      [0, 999],
+      [1000, 1999]
+    ])
   })
 
   it('reads a missing table (005 not run) as the migration hint', async () => {

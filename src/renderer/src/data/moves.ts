@@ -3,6 +3,7 @@ import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
 import { normalizeMove } from '../lib/validate'
 import { describeError } from './errors'
+import { readAll } from './readAll'
 import { insertStamp, type MoveOp } from './offline'
 
 // Deposits and withdrawals (migration 005). Same rules as the bets: ids are
@@ -39,13 +40,16 @@ async function currentUserId(): Promise<string> {
 }
 
 export async function getMoves(): Promise<BankrollMove[]> {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select('*')
-    .order('date', { ascending: true })
-    .order('created_at', { ascending: true })
-  if (error) throw describeError(error)
-  return (data as Row[]).map(toMove)
+  const rows = await readAll<Row>((from, to) =>
+    supabase
+      .from(TABLE)
+      .select('*', { count: 'exact' })
+      .order('date', { ascending: true })
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+  return rows.map(toMove)
 }
 
 /**
