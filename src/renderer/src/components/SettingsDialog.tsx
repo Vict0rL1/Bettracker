@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { ODDS_FORMATS, type OddsFormat, type Settings, type SettingsPatch } from '../../../shared/types'
 import type { Bankroll } from '../lib/bankroll'
 import { fmtStake, moneyFormat } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { formatOdds } from '../lib/odds'
+import { useBox } from '../lib/useBox'
 import { parseMoneyBox, unitSizePatch } from '../lib/validate'
 import { CloseIcon } from './icons'
 
@@ -35,9 +36,12 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
   const lossId = useId()
   const unitId = useId()
   const unitsHintId = useId()
-  const [stakeStr, setStakeStr] = useState(settings.defaultStake === null ? '' : String(settings.defaultStake))
-  const [lossStr, setLossStr] = useState(settings.lossLimit === null ? '' : String(settings.lossLimit))
-  const [unitStr, setUnitStr] = useState(settings.unitSize === null ? '' : String(settings.unitSize))
+  // Each box follows its setting until the user types in it (useBox): a
+  // setting that loads or changes on another device while this is open shows
+  // up here, and closing never sends back a value nobody typed.
+  const stake = useBox(settings.defaultStake)
+  const loss = useBox(settings.lossLimit)
+  const unit = useBox(settings.unitSize)
 
   const pickFormat = (f: OddsFormat): void => {
     if (f !== settings.oddsFormat) onChange({ oddsFormat: f })
@@ -49,38 +53,42 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
 
   /** The default stake: empty means none, 0 is allowed (a free bet). */
   const commitStake = (): void => {
-    const parsed = parseMoneyBox(stakeStr, { allowZero: true })
+    const text = stake.pending()
+    if (text === null) return
+    const parsed = parseMoneyBox(text, { allowZero: true })
     if (parsed === 'invalid') {
-      setStakeStr(settings.defaultStake === null ? '' : String(settings.defaultStake))
+      stake.settle(settings.defaultStake)
       return
     }
-    setStakeStr(parsed === null ? '' : String(parsed))
+    stake.settle(parsed)
     if (parsed !== settings.defaultStake) onChange({ defaultStake: parsed })
   }
 
   /** The loss limit: zero or empty means no limit (0.004 too: it is $0.00). */
   const commitLoss = (): void => {
-    const parsed = parseMoneyBox(lossStr, { allowZero: true })
+    const text = loss.pending()
+    if (text === null) return
+    const parsed = parseMoneyBox(text, { allowZero: true })
     if (parsed === 'invalid') {
-      setLossStr(settings.lossLimit === null ? '' : String(settings.lossLimit))
+      loss.settle(settings.lossLimit)
       return
     }
     const next = parsed === 0 ? null : parsed
-    setLossStr(next === null ? '' : String(next))
+    loss.settle(next)
     if (next !== settings.lossLimit) onChange({ lossLimit: next })
   }
 
   /** The unit size: empty means none, and clearing it turns units off with it. */
   const commitUnit = (): void => {
-    const patch = unitSizePatch(unitStr, settings)
-    if (patch === 'revert') {
-      setUnitStr(settings.unitSize === null ? '' : String(settings.unitSize))
+    const text = unit.pending()
+    if (text === null) return
+    const patch = unitSizePatch(text, settings)
+    if (patch === 'revert' || patch === null) {
+      unit.settle(settings.unitSize)
       return
     }
-    if (patch !== null) {
-      setUnitStr(patch.unitSize === undefined || patch.unitSize === null ? '' : String(patch.unitSize))
-      onChange(patch)
-    }
+    unit.settle(patch.unitSize ?? null)
+    onChange(patch)
   }
 
   // Escape and the backdrop close the dialog without a blur: commit what was
@@ -156,8 +164,8 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
                 min="0.01"
                 step="0.01"
                 placeholder="0.00"
-                value={unitStr}
-                onChange={(e) => setUnitStr(e.target.value)}
+                value={unit.text}
+                onChange={(e) => unit.edit(e.target.value)}
                 onBlur={commitUnit}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -226,8 +234,8 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
                 min="0"
                 step="0.01"
                 placeholder="0.00"
-                value={stakeStr}
-                onChange={(e) => setStakeStr(e.target.value)}
+                value={stake.text}
+                onChange={(e) => stake.edit(e.target.value)}
                 onBlur={commitStake}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -255,8 +263,8 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
                 min="0"
                 step="1"
                 placeholder="0"
-                value={lossStr}
-                onChange={(e) => setLossStr(e.target.value)}
+                value={loss.text}
+                onChange={(e) => loss.edit(e.target.value)}
                 onBlur={commitLoss}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {

@@ -38,11 +38,13 @@ export default function StakeNote({ id, stake, current, applies }: Props) {
         : note.kind === 'empty'
           ? t('stake.empty', { amount: money.bankroll(note.current) })
           : ''
-  const text = [echo, body].filter(Boolean).join(' · ')
+  // A warning leads, so a narrow screen cuts the units echo, not the warning.
+  const warn = note.kind === 'over' || note.kind === 'empty'
+  const text = (warn ? [body, echo] : [echo, body]).filter(Boolean).join(' · ')
 
   return (
     <>
-      <p id={id} className={`stake-note ${note.kind === 'over' || note.kind === 'empty' ? 'over' : ''}`} title={text || undefined}>
+      <p id={id} className={`stake-note ${warn ? 'over' : ''}`} title={text || undefined}>
         {text}
       </p>
       <span className="visually-hidden" aria-live="polite">

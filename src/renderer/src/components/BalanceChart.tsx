@@ -71,6 +71,8 @@ export default function BalanceChart({ bets, lifetime, rangeName, range, ym, ban
     return points.map((p) => ({ ...p, balance: k(p.balance), dayTotal: k(p.dayTotal) }))
   }, [money, view, bankrollPoints, effective, lifetime.series, monthSeries])
 
+  const ahead = view !== 'bankroll' || bankrollPoints.length === 0 || bankrollPoints[bankrollPoints.length - 1].balance >= bankrollPoints[bankrollPoints.length - 1].funded
+
   let empty: ReactNode = null
   if (view === 'bankroll' && !bankroll.known) {
     empty =
@@ -129,7 +131,8 @@ export default function BalanceChart({ bets, lifetime, rangeName, range, ym, ban
           {view === 'bankroll' && (
             <ul className="chart-legend">
               <li>
-                <i className="legend-line" /> {t('chart.bankroll')}
+                {/* Green or red like the line: ahead of, or behind, the money put in. */}
+                <i className={`legend-line ${ahead ? 'win' : 'loss'}`} /> {t('chart.bankroll')}
               </li>
               <li>
                 <i className="legend-line legend-dashed" /> {t('chart.funded')}

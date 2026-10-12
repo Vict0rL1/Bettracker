@@ -2513,8 +2513,8 @@ tbody tr.is-selected {
 }
 
 .mini-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--focus-ring);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 /* The stake note keeps its line even when empty, so nothing below it moves
@@ -2587,6 +2587,11 @@ tbody tr.is-selected {
   text-align: center;
 }
 
+/* Phones stretch every .btn (flex: 1); in this column that would make it tall. */
+.chart-setup .btn {
+  flex: none;
+}
+
 .chart-legend {
   display: flex;
   gap: 16px;
@@ -2607,6 +2612,14 @@ tbody tr.is-selected {
   display: inline-block;
   width: 18px;
   border-top: 2px solid var(--text-2);
+}
+
+.legend-line.win {
+  border-top-color: var(--green);
+}
+
+.legend-line.loss {
+  border-top-color: var(--red);
 }
 
 .legend-line.legend-dashed {
@@ -2658,9 +2671,17 @@ tbody tr.is-selected {
   gap: 12px;
 }
 
-.bank-line dt {
+.bank-line dt,
+.bank-start-label {
   font-size: var(--fs-md);
   color: var(--text-2);
+}
+
+.bank-sums {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
 }
 
 .bank-line dd {

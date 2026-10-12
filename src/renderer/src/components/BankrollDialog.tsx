@@ -5,6 +5,7 @@ import { humanDate, shortDate, todayStr } from '../lib/dates'
 import { fmtMoney, fmtMoneyPlain } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
+import { useBox } from '../lib/useBox'
 import { isValidDate, MAX_AMOUNT, parseMoneyBox, roundCents } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 
@@ -14,12 +15,18 @@ interface Props {
   moves: readonly BankrollMove[]
   /** The saved starting bankroll (a setting), shown in its box. */
   startingBankroll: number | null
+  /** The deposits and withdrawals have been read on this device (or the table is known not to exist yet). */
+  movesLoaded: boolean
+  /** The earliest bet's date: what the starting bankroll comes before. */
+  firstBetDate: string | null
   /** No session or no connection: what is still loading waits for one. */
   offline: boolean
-  /** A move or a setting is still waiting to reach the server. */
-  dirty: boolean
-  /** What it waits for is a database migration, not the connection. */
-  blocked: boolean
+  /**
+   * Why a change made here has not reached the server: 'offline', or
+   * 'blocked' by a missing migration. Null while nothing waits (or it is
+   * simply on its way).
+   */
+  syncNote: 'offline' | 'blocked' | null
   onSetStart: (value: number | null) => void
   onAdd: (input: MoveInput) => void
   onUpdate: (id: string, input: MoveInput) => void
@@ -42,7 +49,20 @@ const newestFirst = (a: BankrollMove, b: BankrollMove): number =>
  * when units are on. Deposits and withdrawals are not bets: they are never
  * painted as wins or losses and never count in P/L, ROI or the loss limit.
  */
-export default function BankrollDialog({ bankroll, moves, startingBankroll, offline, dirty, blocked, onSetStart, onAdd, onUpdate, onDelete, onClose }: Props) {
+export default function BankrollDialog({
+  bankroll,
+  moves,
+  startingBankroll,
+  movesLoaded,
+  firstBetDate,
+  offline,
+  syncNote,
+  onSetStart,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onClose
+}: Props) {
   const { t, tn } = useLang()
   const money = useMoney()
   const titleId = useId()
@@ -51,7 +71,8 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
   const amountRef = useRef<HTMLInputElement>(null)
   const today = todayStr()
 
-  const [startStr, setStartStr] = useState(startingBankroll === null ? '' : String(startingBankroll))
+  // Follows the saved start until the user types (see useBox).
+  const start = useBox(startingBankroll)
   const [kind, setKind] = useState<Kind>('deposit')
   const [amountStr, setAmountStr] = useState('')
   const [date, setDate] = useState(today)
@@ -62,12 +83,14 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
 
   /** The start box commits on blur, Enter or close; nonsense reverts to the saved value. */
   const commitStart = (): void => {
-    const parsed = parseMoneyBox(startStr, { allowZero: true })
+    const text = start.pending()
+    if (text === null) return
+    const parsed = parseMoneyBox(text, { allowZero: true })
     if (parsed === 'invalid') {
-      setStartStr(startingBankroll === null ? '' : String(startingBankroll))
+      start.settle(startingBankroll)
       return
     }
-    setStartStr(parsed === null ? '' : String(parsed))
+    start.settle(parsed)
     if (parsed !== startingBankroll) onSetStart(parsed)
   }
   // Escape and the backdrop close the dialog without a blur: the typed start
@@ -87,8 +110,10 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
     dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus()
     return () => {
       if (timer.current) clearTimeout(timer.current)
-      // Opened from Settings, the button that opened it is gone: land on the settings button instead.
-      if (previouslyFocused?.isConnected) previouslyFocused.focus()
+      // Opened from Settings, the button that opened it was gone by the time
+      // this mounted (focus had fallen to the page): land on the settings
+      // button instead.
+      if (previouslyFocused && previouslyFocused !== document.body && previouslyFocused.isConnected) previouslyFocused.focus()
       else document.querySelector<HTMLElement>('.settings-btn')?.focus()
     }
   }, [])
@@ -101,7 +126,12 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
         return
       }
       if (e.key !== 'Tab' || !dialogRef.current) return
-      const items = [...dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement)
+      // The toast's Undo is part of the round while it shows: deleting a move
+      // happens only here, so its Undo must be reachable without leaving.
+      const undo = document.querySelector<HTMLElement>('.toast-action')
+      const items = [...dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE), ...(undo ? [undo] : [])].filter(
+        (el) => el.offsetParent !== null || el === document.activeElement
+      )
       if (items.length === 0) return
       const first = items[0]
       const last = items[items.length - 1]
@@ -124,9 +154,10 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
   const signed = amountValid ? roundCents(kind === 'deposit' ? amount : -amount) : 0
   const hints = canSave ? moveHints({ date, amount: signed }, moves, bankroll, editingId ?? undefined) : []
 
-  const resetForm = (): void => {
+  /** Empty the form. The kind stays after an add: two withdrawals in a row are common. */
+  const resetForm = (kindToo = false): void => {
     setEditingId(null)
-    setKind('deposit')
+    if (kindToo) setKind('deposit')
     setAmountStr('')
     setDate(todayStr())
     setNote('')
@@ -148,6 +179,8 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
     if (editingId) onUpdate(editingId, input)
     else onAdd(input)
     resetForm()
+    // The Add button disables itself as the form empties, which would drop focus to the page.
+    amountRef.current?.focus()
   }
 
   const handleDelete = (m: BankrollMove): void => {
@@ -159,7 +192,7 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
     }
     setConfirmId(null)
     if (confirmTimer.current) clearTimeout(confirmTimer.current)
-    if (editingId === m.id) resetForm()
+    if (editingId === m.id) resetForm(true)
     onDelete(m)
   }
 
@@ -200,12 +233,12 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
           </span>
         </div>
 
-        <dl className="bank-ledger">
+        <div className="bank-ledger">
           <div className="bank-line">
-            <dt>
-              <label htmlFor={startId}>{t('bank.start')}</label>
-            </dt>
-            <dd className="field">
+            <label className="bank-start-label" htmlFor={startId}>
+              {t('bank.start')}
+            </label>
+            <div className="field">
               <div className="amount-wrap bank-start">
                 <span className="amount-cur">$</span>
                 <input
@@ -215,8 +248,9 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
                   min="0"
                   step="0.01"
                   placeholder="0.00"
-                  value={startStr}
-                  onChange={(e) => setStartStr(e.target.value)}
+                  value={start.text}
+                  aria-describedby={`${startId}-hint`}
+                  onChange={(e) => start.edit(e.target.value)}
                   onBlur={commitStart}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -226,14 +260,14 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
                   }}
                 />
               </div>
-            </dd>
+            </div>
           </div>
-          <p className="hint">
-            {known?.firstBetDate ? t('bank.startHint', { date: humanDate(known.firstBetDate) }) : t('bank.startHintNoBets')}
+          <p className="hint" id={`${startId}-hint`}>
+            {firstBetDate ? t('bank.startHint', { date: humanDate(firstBetDate) }) : t('bank.startHintNoBets')}
             {known && !known.startSet ? ` ${t('bank.countsAsZero')}` : ''}
           </p>
           {known && (
-            <>
+            <dl className="bank-sums">
               <div className="bank-line">
                 <dt>{t('bank.deposits', { n: known.deposits.count })}</dt>
                 <dd>{fmtMoney(known.deposits.sum)}</dd>
@@ -250,15 +284,15 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
                 <dt>{t('bank.current')}</dt>
                 <dd>{fmtMoneyPlain(known.current)}</dd>
               </div>
-            </>
+            </dl>
           )}
-        </dl>
+        </div>
 
         <form className="bank-form" onSubmit={submit}>
           <div className="bet-form-head">
             <span>{editingId ? t(kind === 'deposit' ? 'bank.editDeposit' : 'bank.editWithdrawal') : t('bank.addTitle')}</span>
             {editingId && (
-              <button type="button" className="auth-toggle" onClick={resetForm}>
+              <button type="button" className="auth-toggle" onClick={() => resetForm(true)}>
                 {t('modal.cancelEdit')}
               </button>
             )}
@@ -307,7 +341,7 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
                     ? t(kind === 'deposit' ? 'bank.duplicateDeposit' : 'bank.duplicateWithdrawal', { amount: fmtMoneyPlain(Math.abs(signed)), date: shortDate(date) })
                     : h === 'belowZero'
                       ? t('bank.belowZero')
-                      : t('bank.beforeStart', { date: known?.firstBetDate ? shortDate(known.firstBetDate) : '' })}
+                      : t('bank.beforeStart', { date: firstBetDate ? shortDate(firstBetDate) : '' })}
                 </li>
               ))}
             </ul>
@@ -315,7 +349,7 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
           <div className="bet-submit">
             <span className="spacer" />
             <button type="submit" className="btn btn-primary move-save" disabled={!canSave}>
-              {editingId ? t('common.save') : (<><PlusIcon /> {t('common.add')}</>)}
+              {editingId ? t('common.save') : (<><PlusIcon /> {t(kind === 'deposit' ? 'bank.addDeposit' : 'bank.addWithdrawal')}</>)}
             </button>
           </div>
         </form>
@@ -323,7 +357,7 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
         <section className="move-section">
           <h3 className="field-label">{t('bank.listTitle')}</h3>
           {sorted.length === 0 ? (
-            <p className="hint">{t('bank.empty')}</p>
+            <p className="hint">{movesLoaded ? t('bank.empty') : t(offline ? 'bank.loadingOffline' : 'bank.loading')}</p>
           ) : (
             <ul className="bet-list move-list">
               {sorted.map((m) => {
@@ -366,8 +400,8 @@ export default function BankrollDialog({ bankroll, moves, startingBankroll, offl
         </section>
 
         <footer className="modal-actions">
-          <span className={`settings-sync ${dirty ? 'is-dirty' : ''}`} aria-live="polite">
-            {dirty ? t(blocked ? 'settings.blocked' : 'settings.pending') : ''}
+          <span className={`settings-sync ${syncNote ? 'is-dirty' : ''}`} aria-live="polite">
+            {syncNote === 'blocked' ? t('settings.blocked') : syncNote === 'offline' ? t('settings.pending') : ''}
           </span>
           <span className="spacer" />
           <button type="button" className="btn btn-ghost" onClick={close}>

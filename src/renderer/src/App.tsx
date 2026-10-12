@@ -20,7 +20,7 @@ import { combinedStatus } from './data/drain'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
 import { useSettings } from './data/useSettings'
-import { bankrollNow } from './lib/bankroll'
+import { bankrollNow, firstBetDate } from './lib/bankroll'
 import { retagPlan, settlePlan, type TagPatch } from './lib/bulk'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
 import { moneyFormat } from './lib/format'
@@ -356,6 +356,18 @@ export default function App() {
     [moves, savedNote, showError, undoable, t]
   )
 
+  // What the Bankroll dialog's changes wait for, judged per queue: a
+  // migration for the queue it holds back, the connection for the rest. A
+  // change simply on its way says nothing.
+  const firstBet = useMemo(() => firstBetDate(bets ?? []), [bets])
+  const movesWaiting = moves.queuedCount > 0
+  const bankrollSyncNote =
+    (movesWaiting && moves.blocked) || (settingsDirty && settingsBlocked)
+      ? 'blocked'
+      : (movesWaiting || settingsDirty) && (isOffline || moves.status === 'offline')
+        ? 'offline'
+        : null
+
   const openBankroll = useCallback(() => {
     setSettingsOpen(false)
     setBankrollOpen(true)
@@ -501,9 +513,10 @@ export default function App() {
             bankroll={bankroll}
             moves={moves.moves}
             startingBankroll={settings.startingBankroll}
+            movesLoaded={moves.loaded}
+            firstBetDate={firstBet}
             offline={isOffline}
-            dirty={moves.queuedCount > 0 || settingsDirty}
-            blocked={moves.blocked || settingsBlocked}
+            syncNote={bankrollSyncNote}
             onSetStart={(value) => updateSettings({ startingBankroll: value })}
             onAdd={handleAddMove}
             onUpdate={handleUpdateMove}
@@ -529,9 +542,12 @@ export default function App() {
           />
         )}
 
-        <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
-          <PlusIcon size={22} />
-        </button>
+        {/* Out of the way while a dialog is open: it sits above them, and would open another on top. */}
+        {modalDate === null && !quickOpen && !settingsOpen && !pendingOpen && !bankrollOpen && (
+          <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
+            <PlusIcon size={22} />
+          </button>
+        )}
 
         {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
       </div>

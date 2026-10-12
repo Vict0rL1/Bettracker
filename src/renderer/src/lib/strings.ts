@@ -397,6 +397,8 @@ export const en = {
   'bank.note': 'Note',
   'bank.notePlaceholder': 'Where it came from or went',
   'bank.addTitle': 'Add a deposit or withdrawal',
+  'bank.addDeposit': 'Add deposit',
+  'bank.addWithdrawal': 'Add withdrawal',
   'bank.editDeposit': 'Edit deposit',
   'bank.editWithdrawal': 'Edit withdrawal',
   'bank.listTitle': 'Deposits and withdrawals',
@@ -412,6 +414,7 @@ export const en = {
   'hero.bankroll': 'Bankroll',
   'hero.bankrollRiding': '{amount} riding',
   'hero.bankrollFunded': '{amount} put in',
+  'hero.bankrollTakenOut': '{amount} taken out',
   'hero.bankrollSetUp': 'set it up',
   'hero.bankrollLoading': 'loading…',
   'hero.bankrollOffline': 'loads when online',
@@ -430,7 +433,7 @@ export const en = {
   'chart.withdrawalDay': 'withdrawal {amount}',
   'stake.bankroll': 'Bankroll {amount}',
   'stake.share': '{pct} of your {amount} bankroll',
-  'stake.over': '{pct} of your {amount} bankroll · over 5%',
+  'stake.over': 'Over 5% · {pct} of your {amount} bankroll',
   'stake.overLive': 'This stake is more than 5% of your bankroll',
   'stake.empty': 'Your bankroll is at {amount}',
   'toast.depositAdded': 'Added a deposit',
@@ -440,7 +443,7 @@ export const en = {
   'toast.depositDeleted': 'Deleted a deposit',
   'toast.withdrawalDeleted': 'Deleted a withdrawal',
   'header.signOutUnsynced': 'Sign out anyway?',
-  'header.signOutUnsyncedTitle': 'Not synced yet: {changes}. Signing out deletes them from this device.'
+  'header.signOutUnsyncedTitle': 'Not synced yet: {changes}. Signing out deletes from this device whatever it has not sent.'
 } as const
 
 export type StringKey = keyof typeof en
@@ -812,6 +815,8 @@ export const es: Record<StringKey, string> = {
   'bank.note': 'Nota',
   'bank.notePlaceholder': 'De dónde vino o a dónde fue',
   'bank.addTitle': 'Añadir un ingreso o una retirada',
+  'bank.addDeposit': 'Añadir ingreso',
+  'bank.addWithdrawal': 'Añadir retirada',
   'bank.editDeposit': 'Editar ingreso',
   'bank.editWithdrawal': 'Editar retirada',
   'bank.listTitle': 'Ingresos y retiradas',
@@ -827,6 +832,7 @@ export const es: Record<StringKey, string> = {
   'hero.bankroll': 'Bankroll',
   'hero.bankrollRiding': '{amount} en juego',
   'hero.bankrollFunded': '{amount} aportados',
+  'hero.bankrollTakenOut': '{amount} retirados',
   'hero.bankrollSetUp': 'configúralo',
   'hero.bankrollLoading': 'cargando…',
   'hero.bankrollOffline': 'se carga con conexión',
@@ -845,7 +851,7 @@ export const es: Record<StringKey, string> = {
   'chart.withdrawalDay': 'retirada {amount}',
   'stake.bankroll': 'Bankroll {amount}',
   'stake.share': '{pct} de tu bankroll de {amount}',
-  'stake.over': '{pct} de tu bankroll de {amount} · más del 5 %',
+  'stake.over': 'Más del 5 % · {pct} de tu bankroll de {amount}',
   'stake.overLive': 'Este stake es más del 5 % de tu bankroll',
   'stake.empty': 'Tu bankroll está en {amount}',
   'toast.depositAdded': 'Ingreso añadido',
@@ -855,5 +861,5 @@ export const es: Record<StringKey, string> = {
   'toast.depositDeleted': 'Ingreso eliminado',
   'toast.withdrawalDeleted': 'Retirada eliminada',
   'header.signOutUnsynced': '¿Salir de todos modos?',
-  'header.signOutUnsyncedTitle': 'Sin sincronizar: {changes}. Al salir se borran de este dispositivo.'
+  'header.signOutUnsyncedTitle': 'Sin sincronizar: {changes}. Al salir se borra de este dispositivo lo que no ha enviado.'
 }

@@ -107,7 +107,9 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, bankroll, off
   const bankrollSub = bankroll.known
     ? bankroll.inPlay > 0
       ? t('hero.bankrollRiding', { amount: money.stake(bankroll.inPlay) })
-      : t('hero.bankrollFunded', { amount: money.bankroll(bankroll.funded) })
+      : bankroll.funded < 0
+        ? t('hero.bankrollTakenOut', { amount: money.bankroll(-bankroll.funded) })
+        : t('hero.bankrollFunded', { amount: money.bankroll(bankroll.funded) })
     : bankroll.reason === 'unset'
       ? t('hero.bankrollSetUp')
       : t(offline ? 'hero.bankrollOffline' : 'hero.bankrollLoading')
