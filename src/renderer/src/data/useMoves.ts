@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { normalizeMove } from '../lib/validate'
-import { afterFailedRead, drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { afterFailedRead, drainOutbox, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
   applyMoveOutbox,
@@ -68,6 +68,7 @@ export function useMoves(
   // keep showing until the first read brings the whole list, but are never
   // cached and never make the list count as loaded.
   const [landed, setLanded] = useState<BankrollMove[]>([])
+  const landedRef = useRef<BankrollMove[]>([])
 
   const serverRef = useRef<BankrollMove[] | null>(null)
   const outboxRef = useRef<MoveOp[]>([])
@@ -143,11 +144,14 @@ export function useMoves(
           // A refused edit lost to a newer one elsewhere, unless a later change
           // of this device to the same move is still queued (see useBetSync).
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
-          // Folded only into a snapshot this device has: one returned row is
-          // not the list, and a cache of it would read as a known bankroll.
+          // Folded only into a snapshot this device has (see foldApplied).
           // The refresh after the drain brings the whole list.
-          if (serverRef.current !== null) setServer(reconcileMove(serverRef.current, op, row))
-          else setLanded((rows) => reconcileMove(rows, op, row))
+          const next = foldApplied(serverRef.current, landedRef.current, (rows) => reconcileMove(rows, op, row))
+          if (next.server !== null) setServer(next.server)
+          else {
+            landedRef.current = next.landed
+            setLanded(next.landed)
+          }
           setOffline(false)
           setBehind(false)
         },
@@ -182,6 +186,7 @@ export function useMoves(
     noticeRef.current.clear()
     setBehindState(false)
     setTableReady(false)
+    landedRef.current = []
     setLanded([])
     if (!userId) return
     const cached = loadMoveCache(userId)
@@ -225,10 +230,11 @@ export function useMoves(
       if (document.visibilityState === 'visible') void syncNow().then(() => refresh())
     }
     const timer = setInterval(() => {
-      // While the table is missing, read too: with nothing queued, a window
-      // left open would otherwise never notice that 005 has been run.
-      if (tableMissingRef.current) void syncNow().then(() => refresh())
-      else if (outboxRef.current.length > 0) void syncNow()
+      // Read too while nothing has been read yet, or while the table is
+      // missing (see retryPlan): no other event may ever come to do it.
+      const plan = retryPlan({ queued: outboxRef.current.length > 0, loaded: serverRef.current !== null, tableMissing: tableMissingRef.current })
+      if (plan === 'read') void syncNow().then(() => refresh())
+      else if (plan === 'drain') void syncNow()
     }, RETRY_INTERVAL_MS)
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)

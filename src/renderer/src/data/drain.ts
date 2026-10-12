@@ -208,3 +208,31 @@ export function migrationNotice(): MigrationNotice {
     }
   }
 }
+
+/**
+ * Where a row that an op got back from the server goes. Into the snapshot
+ * when this device has one; otherwise it is kept apart (`landed`): one row is
+ * not the whole list, and caching it as the list would show a bankroll as
+ * known while missing everything else. The first full read replaces both.
+ */
+export function foldApplied<T>(
+  server: readonly T[] | null,
+  landed: readonly T[],
+  fold: (rows: readonly T[]) => T[]
+): { server: T[] | null; landed: T[] } {
+  return server === null ? { server: null, landed: fold(landed) } : { server: fold(server), landed: [...landed] }
+}
+
+/**
+ * What the slow retry timer does for a queue backed by a table:
+ *  - 'read': nothing has been read yet (the first read failed, and with the
+ *    connection still "up" no online event will come), or the last read found
+ *    the table missing (a window left open must notice the migration): send
+ *    what is queued, then read;
+ *  - 'drain': something is queued;
+ *  - 'idle': nothing to do.
+ */
+export function retryPlan(s: { queued: boolean; loaded: boolean; tableMissing?: boolean }): 'read' | 'drain' | 'idle' {
+  if (!s.loaded || s.tableMissing) return 'read'
+  return s.queued ? 'drain' : 'idle'
+}

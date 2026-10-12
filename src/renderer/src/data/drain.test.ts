@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BankrollMove, Bet, MoveInput, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { afterFailedRead, combinedStatus, drainOutbox, migrationNotice, pushSettings, syncStatus, type DrainHooks } from './drain'
+import { afterFailedRead, combinedStatus, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
 import { describeError, MigrationNeededError } from './errors'
 import { applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
@@ -679,5 +679,35 @@ describe('drainOutbox — changes made while a request is out', () => {
     await drain.finish()
     expect(t.reached).toContain('add-b-v1')
     expect([...t.server.keys()].sort()).toEqual(['b', 'c'])
+  })
+})
+
+describe('foldApplied — a row back from the server before any snapshot', () => {
+  const add = (rows: readonly string[]): string[] => [...rows, 'new']
+
+  it('folds into the snapshot when this device has one', () => {
+    expect(foldApplied(['a'], [], add)).toEqual({ server: ['a', 'new'], landed: [] })
+  })
+
+  it('keeps it apart when there is none: one row is not the whole list', () => {
+    expect(foldApplied<string>(null, [], add)).toEqual({ server: null, landed: ['new'] })
+    expect(foldApplied<string>(null, ['earlier'], add)).toEqual({ server: null, landed: ['earlier', 'new'] })
+  })
+})
+
+describe('retryPlan — the slow timer', () => {
+  it('reads while nothing has been read yet, queued or not', () => {
+    expect(retryPlan({ queued: false, loaded: false })).toBe('read')
+    expect(retryPlan({ queued: true, loaded: false })).toBe('read')
+  })
+
+  it('reads while the table was last found missing, to notice the migration', () => {
+    expect(retryPlan({ queued: false, loaded: true, tableMissing: true })).toBe('read')
+  })
+
+  it('only sends when loaded and something is queued, and otherwise rests', () => {
+    expect(retryPlan({ queued: true, loaded: true })).toBe('drain')
+    expect(retryPlan({ queued: false, loaded: true })).toBe('idle')
+    expect(retryPlan({ queued: false, loaded: true, tableMissing: false })).toBe('idle')
   })
 })
