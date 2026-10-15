@@ -41,7 +41,8 @@ export interface FakeSupabaseConfig {
  *
  * The e2e harness hands this function to Playwright's `addInitScript`, which
  * sends its source text to the page: it must not use anything from outside
- * its own body.
+ * its own body. fakeSupabase.test.ts runs it from its source text alone, so
+ * a reference to anything outside fails there first.
  */
 export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   type Row = Record<string, unknown>
@@ -52,6 +53,8 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     eq: Record<string, unknown>
     lte: unknown
     lteSet: boolean
+    /** `.range(from, to)`: the rows of one page, both ends included. */
+    range: [number, number] | null
   }
   interface Answer {
     data: unknown
@@ -102,8 +105,10 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   function table(name: string, constraint: string, q: Query): Answer {
     const all = read<Row[]>(name, [])
     if (q.action === 'select') {
-      if (q.eq.id === undefined) return { data: all, error: null }
-      return { data: all.find((r) => r.id === q.eq.id) ?? null, error: null }
+      if (q.eq.id !== undefined) return { data: all.find((r) => r.id === q.eq.id) ?? null, error: null }
+      // A list is read page by page (data/readAll.ts): one page, and the count of them all.
+      const page = q.range ? all.slice(q.range[0], q.range[1] + 1) : all
+      return { data: page, error: null, count: all.length }
     }
     if (q.action === 'delete') {
       const kept = all.filter((r) => r.id !== q.eq.id)
@@ -151,11 +156,14 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   }
 
   function from(tableName: string) {
-    const q: Query = { table: tableName, action: 'select', payload: null, eq: {}, lte: undefined, lteSet: false }
+    const q: Query = { table: tableName, action: 'select', payload: null, eq: {}, lte: undefined, lteSet: false, range: null }
     const chain = {
       select: () => chain,
       order: () => chain,
-      range: () => chain,
+      range(fromRow: number, toRow: number) {
+        q.range = [fromRow, toRow]
+        return chain
+      },
       single: () => chain,
       maybeSingle: () => chain,
       eq(column: string, value: unknown) {
@@ -198,7 +206,9 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   // Signing in and out: the demo's own; the e2e session never ends.
   const listeners = new Set<Listener>()
   const current = (): typeof session | null => (cfg.demo && flag('signed-out') ? null : session)
-  const signIn = (): Promise<{ data: { session: typeof session; user: typeof session.user }; error: null }> => {
+  const signIn = () => {
+    // Signing in needs the server, as it does with Supabase.
+    if (down()) return Promise.resolve({ data: { session: null, user: null }, error: { message: 'Failed to fetch', status: 0 } })
     localStorage.removeItem(key('signed-out'))
     for (const fn of listeners) fn('SIGNED_IN', session)
     return Promise.resolve({ data: { session, user: session.user }, error: null })

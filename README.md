@@ -150,15 +150,17 @@ npm install
 npm run demo
 ```
 
-It opens on `http://localhost:5174` already signed in, with nothing in it,
+It opens on `http://localhost:5172` already signed in, with nothing in it,
 and needs no Supabase project and no `.env`: a fake backend keeps everything
 in that browser's storage (the same fake the e2e suite runs against, in
 `src/renderer/src/demo/`). The app behaves as it does against Supabase,
 offline included — turn the Wi-Fi off and changes wait on the device, then
 sync when it's back. A bar across the top says it's the demo, and **Start
 over** (two clicks) empties it. Signing out leads to the sign-in screen; any
-email and password sign you back in. The **Network** URL works on your phone
-too; each browser has its own demo. None of it goes into `npm run build`.
+email and a password of 6 or more characters sign you back in. The
+**Network** URL works on your phone too; each browser has its own demo. None
+of the demo's code goes into `npm run build` (only its three strings and the
+banner's CSS do).
 
 ## Put it on your phone (deploy the PWA)
 

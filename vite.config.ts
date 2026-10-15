@@ -33,8 +33,10 @@ export default defineConfig(({ mode }) => ({
   base: '/',
   server: {
     host: true, // expose on the LAN so you can open the dev app on your phone
-    // The demo gets its own port, so its browser storage never mixes with the real app's.
-    port: mode === 'demo' ? 5174 : 5173,
+    // The demo gets its own port, so its browser storage never mixes with the
+    // real app's: below 5173, where a busy 5173 never sends `npm run dev`
+    // (Vite only tries higher ports).
+    port: mode === 'demo' ? 5172 : 5173,
     strictPort: mode === 'demo'
   },
   build: {

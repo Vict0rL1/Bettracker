@@ -205,6 +205,7 @@ h2 {
 }
 
 .demo-banner .btn {
+  flex: none; /* not stretched like the toolbar's buttons on a phone */
   padding: 3px 10px;
   font-size: var(--fs-sm);
 }

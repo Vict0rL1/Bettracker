@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
-test.use({ baseURL: 'http://localhost:4174' })
+test.use({ baseURL: 'http://localhost:4172' })
 
 const storedBets = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as unknown[]).length)
@@ -62,6 +62,30 @@ test.describe('demo', () => {
     expect(await storedBets(page)).toBe(1)
   })
 
+  test('starts as an up-to-date database: a deposit syncs', async ({ page }) => {
+    await page.goto('/')
+    await page.locator('.mini-bankroll').click()
+    const dialog = page.locator('.bank-modal')
+    await dialog.locator('.move-amount').fill('500')
+    await dialog.locator('.move-save').click()
+    await expect(page.locator('.toast')).toContainText('Added a deposit')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:moves') ?? '[]') as unknown[]).length)).toBe(1)
+  })
+
+  test('Start over takes back its question after a few seconds', async ({ page }) => {
+    await page.goto('/')
+    await addLoss(page, '20')
+    const reset = page.locator('.demo-reset')
+    await reset.click()
+    await expect(reset).toHaveText('Delete everything?')
+    await expect(reset).toHaveText('Start over', { timeout: 8000 })
+    // So the next click only asks again.
+    await reset.click()
+    await expect(reset).toHaveText('Delete everything?')
+    await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
+  })
+
   test('Start over asks twice, then empties the demo', async ({ page }) => {
     await page.goto('/')
     await addLoss(page, '20')
@@ -76,5 +100,17 @@ test.describe('demo', () => {
     await expect(page.locator('.demo-reset')).toHaveText('Start over')
     await expect(page.locator('.history-card tbody tr')).toHaveCount(0)
     expect(await storedBets(page)).toBe(0)
+  })
+})
+
+test.describe('the real app', () => {
+  // The production build the rest of the suite runs (see playwright.config.ts), here without the harness.
+  test.use({ baseURL: 'http://localhost:4173' })
+
+  test('has none of the demo in it: no bar, no fake backend, so signed out it asks you to sign in', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('.auth-card')).toBeVisible()
+    await expect(page.locator('.demo-banner')).toHaveCount(0)
+    expect(await page.evaluate(() => '__supabaseMock' in window)).toBe(false)
   })
 })

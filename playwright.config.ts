@@ -42,7 +42,7 @@ export default defineConfig({
     // backend, so it needs neither credentials nor the harness.
     {
       command: 'npm run demo:serve',
-      url: 'http://localhost:4174/',
+      url: 'http://localhost:4172/',
       timeout: 180_000,
       reuseExistingServer: !process.env.CI
     }

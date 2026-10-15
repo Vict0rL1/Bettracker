@@ -18,7 +18,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "e2e:serve": "vite build --outDir ../../dist-e2e && vite preview --outDir ../../dist-e2e --port 4173 --strictPort",
-    "demo:serve": "vite build --mode demo --outDir ../../dist-demo && vite preview --outDir ../../dist-demo --port 4174 --strictPort",
+    "demo:serve": "vite build --mode demo --outDir ../../dist-demo && vite preview --outDir ../../dist-demo --port 4172 --strictPort",
     "preview": "vite preview --host",
     "dev:desktop": "electron-vite dev",
     "build:desktop": "npm run typecheck && electron-vite build && electron-builder",

@@ -1,8 +1,10 @@
 // The demo's entry: only `npm run demo` loads it, from a script tag that
 // vite.config.ts adds ahead of main.tsx, so the fake backend is in place
 // before lib/supabase.ts picks its client.
-import { DEMO_PREFIX, DEMO_USER } from './demo'
+import { DEMO_PREFIX, DEMO_USER, ensureRandomUUID } from './demo'
 import { installFakeSupabase } from './fakeSupabase'
+
+ensureRandomUUID()
 
 // A fresh demo is an up-to-date database with nothing in it.
 try {
