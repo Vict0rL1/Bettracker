@@ -1,7 +1,10 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
-import { normalizeInput, type CleanBet } from '../lib/validate'
+import { isValidDate, MAX_AMOUNT, normalizeInput, round2, type CleanBet } from '../lib/validate'
+import { describeError } from './errors'
+import { readAll } from './readAll'
+import { insertStamp, type PendingOp } from './offline'
 
 // The table keeps its original name: renaming it is not an additive migration
 // and every policy and index refers to it. Everywhere else these are bets.
@@ -65,35 +68,6 @@ function toRowPayload(clean: CleanBet): Record<string, unknown> {
   }
 }
 
-/** True when a request failed because the network/server was unreachable (retryable). */
-export function isNetworkError(err: unknown): boolean {
-  if (err instanceof TypeError) return true
-  const msg = err instanceof Error ? err.message : String(err)
-  return /failed to fetch|networkerror|network request failed|load failed|fetch failed|err_internet|err_network|timeout/i.test(
-    msg
-  )
-}
-
-/**
- * True when the backend rejected a column the app knows about but the database
- * doesn't have yet — i.e. a migration hasn't been run. Callers use this to tell
- * the user exactly what to do instead of showing a raw PostgREST error.
- */
-export function isMissingColumnError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err)
-  return /column .*(stake|sport|book|bet_type|odds|status|closing_odds).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status|closing_odds).* column|relation .*user_settings.* does not exist|could not find the table .*user_settings/i.test(
-    msg
-  )
-}
-
-export const MIGRATION_HINT =
-  'Your database is behind the app. Run the files in supabase/migrations/ (002, 003, then 004) in your Supabase SQL editor.'
-
-export function describeError(error: { message: string }): Error {
-  const err = new Error(error.message)
-  return isMissingColumnError(err) ? new Error(MIGRATION_HINT) : err
-}
-
 async function currentUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getSession()
   if (error) throw error
@@ -103,23 +77,32 @@ async function currentUserId(): Promise<string> {
 }
 
 export async function getBets(): Promise<Bet[]> {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select('*')
-    .order('date', { ascending: true })
-    .order('created_at', { ascending: true })
-  if (error) throw describeError(error)
-  return (data as Row[]).map(toBet)
+  const rows = await readAll<Row>((from, to) =>
+    supabase
+      .from(TABLE)
+      .select('*', { count: 'exact' })
+      .order('date', { ascending: true })
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+  return rows.map(toBet)
 }
 
 /**
  * Add one bet. `id` is a client-generated UUID so an offline retry of the same
  * insert is recognized as a duplicate instead of creating a second row.
+ *
+ * `queuedAt` is the device time of its content (see insertStamp: when it was
+ * logged, or last edited before it was sent), written as `updated_at` so the
+ * conflict check below compares device times only. Left to the server's
+ * clock, the row could look newer than an edit the user made while the
+ * insert was still on its way, and that edit would be refused.
  */
-export async function addBet(input: BetInput, id?: string): Promise<Bet> {
+export async function addBet(input: BetInput, id?: string, queuedAt?: string): Promise<Bet> {
   const clean = normalizeInput(input)
   const user_id = await currentUserId()
-  const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}) }
+  const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}), ...(queuedAt ? { updated_at: queuedAt } : {}) }
   const { data, error } = await supabase.from(TABLE).insert(payload).select().single()
   if (error) {
     if (error.code === '23505' && id) {
@@ -160,6 +143,32 @@ export async function updateBet(id: string, input: BetInput, editedAt: string): 
   return data ? toBet(data as Row) : null
 }
 
+/**
+ * Send an edit queued by a version from before migration 003 the way that
+ * version sent it (see loadOutbox): only the fields it knew and its input
+ * carries, never status, odds or closing odds, so nothing it did not know
+ * about is blanked and the 003 trigger works the status out exactly as for
+ * a write from that version. Same conflict rule as updateBet.
+ */
+export async function updateBetLegacy(id: string, input: BetInput, editedAt: string): Promise<Bet | null> {
+  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
+  const amount = input.amount
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount must be a finite number')
+  const payload: Record<string, unknown> = { date: input.date, amount: round2(amount), updated_at: editedAt }
+  if ('note' in input) payload.note = input.note ?? ''
+  if ('stake' in input) {
+    const stake = input.stake
+    if (stake !== null && stake !== undefined && (!Number.isFinite(stake) || stake < 0 || stake > MAX_AMOUNT)) throw new Error('Stake is out of range')
+    payload.stake = stake === null || stake === undefined ? null : round2(stake)
+  }
+  if ('sport' in input) payload.sport = input.sport ?? ''
+  if ('book' in input) payload.book = input.book ?? ''
+  if ('betType' in input) payload.bet_type = input.betType ?? ''
+  const { data, error } = await supabase.from(TABLE).update(payload).eq('id', id).lte('updated_at', editedAt).select().maybeSingle()
+  if (error) throw describeError(error)
+  return data ? toBet(data as Row) : null
+}
+
 /** Delete one bet by id. */
 export async function deleteBet(id: string): Promise<boolean> {
   const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
@@ -171,11 +180,13 @@ export async function deleteBet(id: string): Promise<boolean> {
  * Insert many bets at once (CSV import). Rows are sent in chunks so a large
  * file doesn't hit request-size limits, and ids are client-generated so a
  * partially-applied import can be re-run without duplicating rows.
+ * `queuedAt` is written as each row's `updated_at`, as in addBet.
  */
-export async function addBets(inputs: readonly { id: string; input: BetInput }[]): Promise<number> {
+export async function addBets(inputs: readonly { id: string; input: BetInput }[], queuedAt?: string): Promise<number> {
   if (inputs.length === 0) return 0
   const user_id = await currentUserId()
-  const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)) }))
+  const stamp = queuedAt ? { updated_at: queuedAt } : {}
+  const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)), ...stamp }))
 
   const CHUNK = 250
   let written = 0
@@ -187,6 +198,20 @@ export async function addBets(inputs: readonly { id: string; input: BetInput }[]
     written += count ?? chunk.length
   }
   return written
+}
+
+/**
+ * One queued op, sent. An insert is stamped with insertStamp (the device time
+ * of its content); an edit queued by a version from before 003 goes out the
+ * way that version sent it. Resolves with the row the server returned, when
+ * there is one.
+ */
+export async function sendOp(op: PendingOp): Promise<Bet | null> {
+  if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
+  if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
+  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op))
+  else await deleteBet(op.id)
+  return null
 }
 
 /**

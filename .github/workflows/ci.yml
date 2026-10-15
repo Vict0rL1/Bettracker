@@ -2,6 +2,7 @@
 # - Secretos: gitleaks revisa el historial que llega, para que ninguna clave
 #   se cuele en un commit.
 # - Calidad: tests unitarios y build de la PWA.
+# - Esquema: las migraciones y schema.sql contra un Postgres real.
 # - e2e: la suite de Playwright contra la app compilada, sin backend.
 name: CI
 
@@ -42,6 +43,30 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+
+  esquema:
+    name: Esquema SQL
+    runs-on: ubuntu-24.04
+    # Un Postgres de usar y tirar: las migraciones y schema.sql se prueban de
+    # verdad (supabase/tests/run.sh), no solo se leen.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash supabase/tests/run.sh
 
   e2e:
     name: e2e con Playwright

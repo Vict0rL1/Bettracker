@@ -113,3 +113,26 @@ export const DEFAULT_SETTINGS: Settings = {
 }
 
 export type SettingsPatch = Partial<Omit<Settings, 'updatedAt'>>
+
+/**
+ * Money put into or taken out of the bankroll (table `bankroll_moves`): a
+ * deposit is positive, a withdrawal negative, never 0. It is not a bet and
+ * never counts in P/L, ROI or the loss limit.
+ */
+export interface BankrollMove {
+  id: string
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string
+  amount: number
+  note: string
+  createdAt: string
+  /** Set by the editing device; the conflict key, as with bets. */
+  updatedAt: string
+}
+
+export interface MoveInput {
+  date: string
+  /** Signed: + deposit, − withdrawal. */
+  amount: number
+  note?: string
+}

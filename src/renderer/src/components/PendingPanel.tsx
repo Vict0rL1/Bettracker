@@ -1,8 +1,8 @@
 import { useEffect, useId } from 'react'
 import type { Bet, BetStatus, OddsFormat } from '../../../shared/types'
 import { humanDate } from '../lib/dates'
-import { fmtStake } from '../lib/format'
 import { useLang } from '../lib/i18n'
+import { useMoney } from '../lib/money'
 import { formatOdds } from '../lib/odds'
 import type { OpenBet } from '../lib/pending'
 import { suggestedAmount } from '../lib/validate'
@@ -26,6 +26,7 @@ const SETTLE: readonly BetStatus[] = ['won', 'lost', 'push', 'void']
  */
 export default function PendingPanel({ open, oddsFormat, onSettle, onOpenDay, onClose }: Props) {
   const { t, tn } = useLang()
+  const money = useMoney()
   const titleId = useId()
 
   useEffect(() => {
@@ -41,7 +42,7 @@ export default function PendingPanel({ open, oddsFormat, onSettle, onOpenDay, on
   const sub =
     open.length === 0
       ? t('pend.none')
-      : t('pend.sub', { bets: tn('bet', open.length), amount: fmtStake(riding) }) + (pastCount > 0 ? t('pend.pastSuffix', { n: pastCount }) : '')
+      : t('pend.sub', { bets: tn('bet', open.length), amount: money.stake(riding) }) + (pastCount > 0 ? t('pend.pastSuffix', { n: pastCount }) : '')
 
   return (
     <div
@@ -82,7 +83,7 @@ export default function PendingPanel({ open, oddsFormat, onSettle, onOpenDay, on
                     <span className="bet-meta">
                       {b.stake !== null && (
                         <span className="bet-stake">
-                          {t('modal.riding', { amount: fmtStake(b.stake) })}
+                          {t('modal.riding', { amount: money.stake(b.stake) })}
                           {b.odds !== null && ` @ ${formatOdds(b.odds, oddsFormat)}`}
                         </span>
                       )}

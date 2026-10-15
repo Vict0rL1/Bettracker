@@ -1,7 +1,7 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { DEFAULT_SETTINGS, isOddsFormat, type Settings, type SettingsPatch } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
-import { describeError, isNetworkError } from './bets'
+import { describeError } from './errors'
 
 const TABLE = 'user_settings'
 
@@ -96,4 +96,3 @@ export function subscribeToSettings(userId: string, onChange: () => void): () =>
   }
 }
 
-export { isNetworkError }

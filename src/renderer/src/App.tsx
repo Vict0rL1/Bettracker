@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Bet, BetInput, BetStatus } from '../../shared/types'
+import type { BankrollMove, Bet, BetInput, BetStatus, MoveInput } from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
+import BankrollDialog from './components/BankrollDialog'
 import Breakdown from './components/Breakdown'
 import CalendarView from './components/CalendarView'
 import DayModal, { type TagSuggestions } from './components/DayModal'
@@ -15,18 +16,26 @@ import SettingsDialog from './components/SettingsDialog'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
+import { combinedStatus } from './data/drain'
 import { useBetSync } from './data/useBetSync'
+import { useMoves } from './data/useMoves'
 import { useSettings } from './data/useSettings'
+import { bankrollNow, firstBetDate } from './lib/bankroll'
 import { retagPlan, settlePlan, type TagPatch } from './lib/bulk'
 import { downloadCsv, parseBetsCsv } from './lib/csv'
+import { moneyFormat } from './lib/format'
 import { useLang } from './lib/i18n'
 import { dismissKey, loadLossDismissed, lossState, saveLossDismissed } from './lib/lossLimit'
+import { MoneyContext } from './lib/money'
 import { openBets } from './lib/pending'
 import { filterRange, loadRange, saveRange, type DateRange } from './lib/range'
 import { forMonth, groupByDay, summarize, tagValues, total, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
+import { effectiveUnit } from './lib/validate'
 import { PlusIcon } from './components/icons'
+
+const kindOf = (amount: number): 'deposit' | 'withdrawal' => (amount > 0 ? 'deposit' : 'withdrawal')
 
 function Boot() {
   return (
@@ -53,6 +62,7 @@ export default function App() {
   const [quickOpen, setQuickOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState(false)
+  const [bankrollOpen, setBankrollOpen] = useState(false)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
   const showError = useCallback(
@@ -66,7 +76,35 @@ export default function App() {
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice)
   const { bets, status, queuedCount, isOffline } = sync
-  const { settings, dirty: settingsDirty, update: updateSettings } = useSettings(activeUserId, Boolean(session), showError, showNotice)
+  const {
+    settings,
+    dirty: settingsDirty,
+    blocked: settingsBlocked,
+    loaded: settingsLoaded,
+    update: updateSettings
+  } = useSettings(activeUserId, Boolean(session), showError, showNotice)
+  const moves = useMoves(activeUserId, Boolean(session), showError, showNotice)
+  // One badge for the three queues. A settings change or a deposit waiting on
+  // a migration is a queued change too: the badge says so even when no bet is
+  // queued. An empty queue has no say.
+  const badgeStatus = combinedStatus([
+    status,
+    moves.queuedCount > 0 ? moves.status : 'synced',
+    settingsDirty && settingsBlocked ? 'behind' : 'synced'
+  ])
+  const badgeQueued = queuedCount + moves.queuedCount
+
+  // Amounts show in units when the user has a unit size and asked for them.
+  const unit = effectiveUnit(settings)
+  const money = useMemo(() => moneyFormat(unit), [unit])
+
+  // The bankroll is a balance over every bet, whatever the range. Until both
+  // the settings (for the starting bankroll) and the deposits and withdrawals
+  // have loaded on this device, it is not known, rather than wrong.
+  const bankroll = useMemo(
+    () => bankrollNow(bets ?? [], moves.loaded ? moves.moves : null, settingsLoaded ? settings.startingBankroll : undefined),
+    [bets, moves.loaded, moves.moves, settingsLoaded, settings.startingBankroll]
+  )
 
   useEffect(() => {
     if (!loading && (!activeUserId || bets !== null)) {
@@ -117,7 +155,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (modalDate !== null || quickOpen || settingsOpen || pendingOpen) return
+      if (modalDate !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
@@ -131,7 +169,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalDate, quickOpen, settingsOpen, pendingOpen])
+  }, [modalDate, quickOpen, settingsOpen, pendingOpen, bankrollOpen])
 
   const savedNote = useCallback(
     (action: string, date?: string) => (isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action),
@@ -280,6 +318,61 @@ export default function App() {
     [sync, savedNote, showError, t]
   )
 
+  // Deposits and withdrawals. The toast names the kind (in Spanish an ingreso
+  // and a retirada take different endings).
+  const handleAddMove = useCallback(
+    (input: MoveInput) => {
+      try {
+        moves.addMove(input)
+        setToast({ kind: 'ok', text: savedNote(t(kindOf(input.amount) === 'deposit' ? 'toast.depositAdded' : 'toast.withdrawalAdded'), input.date) })
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [moves, savedNote, showError, t]
+  )
+
+  const handleUpdateMove = useCallback(
+    (id: string, input: MoveInput) => {
+      try {
+        moves.updateMove(id, input)
+        setToast({ kind: 'ok', text: savedNote(t(kindOf(input.amount) === 'deposit' ? 'toast.depositUpdated' : 'toast.withdrawalUpdated'), input.date) })
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [moves, savedNote, showError, t]
+  )
+
+  const handleDeleteMove = useCallback(
+    (m: BankrollMove) => {
+      try {
+        moves.deleteMove(m.id)
+        undoable(savedNote(t(kindOf(m.amount) === 'deposit' ? 'toast.depositDeleted' : 'toast.withdrawalDeleted')), () => moves.restoreMove(m))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [moves, savedNote, showError, undoable, t]
+  )
+
+  // What the Bankroll dialog's changes wait for, judged per queue: a
+  // migration for the queue it holds back, the connection for the rest. A
+  // change simply on its way says nothing.
+  const firstBet = useMemo(() => firstBetDate(bets ?? []), [bets])
+  const movesWaiting = moves.queuedCount > 0
+  const bankrollSyncNote =
+    (movesWaiting && moves.blocked) || (settingsDirty && settingsBlocked)
+      ? 'blocked'
+      : (movesWaiting || settingsDirty) && (isOffline || moves.status === 'offline')
+        ? 'offline'
+        : null
+
+  const openBankroll = useCallback(() => {
+    setSettingsOpen(false)
+    setBankrollOpen(true)
+  }, [])
+
   const handleExport = useCallback(() => {
     if (!bets || bets.length === 0) return
     const count = downloadCsv(bets)
@@ -289,7 +382,7 @@ export default function App() {
   const handleImport = useCallback(
     async (file: File) => {
       try {
-        const { rows, errors, skipped, noStake } = parseBetsCsv(await file.text())
+        const { rows, errors, skipped, noStake } = parseBetsCsv(await file.text(), settings.oddsFormat)
         if (rows.length === 0) {
           setToast({ kind: 'error', text: errors[0] ?? t('toast.importNothing') })
           return
@@ -303,7 +396,7 @@ export default function App() {
         showError(err)
       }
     },
-    [sync, savedNote, showError, t, tn]
+    [sync, savedNote, showError, t, tn, settings.oddsFormat]
   )
 
   if (loading) return <Boot />
@@ -315,96 +408,149 @@ export default function App() {
   if (shownBets === null) return <Boot />
 
   return (
-    <div className="app">
-      <Header
-        email={activeEmail}
-        status={status}
-        queuedCount={queuedCount}
-        pendingCount={openList.length}
-        canExport={shownBets.length > 0}
-        theme={theme}
-        onExport={handleExport}
-        onImport={handleImport}
-        onToggleTheme={toggleTheme}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenPending={() => setPendingOpen(true)}
-        onLogToday={() => setModalDate(todayStr())}
-        onSignOut={signOut}
-      />
+    <MoneyContext.Provider value={money}>
+      <div className="app">
+        <Header
+          email={activeEmail}
+          status={badgeStatus}
+          queuedCount={badgeQueued}
+          pendingCount={openList.length}
+          unsynced={badgeQueued + (settingsDirty ? 1 : 0)}
+          canExport={shownBets.length > 0}
+          theme={theme}
+          onExport={handleExport}
+          onImport={handleImport}
+          onToggleTheme={toggleTheme}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenPending={() => setPendingOpen(true)}
+          onLogToday={() => setModalDate(todayStr())}
+          onSignOut={signOut}
+        />
 
-      {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}
+        {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}
 
-      <RangeBar range={range} onChange={changeRange} />
+        <RangeBar range={range} onChange={changeRange} />
 
-      <HeroStats
-        bets={shownBets}
-        lifetime={scoped}
-        rangeName={rangeName}
-        ym={ym}
-        onPrev={() => setYm((m) => addMonths(m, -1))}
-        onNext={() => setYm((m) => addMonths(m, 1))}
-        onResetMonth={() => setYm(currentMonth())}
-      />
+        <HeroStats
+          bets={shownBets}
+          lifetime={scoped}
+          rangeName={rangeName}
+          ym={ym}
+          bankroll={bankroll}
+          offline={isOffline}
+          onPrev={() => setYm((m) => addMonths(m, -1))}
+          onNext={() => setYm((m) => addMonths(m, 1))}
+          onResetMonth={() => setYm(currentMonth())}
+          onOpenBankroll={openBankroll}
+        />
 
-      <div className="grid-mid">
-        <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
-        <BalanceChart bets={shownBets} lifetime={scoped} rangeName={rangeName} rangeKind={range.kind} ym={ym} />
-      </div>
+        <div className="grid-mid">
+          <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
+          <BalanceChart
+            bets={shownBets}
+            lifetime={scoped}
+            rangeName={rangeName}
+            range={range}
+            ym={ym}
+            bankroll={bankroll}
+            moves={moves.moves}
+            onSetUpBankroll={openBankroll}
+          />
+        </div>
 
-      <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
+        <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
 
-      <HistoryTable
-        bets={shownBets}
-        oddsFormat={settings.oddsFormat}
-        onEdit={setModalDate}
-        onDelete={handleDelete}
-        onSettle={handleSettle}
-        onBulkRetag={handleBulkRetag}
-        onBulkSettle={handleBulkSettle}
-        onBulkDelete={handleBulkDelete}
-      />
-
-      {modalDate !== null && (
-        <DayModal
-          date={modalDate}
-          bets={modalBets}
+        <HistoryTable
+          bets={shownBets}
           oddsFormat={settings.oddsFormat}
-          suggestions={suggestions}
-          onAdd={handleAdd}
-          onUpdate={handleUpdate}
+          onEdit={setModalDate}
           onDelete={handleDelete}
-          onClose={() => setModalDate(null)}
+          onSettle={handleSettle}
+          onBulkRetag={handleBulkRetag}
+          onBulkSettle={handleBulkSettle}
+          onBulkDelete={handleBulkDelete}
         />
-      )}
 
-      {quickOpen && (
-        <QuickAdd bets={shownBets} settings={settings} suggestions={suggestions} onAdd={handleAdd} onClose={() => setQuickOpen(false)} />
-      )}
+        {modalDate !== null && (
+          <DayModal
+            date={modalDate}
+            bets={modalBets}
+            oddsFormat={settings.oddsFormat}
+            suggestions={suggestions}
+            bankroll={bankroll.known ? bankroll.current : null}
+            onAdd={handleAdd}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onClose={() => setModalDate(null)}
+          />
+        )}
 
-      {settingsOpen && <SettingsDialog settings={settings} dirty={settingsDirty} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />}
+        {quickOpen && (
+          <QuickAdd
+            bets={shownBets}
+            settings={settings}
+            suggestions={suggestions}
+            bankroll={bankroll.known ? bankroll.current : null}
+            onAdd={handleAdd}
+            onClose={() => setQuickOpen(false)}
+          />
+        )}
 
-      {pendingOpen && (
-        <PendingPanel
-          open={openList}
-          oddsFormat={settings.oddsFormat}
-          onSettle={(bet, next, amount) => {
-            // A win with no odds opens the day to type the profit; get out of its way.
-            if (next === 'won' && amount === null) setPendingOpen(false)
-            handleSettle(bet, next, amount)
-          }}
-          onOpenDay={(date) => {
-            setPendingOpen(false)
-            setModalDate(date)
-          }}
-          onClose={() => setPendingOpen(false)}
-        />
-      )}
+        {settingsOpen && (
+          <SettingsDialog
+            settings={settings}
+            dirty={settingsDirty}
+            blocked={settingsBlocked}
+            bankroll={bankroll}
+            onChange={updateSettings}
+            onOpenBankroll={openBankroll}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
 
-      <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
-        <PlusIcon size={22} />
-      </button>
+        {bankrollOpen && (
+          <BankrollDialog
+            bankroll={bankroll}
+            moves={moves.moves}
+            startingBankroll={settings.startingBankroll}
+            movesLoaded={moves.loaded}
+            firstBetDate={firstBet}
+            offline={isOffline}
+            syncNote={bankrollSyncNote}
+            onSetStart={(value) => updateSettings({ startingBankroll: value })}
+            onAdd={handleAddMove}
+            onUpdate={handleUpdateMove}
+            onDelete={handleDeleteMove}
+            onClose={() => setBankrollOpen(false)}
+          />
+        )}
 
-      {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
-    </div>
+        {pendingOpen && (
+          <PendingPanel
+            open={openList}
+            oddsFormat={settings.oddsFormat}
+            onSettle={(bet, next, amount) => {
+              // A win with no odds opens the day to type the profit; get out of its way.
+              if (next === 'won' && amount === null) setPendingOpen(false)
+              handleSettle(bet, next, amount)
+            }}
+            onOpenDay={(date) => {
+              setPendingOpen(false)
+              setModalDate(date)
+            }}
+            onClose={() => setPendingOpen(false)}
+          />
+        )}
+
+        {/* Out of the way while a dialog is open: it sits above them, and would open another on top. */}
+        {modalDate === null && !quickOpen && !settingsOpen && !pendingOpen && !bankrollOpen && (
+          <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
+            <PlusIcon size={22} />
+          </button>
+        )}
+
+        {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
+      </div>
+    </MoneyContext.Provider>
   )
 }

@@ -4,14 +4,17 @@ import { humanDate, todayStr } from '../lib/dates'
 import { useLang } from '../lib/i18n'
 import { ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
 import { quickDefaults } from '../lib/quick'
-import { MAX_AMOUNT, round2, suggestedAmount } from '../lib/validate'
+import { MAX_AMOUNT, round2, storableOdds, suggestedAmount } from '../lib/validate'
 import { toneOf, type TagSuggestions } from './DayModal'
 import { CloseIcon } from './icons'
+import StakeNote from './StakeNote'
 
 interface Props {
   bets: Bet[]
   settings: Settings
   suggestions: TagSuggestions
+  /** The current bankroll, or null while it is unknown: the stake is measured against it. */
+  bankroll: number | null
   onAdd: (input: BetInput) => Promise<void>
   onClose: () => void
 }
@@ -24,7 +27,7 @@ const RESULTS: readonly BetStatus[] = ['won', 'lost', 'push', 'pending']
  * is two taps: the floating button, then PENDING. A win with no odds has no
  * computable profit, so WON then reveals a profit box and a save button.
  */
-export default function QuickAdd({ bets, settings, suggestions, onAdd, onClose }: Props) {
+export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd, onClose }: Props) {
   const { t } = useLang()
   const defaults = quickDefaults(bets, settings)
   const [stakeStr, setStakeStr] = useState(defaults.stake === null ? '' : String(defaults.stake))
@@ -39,6 +42,7 @@ export default function QuickAdd({ bets, settings, suggestions, onAdd, onClose }
   const profitRef = useRef<HTMLInputElement>(null)
   const titleId = useId()
   const listId = useId()
+  const noteId = useId()
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -58,7 +62,7 @@ export default function QuickAdd({ bets, settings, suggestions, onAdd, onClose }
   const stake = stakeStr.trim() === '' ? null : parseFloat(stakeStr)
   const stakeValid = stake !== null && Number.isFinite(stake) && stake >= 0 && stake <= MAX_AMOUNT
   const odds = parseOdds(oddsStr, settings.oddsFormat)
-  const oddsValid = oddsStr.trim() === '' || odds !== null
+  const oddsValid = oddsStr.trim() === '' || (odds !== null && storableOdds(odds))
   const profit = parseFloat(profitStr)
   const profitValid = Number.isFinite(profit) && profit > 0 && profit <= MAX_AMOUNT
 
@@ -116,6 +120,7 @@ export default function QuickAdd({ bets, settings, suggestions, onAdd, onClose }
                 step="0.01"
                 placeholder="0.00"
                 value={stakeStr}
+                aria-describedby={noteId}
                 onChange={(e) => setStakeStr(e.target.value)}
               />
             </div>
@@ -134,6 +139,9 @@ export default function QuickAdd({ bets, settings, suggestions, onAdd, onClose }
             />
           </label>
         </div>
+
+        {/* Quick add is always today, so the share of the bankroll always applies. */}
+        <StakeNote id={noteId} stake={stakeValid ? stake : null} current={bankroll} applies />
 
         <div className="quick-tags">
           <input type="text" list={`${listId}-sport`} maxLength={40} placeholder={t('modal.sport')} aria-label={t('modal.sport')} value={sport} onChange={(e) => setSport(e.target.value)} />

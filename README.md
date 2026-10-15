@@ -15,6 +15,11 @@ to see which of them earn their keep. All four fields are optional: bets logged
 without a stake still count toward P/L and win rate, and the app tells you how
 many are missing one instead of quietly guessing.
 
+Track your **bankroll** too: a starting figure plus every **deposit and
+withdrawal**, so the current bankroll adds up to the cent, a chart view of it
+over time, and a quiet warning when a stake is more than **5%** of it. And if
+you think in **units**, set what one is worth and every amount reads in units.
+
 One React UI runs two ways:
 
 - **Phone** — an installable **PWA** (Add to Home Screen). Works on Wi-Fi or
@@ -36,19 +41,26 @@ moment you're back online. The header badge tells you where you stand:
 | 🟢 **Synced** | Everything is saved to the cloud and shared with your other devices |
 | 🟡 **Syncing n…** | Queued changes are being pushed right now |
 | ⚪ **Offline · n queued** | No connection — changes are safe on this device and will sync automatically |
+| 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
+The count covers every queued change: bets, deposits and withdrawals.
 Signing out removes that device's local copy (cache and queued changes);
-anything already synced stays safe in your Supabase project.
+anything already synced stays safe in your Supabase project. While changes
+are still queued, **Sign out** asks you to click again.
 
 Small things that add up: a **light theme** (☀️ in the header — it follows your
 OS until you pick one, then stays put), **search and filters** over your history
 with paging, a balance chart you can flip between **all time and the selected
-month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log today,
-`Esc` to close a dialog.
+month**, the interface in **English or Spanish** (the header button switches;
+it follows your browser until you pick one, then stays put; validation and
+sync error messages stay in English), and
+keyboard shortcuts — `←`/`→` to change month, `T` to log today, `Esc` to
+close a dialog.
 
 ## What you'll need
 
-- **Node 20+**
+- **Node 22**, 22.12 or later (Electron 43 and supabase-js need it; it is what
+  CI runs)
 - A free **Supabase** account (supabase.com) — this is the shared backend.
 
 ## One-time setup
@@ -59,18 +71,36 @@ month**, and keyboard shortcuts — `←`/`→` to change month, `T` to log toda
    (the free tier is plenty).
 2. Open **SQL Editor → New query**, paste the contents of
    [`supabase/schema.sql`](supabase/schema.sql), and **Run**. That creates the
-   `entries` table, locks it to each user with row-level security, and enables
-   realtime sync.
+   `entries`, `user_settings` and `bankroll_moves` tables, locks them to each
+   user with row-level security, and enables realtime sync.
    - *Already set up an earlier version?* Re-run `schema.sql` (it's safe to run
      again) or apply just the migrations you're missing, in order:
      [`001_multiple_sessions_per_day.sql`](supabase/migrations/001_multiple_sessions_per_day.sql)
-     (several bets per day) and
+     (several bets per day),
      [`002_stake_and_tags.sql`](supabase/migrations/002_stake_and_tags.sql)
-     (stake, sport, book, bet type) and
+     (stake, sport, book, bet type),
      [`003_odds_and_status.sql`](supabase/migrations/003_odds_and_status.sql)
-     (odds, pending bets). Your existing bets are untouched — old ones simply
-     have no stake or odds recorded, and 003 gives each the status its result
+     (odds, pending bets),
+     [`004_user_settings_and_closing_odds.sql`](supabase/migrations/004_user_settings_and_closing_odds.sql)
+     (settings, closing odds) and
+     [`005_bankroll_moves.sql`](supabase/migrations/005_bankroll_moves.sql)
+     (deposits and withdrawals; it doesn't depend on 004, so the two can run
+     in either order). Your existing bets are untouched — old ones simply have
+     no stake or odds recorded, and 003 gives each the status its result
      implies.
+   - *Upgrading an install people are using?* Run the migrations **before**
+     you deploy the new version. Devices still on the old version keep
+     working in between: their writes carry no status, and 003 gives them the
+     one their amount implies (except that a pending bet, which they show as
+     $0, stays pending if they send that $0 back). Then deploy, and update
+     every device; changes a device still has queued from the old version
+     are sent after the update the way that version would have sent them. If you deploy first, nothing is lost: the new version keeps each
+     change (settings, deposits and withdrawals included) queued on the
+     device, shows **Update needed**, and sends them as soon as the
+     migrations have run. Without 005, the bankroll counts only the starting
+     figure and the settled bets until then, plus whatever deposits and
+     withdrawals that device has queued. Don't sign out on that device until
+     then — signing out clears its queue.
 3. Go to **Project Settings → API** and copy your **Project URL** and the
    **anon public** key.
 
@@ -156,13 +186,19 @@ given OS's installer must be built on that OS.
 |---|---|
 | `npm run dev` | Web app dev server (open on phone + computer) |
 | `npm run build` | Type-check + build the web/PWA bundle → `dist/` (deploy this) |
-| `npm test` | Run the unit tests (stats, offline outbox, CSV, validation) |
+| `npm test` | Run the unit tests (stats, offline outbox and sync, CSV, validation, …) |
 | `npm run test:watch` | Same, in watch mode |
 | `npm run preview` | Serve the built web app on your LAN |
 | `npm run dev:desktop` | Native desktop app (Electron) in dev |
 | `npm run build:desktop` | Package a native desktop installer → `release/` |
-| `npm run typecheck` | Type-check the web + desktop code |
-| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed) |
+| `npm run build:desktop:dir` | The desktop app unpacked, without an installer → `release/` |
+| `npm run typecheck` | Type-check the web + desktop code and the e2e suite |
+| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed). The first time, run `npx playwright install chromium` |
+| `bash supabase/tests/run.sh` | Run the migrations and `schema.sql` against a throwaway Postgres and check the result. Needs `psql`, `createdb`, `dropdb` and `pg_dump`, with the `PG*` variables pointing at a server where it may create databases (all named `bettracker_test_*`) |
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request: a secret
+scan (gitleaks), the unit tests, the type-check and the build, the schema
+checks against Postgres, and the e2e suite.
 
 ## Settings
 
@@ -173,11 +209,51 @@ offline and follow you to other devices:
 - **Odds format** — American (default), decimal or fractional. Odds are always
   *stored* as decimal; this only changes how they are shown and typed. The odds
   box is lenient either way: `+150`, `1.91` and `3/2` are all understood.
+- **Unit size** and **Show amounts in** dollars or units — see
+  [Bankroll and units](#bankroll-and-units). Units need a unit size; clearing
+  it switches back to dollars.
+- **Bankroll** — what it stands at, and a link to the Bankroll dialog.
 - **Default stake** — prefilled in quick add (the floating `+` button, or `T`).
 - **Monthly loss limit** — a banner appears when the current month's net loss
-  reaches 80% of it (amber) and again once it passes it (red). It never blocks
+  reaches 80% of it (amber) and again once it reaches it (red). It never blocks
   logging a bet; dismissing it hides it until the next line is crossed or the
   month turns.
+
+## Bankroll and units
+
+**Bankroll.** The *Bankroll* tile (first of the small stat tiles) opens a
+dialog where the bankroll adds up:
+
+> starting bankroll + deposits − withdrawals + settled P/L = current bankroll
+
+The **starting bankroll** is what you had before your first bet. **Deposits
+and withdrawals** are logged there (amount, date, an optional note) and can
+be edited or deleted, with Undo; they work offline and sync like bets. They
+are not bets: they never count in P/L, ROI, streaks or the loss limit, and
+they are never painted as wins or losses. Pending bets add nothing until they
+settle; their stakes show as *riding*. The bankroll always covers every bet,
+whatever date range is chosen. With no starting bankroll and no deposit or
+withdrawal it reads *—*; on a device that has not loaded your settings or
+your deposits and withdrawals yet (a first start offline) it reads *…*
+rather than a wrong figure.
+
+**The chart** switches between **P/L** (the running result, from 0) and
+**Bankroll** (the bankroll as a level, with the money put in — start plus
+deposits less withdrawals — as a dashed line; the gap between them is the
+P/L). One axis either way. The choice is remembered on the device.
+
+**The 5% note.** Under the stake box in quick add and in the day form, a
+quiet line says what share of the current bankroll the stake is, and turns
+amber above 5%. It never blocks or asks for confirmation. In the day form it
+applies to a bet dated today or later, or one still pending; a settled bet in
+the past is history.
+
+**Units.** Set a unit size (what one unit is worth) and switch *Show amounts
+in* to Units: every amount — stat cards, chart, calendar, history, breakdown,
+pending panel, loss banner — reads in units (`+2.35u`, stakes as `2.5u`),
+with the dollars on hover for the big figures. It is display only: one size
+applies to all history, you still type amounts in dollars (the note under the
+stake box shows them in units), and the database and the CSV stay in dollars.
 
 ## Breakdown
 
@@ -219,22 +295,33 @@ works offline like any other edit.
 ## How it's put together
 
 ```
-bettracker/
+Bettracker/
 ├── vite.config.ts              # web / PWA build (the phone + browser app)
 ├── electron.vite.config.ts     # desktop build
 ├── electron-builder.yml        # desktop packaging targets
-├── supabase/schema.sql         # run once in your Supabase project
+├── playwright.config.ts        # e2e suite (e2e/), run against a built copy
+├── .github/workflows/ci.yml    # CI: secrets scan, tests, build, schema, e2e
+├── supabase/
+│   ├── schema.sql              # run once in your Supabase project
+│   ├── migrations/             # 001–005, for installs made before each change
+│   └── tests/                  # runs the two above against a real Postgres
 ├── build/make-icon.mjs         # regenerates all app/PWA icons
+├── e2e/                        # Playwright specs + a mock Supabase (harness.ts)
 └── src/
     ├── main/index.ts           # Electron: a native window around the web UI
     ├── preload/index.ts        # minimal (data goes over the network, not IPC)
-    ├── shared/types.ts         # shared entry types
+    ├── shared/types.ts         # Bet, BetInput, Settings, OddsFormat, BankrollMove
     └── renderer/src/
         ├── App.tsx             # auth gate + dashboard + live sync wiring
         ├── auth/               # AuthProvider + Login screen
-        ├── data/entries.ts     # Supabase CRUD + realtime subscription
-        ├── data/offline.ts     # device cache + outbox (with unit tests)
-        ├── lib/                # supabase client, validation, csv, dates, stats, theme
+        ├── data/bets.ts        # Supabase CRUD + realtime subscription
+        ├── data/useBetSync.ts  # bets state: cache, outbox, sync loop
+        ├── data/offline.ts     # device cache + outbox
+        ├── data/drain.ts       # replaying the outbox: what leaves it, what stays
+        ├── data/errors.ts      # reading a failed request: offline, migration needed, refused
+        ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
+        ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
+        ├── lib/                # supabase client, validation, csv, odds, dates, stats, bankroll, format, strings, …
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, …
 ```
 
@@ -252,20 +339,35 @@ refresh button.
 **Conflicts.** Two devices can edit the same bet while offline. The rule is
 *last write wins, by when the edit was made*: every edit carries the moment the
 user made it, that moment is written as the row's `updated_at`, and the server
-applies an edit only if the row's `updated_at` is not newer. If another
+applies an edit only if the row's `updated_at` is not newer. A new bet carries
+the moment it was logged (or last edited, if that was before it synced) the
+same way, so an edit made while its insert is still on the way is never taken
+for an older one. If another
 device's later edit already landed, the older one is refused, dropped from the
 queue, and the app shows "A newer edit from another device was kept" before
-refreshing to the winning version. A retry of the same edit after a lost
+refreshing to the winning version (unless a later change to that bet from this
+device is still queued: that one has the last word). A retry of the same edit after a lost
 response still applies (its own timestamp satisfies the check), and a delete
 beats an edit in either order. Device clocks are trusted, which is the price
-of needing no server-side logic — no extra column, no trigger.
+of a conflict rule that needs no server-side logic — no extra column, no
+trigger.
 
 **Offline.** The last-known rows are cached on the device for instant startup,
 and mutations go through a persistent outbox: applied to the UI immediately,
 replayed against Supabase in order on reconnect (entry ids are client-generated
-UUIDs, so a retried insert can never create a duplicate). Editing a
-not-yet-synced entry rewrites its queued insert; deleting one cancels it before
-the server ever hears about it.
+UUIDs, so a retried insert can never create a duplicate). Editing an entry
+whose insert has not been sent yet rewrites that queued insert; deleting one
+cancels it before the server ever hears about it. Once a change has gone out,
+though, it is left alone, even if its answer never came back (it may have
+landed): an edit or a delete made afterwards queues behind it and goes out
+after it, so nothing done while a request is out, or after one fails, is lost.
+The change at the head of the queue when the app starts counts as gone out,
+since a version from before this rule did not record it. If the server
+refuses a new bet on its first try, the edits queued for it are dropped with
+it (they could only be refused too); a delete or an Undo queued for it stays.
+Deposits and withdrawals have their own cache and outbox under exactly the
+same rules (and the same conflict rule), so one held back by a missing
+migration never holds back a bet.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read
@@ -278,17 +380,26 @@ One row per bet, per user (`supabase/schema.sql`, table `entries`):
 
 | Column | Type | Notes |
 |---|---|---|
+| `id` | uuid | generated on the device, so a retried insert is recognised instead of duplicated |
 | `user_id` | uuid | the owner; enforced by row-level security |
 | `date` | date | `YYYY-MM-DD` — many rows can share a date |
 | `amount` | numeric | the bet's **net result**; `> 0` won, `< 0` lost, `0` push/void, `null` while pending |
 | `stake` | numeric | amount risked; `null` = not recorded (excluded from ROI), `0` = free bet (bonus profit) |
 | `odds` | numeric | decimal price, `> 1`; optional |
 | `closing_odds` | numeric | the price when the market closed, `> 1`; optional. CLV = odds / closing_odds − 1 (migration 004) |
-| `status` | text | `pending` · `won` · `lost` · `push` · `void` |
+| `status` | text | `pending` · `won` · `lost` · `push` · `void`; a write without one (from a version older than migration 003) gets the one its amount implies |
 | `note` | text | optional (e.g. "morning parlay") |
 | `sport` | text | optional tag (e.g. "NBA") |
 | `book` | text | optional tag (e.g. "DraftKings") |
 | `bet_type` | text | optional tag (e.g. "Parlay") |
+| `created_at` | timestamptz | when the row reached the server ("logged at") |
+| `updated_at` | timestamptz | when the bet was last logged or edited, on the device that did it — the key the conflict rule compares |
+
+Deposits and withdrawals live in `bankroll_moves` (migration 005): `id`
+(generated on the device), `user_id`, `date`, `amount` (`> 0` a deposit,
+`< 0` a withdrawal, never `0`), `note`, `created_at` and `updated_at` (the
+conflict key, as for bets). The starting bankroll and the unit size are
+settings (`user_settings`, migration 004).
 
 Each row is one bet. A day can hold any number of them, and the app sums a
 day's settled rows into its net total; a pending bet stays out of P/L, ROI
@@ -309,10 +420,12 @@ bet almost always costs exactly what was risked.
 ## Import and export
 
 **Export CSV** writes one row per bet, sorted by date, with the columns
-`date, status, stake, odds, amount, sport, book, bet_type, note` — summing a
+`date, status, stake, odds, closing_odds, amount, sport, book, bet_type, note`
+(odds as decimal) — summing a
 spreadsheet reproduces that day's total.
 
-**Import** reads that same shape back, so an export is a working backup. Only a
+**Import** reads that same shape back, so an export is a working backup of
+your bets (deposits, withdrawals and settings are not in it). Only a
 header row is required; column order doesn't matter, extra columns are ignored,
 and common aliases from other trackers are accepted (`day`, `p/l`, `profit`,
 `risk`, `wagered`, `league`, `sportsbook`, `market`, `notes`, `result`,
@@ -321,7 +434,19 @@ from before odds and statuses existed import unchanged — the status is what
 the amount implies. The import reports how many rows came without a stake,
 since those stay out of ROI. Values may
 carry currency symbols, thousands separators, or parenthesised negatives
-(`"$1,234.50"`, `(45.00)`). Lines that can't be read are skipped and reported
+(`"$1,234.50"`, `(45.00)`). Odds and closing odds may be decimal (`1.91`,
+`2,50`), American (`+150`, `-110`, `-110.00`, `+2,500`) or fractional (`3/2`,
+`10:11`, `100-1`); they are stored as decimal either way. A whole number from
+100 up, like `150` or `150.00`, could be +150 with its plus sign dropped
+(spreadsheets do that) or a decimal longshot, and `1,200` could be +1200 or
+1.2, so the file decides, for both odds columns at once: an export from this
+app is decimal (unless American odds were typed into it); a header that
+names the format (`american odds`, `decimal odds`) settles it; otherwise
+signed prices elsewhere in the file make it American and decimals make it
+decimal, and a file with both kinds reports that line instead of guessing.
+With nothing else to go by, a `1,200` makes the file decimal, and a whole
+number follows your odds format setting, both as the odds box reads them. A
+cell that is not a price that can be stored counts for nothing. Lines that can't be read are skipped and reported
 rather than half-guessed, and the import queues through the same offline outbox
 as everything else — so it works with no connection and can't create duplicate
 rows if it's retried.

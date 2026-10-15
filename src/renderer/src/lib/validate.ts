@@ -1,4 +1,4 @@
-import { isBetStatus, statusForAmount, type BetInput, type BetStatus } from '../../../shared/types'
+import { isBetStatus, statusForAmount, type BetInput, type BetStatus, type MoveInput, type Settings, type SettingsPatch } from '../../../shared/types'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -31,12 +31,28 @@ function cleanMoney(value: number | null | undefined, what: string, min: number)
   return round2(value)
 }
 
+/** A price as the database stores it: 3 decimals. */
+const roundOdds = (value: number): number => Math.round(value * 1000) / 1000
+
+/**
+ * True when a decimal price survives being stored: above 1 and within range
+ * once rounded to the 3 decimals the database keeps. The forms and the CSV
+ * import use it so they never offer the writer a price it would refuse.
+ */
+export const storableOdds = (value: number): boolean => {
+  const rounded = roundOdds(value)
+  return rounded > 1 && rounded <= MAX_ODDS
+}
+
 function cleanOdds(value: number | null | undefined, what: string): number | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
-  if (value <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
-  if (value > MAX_ODDS) throw new Error(`${what} are out of range`)
-  return Math.round(value * 1000) / 1000
+  // Checked after rounding to what the database stores: 1.0004 would
+  // otherwise pass here and be refused there as 1.000.
+  const rounded = roundOdds(value)
+  if (rounded <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
+  if (rounded > MAX_ODDS) throw new Error(`${what} are out of range`)
+  return rounded
 }
 
 export interface CleanBet {
@@ -76,13 +92,17 @@ export function normalizeInput(input: BetInput): CleanBet {
   if (rawAmount !== null && Math.abs(rawAmount) > MAX_AMOUNT) {
     throw new Error('Amount is out of range')
   }
+  // The sign is read off what gets stored, in cents: a 0.004 result is 0.00,
+  // a push, not a win. Checking before rounding would store a "won" 0.00,
+  // which the database's status trigger would later read as a push.
+  const cents = rawAmount === null ? null : round2(rawAmount)
 
   // No status given: it is whatever the result says, which is what every bet
   // logged before statuses existed relies on.
   let status: BetStatus
   if (input.status !== undefined) status = input.status
-  else if (rawAmount === null) status = 'pending'
-  else status = statusForAmount(rawAmount)
+  else if (cents === null) status = 'pending'
+  else status = statusForAmount(cents)
 
   let amount: number | null
   switch (status) {
@@ -90,18 +110,18 @@ export function normalizeInput(input: BetInput): CleanBet {
       amount = null
       break
     case 'won':
-      if (rawAmount === null) throw new Error('A won bet needs its result')
-      if (rawAmount <= 0) throw new Error('A won bet nets a positive amount')
-      amount = round2(rawAmount)
+      if (cents === null) throw new Error('A won bet needs its result')
+      if (cents <= 0) throw new Error('A won bet nets a positive amount')
+      amount = cents
       break
     case 'lost':
-      if (rawAmount === null) throw new Error('A lost bet needs its result')
-      if (rawAmount >= 0) throw new Error('A lost bet nets a negative amount')
-      amount = round2(rawAmount)
+      if (cents === null) throw new Error('A lost bet needs its result')
+      if (cents >= 0) throw new Error('A lost bet nets a negative amount')
+      amount = cents
       break
     case 'push':
     case 'void':
-      if (rawAmount !== null && rawAmount !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
+      if (cents !== null && cents !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
       amount = 0
       break
   }
@@ -144,4 +164,65 @@ export function suggestedAmount(status: BetStatus, stake: number | null, odds: n
     case 'pending':
       return null
   }
+}
+
+/**
+ * Round a signed amount to cents the way the database does: by its size, then
+ * the sign. round2 rounds halves up (-12.345 → -12.34), so a withdrawal and a
+ * deposit of the same typed amount would otherwise store different sizes.
+ */
+export const roundCents = (n: number): number => (n < 0 ? -round2(-n) : round2(n))
+
+export interface CleanMove {
+  date: string
+  amount: number
+  note: string
+}
+
+/**
+ * Validate and clean a deposit or withdrawal before it is queued. Throws on
+ * bad input. The amount is checked once rounded to cents, as stored: 0.004
+ * is 0, which the database refuses.
+ */
+export function normalizeMove(input: MoveInput): CleanMove {
+  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new Error('Amount must be a finite number')
+  const amount = roundCents(input.amount)
+  if (amount === 0) throw new Error('Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount is out of range')
+  return { date: input.date, amount, note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH) }
+}
+
+/**
+ * A money box in the settings (unit size, starting bankroll, default stake):
+ * null when cleared, the amount rounded to cents, or 'invalid' for anything the
+ * database would refuse. Zero is judged once rounded, as stored: 0.004 is 0,
+ * and a unit size of 0 would be refused, taking every other change merged
+ * into the same settings patch down with it.
+ */
+export function parseMoneyBox(text: string, opts: { allowZero: boolean }): number | null | 'invalid' {
+  const trimmed = text.trim()
+  if (trimmed === '') return null
+  const n = parseFloat(trimmed)
+  if (!Number.isFinite(n) || n < 0 || n > MAX_AMOUNT) return 'invalid'
+  const rounded = round2(n)
+  if (rounded === 0) return opts.allowZero ? 0 : 'invalid'
+  return rounded
+}
+
+/** Dollars per unit when amounts show in units; null shows dollars. */
+export const effectiveUnit = (s: Pick<Settings, 'showUnits' | 'unitSize'>): number | null =>
+  s.showUnits && s.unitSize !== null && s.unitSize > 0 ? s.unitSize : null
+
+/**
+ * What committing the unit size box sends: a patch, null when nothing
+ * changed, or 'revert' to put the saved value back in a box holding nonsense.
+ * Clearing the unit also turns units off, since there is nothing left to
+ * count them in.
+ */
+export function unitSizePatch(text: string, s: Pick<Settings, 'unitSize' | 'showUnits'>): SettingsPatch | null | 'revert' {
+  const value = parseMoneyBox(text, { allowZero: false })
+  if (value === 'invalid') return 'revert'
+  if (value === null) return s.unitSize === null && !s.showUnits ? null : { unitSize: null, showUnits: false }
+  return value === s.unitSize ? null : { unitSize: value }
 }
