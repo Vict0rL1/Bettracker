@@ -120,12 +120,18 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ## Cómo probar
 
+Para verla sin Supabase ni `.env`: `npm run demo` (http://localhost:5174).
+Entra ya con sesión y sin datos, contra un backend falso que guarda todo en
+el navegador; funciona igual que contra Supabase, sin conexión incluido.
+Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic).
+Tras cerrar sesión, cualquier email y contraseña vuelven a entrar.
+
 ```bash
 npm ci
-npm test            # 429 tests unitarios (vitest)
+npm test            # 444 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 57 comprobaciones Playwright, sin backend
+npm run test:e2e    # 61 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -158,7 +164,10 @@ mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
 app. Con `backend: 'live'`, `'behind'` o `'behind-005'` el mock es un
 pequeño servidor en memoria (apuestas, ajustes e ingresos/retiradas; altas,
 ediciones con la regla de conflicto, borrados, upserts; latencia y caída de
-conexión opcionales) para probar la sincronización de verdad. `'behind'` es
+conexión opcionales) para probar la sincronización de verdad. Es el mismo
+que usa `npm run demo` (`src/renderer/src/demo/fakeSupabase.ts`), con su
+estado bajo `e2e:` en vez de `demo:`; `e2e/demo.spec.ts` prueba la demo tal
+cual se construye (`npm run demo:serve`, en el puerto 4174). `'behind'` es
 una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
 (`e2e:migrated-005` la "ejecuta"). La opción `moves` siembra la caché de
 ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
@@ -426,6 +435,10 @@ src/renderer/src/lib/
   quick.ts      valores por defecto del registro rápido
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
+src/renderer/src/demo/
+  fakeSupabase.ts   el Supabase falso de la demo y de la suite e2e
+  start.ts          entrada de `npm run demo` (va delante de main.tsx)
+  demo.ts           usuario de la demo y "Empezar de cero"
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
@@ -437,8 +450,8 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
-  BankrollDialog, StakeNote, BalanceChart (vista Bankroll)
-e2e/*.spec.ts                       57 comprobaciones
+  BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
+e2e/*.spec.ts                       61 comprobaciones
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

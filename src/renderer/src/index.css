@@ -189,6 +189,26 @@ h2 {
   gap: 16px;
 }
 
+/* The demo's line across the top (`npm run demo` only). */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 16px;
+  background: var(--amber-dim);
+  border-bottom: 1px solid var(--border);
+  color: var(--amber);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.demo-banner .btn {
+  padding: 3px 10px;
+  font-size: var(--fs-sm);
+}
+
 .boot {
   height: 100vh;
   display: grid;
