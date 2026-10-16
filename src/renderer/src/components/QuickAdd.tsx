@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { Bet, BetInput, BetStatus, Settings } from '../../../shared/types'
 import { humanDate, todayStr } from '../lib/dates'
 import { useLang } from '../lib/i18n'
-import { ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
+import { ODDS_PLACEHOLDER, oddsInputMode, parseOdds } from '../lib/odds'
 import { quickDefaults } from '../lib/quick'
 import { MAX_AMOUNT, round2, storableOdds, suggestedAmount } from '../lib/validate'
 import { toneOf, type TagSuggestions } from './DayModal'
@@ -131,7 +131,10 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
             </span>
             <input
               type="text"
-              inputMode="decimal"
+              inputMode={oddsInputMode(settings.oddsFormat)}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               placeholder={ODDS_PLACEHOLDER[settings.oddsFormat]}
               value={oddsStr}
               aria-invalid={!oddsValid}

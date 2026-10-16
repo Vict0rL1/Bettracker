@@ -129,10 +129,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 450 tests unitarios (vitest)
+npm test            # 451 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 66 comprobaciones Playwright, sin backend
+npm run test:e2e    # 77 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -305,6 +305,25 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
 
 ## Decisiones tomadas y por qué
 
+- **En el móvil** (revisado con capturas a 320, 360, 390 y 430 px, en los dos
+  temas y los dos idiomas):
+  - nada puede ensanchar la página: el calendario y la rejilla usan
+    `minmax(0, 1fr)`, y la tarjeta de inicio de sesión se encoge;
+  - en el calendario, los días con solo apuestas abiertas llevan un punto
+    ámbar en vez de la palabra;
+  - los campos van a 16 px para que iOS no haga zoom;
+  - los botones táctiles miden al menos 32–36 px;
+  - el + deja libre el final de la página;
+  - se respetan las zonas seguras (notch, barra de inicio);
+  - el historial deja fijas a la derecha las acciones de cada fila, y la barra
+    de selección flota abajo en vez de empujar las filas;
+  - las cuotas americanas y fraccionarias abren el teclado completo (el
+    numérico del iPhone no tiene signo menos ni barra);
+  - en pantallas táctiles, el diálogo del día no pone el cursor en el stake al
+    abrirse;
+  - `e2e/mobile.spec.ts` vigila todo esto.
+
+
 - Tabla `entries` conservada; "bet" en código e interfaz.
 - Push y void fuera del denominador del ROI (devuelven el stake).
 - `result` en un CSV ajeno significa estado si tiene palabras, importe si
@@ -453,7 +472,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       66 comprobaciones
+e2e/*.spec.ts                       77 comprobaciones (mobile.spec.ts: el móvil)
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```
