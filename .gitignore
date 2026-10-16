@@ -15,5 +15,6 @@ supabase/.temp/
 
 # Playwright: the e2e build and its reports.
 dist-e2e/
+dist-demo/
 test-results/
 playwright-report/

@@ -78,6 +78,7 @@ export default function BalanceChartInner({ mode, data }: Props) {
           tickFormatter={(v) => (spansYears ? monthYearShort(String(v)) : shortDate(String(v)))}
           tick={{ fill: 'var(--text-3)', fontSize: 11 }}
           tickMargin={8}
+          minTickGap={12}
           axisLine={false}
           tickLine={false}
         />

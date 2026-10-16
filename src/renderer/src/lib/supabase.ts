@@ -3,17 +3,18 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 const url = import.meta.env.VITE_SUPABASE_URL
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-/** True when the app has been given a Supabase project to talk to. */
-export const isConfigured = Boolean(url && anonKey)
-
 interface TestGlobal {
   __supabaseMock?: SupabaseClient
 }
 
+// Test/demo seam: the e2e harness and `npm run demo` install a fake client on
+// window before the app boots, so the app runs without a live backend.
+const injected = (globalThis as TestGlobal).__supabaseMock
+
+/** True when the app has a backend to talk to: a Supabase project, or the fake one. */
+export const isConfigured = Boolean(injected) || Boolean(url && anonKey)
+
 function makeClient(): SupabaseClient {
-  // Test/preview seam: a harness can inject a mock client on window before the
-  // app boots, so UI flows can be exercised without a live backend.
-  const injected = (globalThis as TestGlobal).__supabaseMock
   if (injected) return injected
 
   if (!isConfigured) {

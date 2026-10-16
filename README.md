@@ -143,6 +143,25 @@ npm run dev:desktop     # Electron, hot-reloaded
 The first time you launch, create an account (Sign up), then sign in with the
 same email/password on your phone — both devices now share the same data.
 
+## Try it without Supabase (demo)
+
+```bash
+npm install
+npm run demo
+```
+
+It opens on `http://localhost:5172` already signed in, with nothing in it,
+and needs no Supabase project and no `.env`: a fake backend keeps everything
+in that browser's storage (the same fake the e2e suite runs against, in
+`src/renderer/src/demo/`). The app behaves as it does against Supabase,
+offline included — turn the Wi-Fi off and changes wait on the device, then
+sync when it's back. A bar across the top says it's the demo, and **Start
+over** (two clicks) empties it. Signing out leads to the sign-in screen; any
+email and a password of 6 or more characters sign you back in. The
+**Network** URL works on your phone too; each browser has its own demo. None
+of the demo's code goes into `npm run build` (only its three strings and the
+banner's CSS do).
+
 ## Put it on your phone (deploy the PWA)
 
 The web app is fully static (just HTML/JS/CSS talking to Supabase), so any
@@ -185,6 +204,7 @@ given OS's installer must be built on that OS.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Web app dev server (open on phone + computer) |
+| `npm run demo` | The app against a fake backend in the browser, no Supabase needed — see [Try it without Supabase](#try-it-without-supabase-demo) |
 | `npm run build` | Type-check + build the web/PWA bundle → `dist/` (deploy this) |
 | `npm test` | Run the unit tests (stats, offline outbox and sync, CSV, validation, …) |
 | `npm run test:watch` | Same, in watch mode |
@@ -306,7 +326,7 @@ Bettracker/
 │   ├── migrations/             # 001–005, for installs made before each change
 │   └── tests/                  # runs the two above against a real Postgres
 ├── build/make-icon.mjs         # regenerates all app/PWA icons
-├── e2e/                        # Playwright specs + a mock Supabase (harness.ts)
+├── e2e/                        # Playwright specs + the harness that boots the app on a fake Supabase
 └── src/
     ├── main/index.ts           # Electron: a native window around the web UI
     ├── preload/index.ts        # minimal (data goes over the network, not IPC)
@@ -322,6 +342,7 @@ Bettracker/
         ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
         ├── lib/                # supabase client, validation, csv, odds, dates, stats, bankroll, format, strings, …
+        ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e) and its entry
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, …
 ```
 

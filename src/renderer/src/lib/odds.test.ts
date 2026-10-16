@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatOdds, fromAmerican, fromFractional, parseOdds, toAmerican, toFractional } from './odds'
+import { formatOdds, fromAmerican, fromFractional, oddsInputMode, parseOdds, toAmerican, toFractional } from './odds'
 
 describe('american', () => {
   it('converts both ways at the common prices', () => {
@@ -71,5 +71,13 @@ describe('parseOdds', () => {
     expect(parseOdds('1', 'decimal')).toBeNull()
     expect(parseOdds('0.5', 'decimal')).toBeNull()
     expect(parseOdds('+50', 'american')).toBeNull()
+  })
+})
+
+describe('oddsInputMode', () => {
+  it('asks for the full keyboard where odds need a minus, plus or slash, and the number pad for decimals', () => {
+    expect(oddsInputMode('american')).toBe('text')
+    expect(oddsInputMode('fractional')).toBe('text')
+    expect(oddsInputMode('decimal')).toBe('decimal')
   })
 })

@@ -27,14 +27,24 @@ export default defineConfig({
     launchOptions: chromium ? { executablePath: chromium } : {},
     trace: 'retain-on-failure'
   },
-  webServer: {
-    command: 'npm run e2e:serve',
-    url: `http://localhost:${PORT}/`,
-    timeout: 180_000,
-    reuseExistingServer: !process.env.CI,
-    env: {
-      VITE_SUPABASE_URL: 'https://example.supabase.co',
-      VITE_SUPABASE_ANON_KEY: 'e2e-placeholder-not-a-real-key'
+  webServer: [
+    {
+      command: 'npm run e2e:serve',
+      url: `http://localhost:${PORT}/`,
+      timeout: 180_000,
+      reuseExistingServer: !process.env.CI,
+      env: {
+        VITE_SUPABASE_URL: 'https://example.supabase.co',
+        VITE_SUPABASE_ANON_KEY: 'e2e-placeholder-not-a-real-key'
+      }
+    },
+    // `npm run demo` as built, for e2e/demo.spec.ts: it brings its own fake
+    // backend, so it needs neither credentials nor the harness.
+    {
+      command: 'npm run demo:serve',
+      url: 'http://localhost:4172/',
+      timeout: 180_000,
+      reuseExistingServer: !process.env.CI
     }
-  }
+  ]
 })

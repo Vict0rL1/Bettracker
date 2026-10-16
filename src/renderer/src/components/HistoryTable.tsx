@@ -372,7 +372,7 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                                 ))}
                               </span>
                             ) : (
-                              b.note || <span className="td-none">—</span>
+                              b.note ? <span className="td-note-text">{b.note}</span> : <span className="td-none">—</span>
                             )}
                           </td>
                           <td className="td-actions">

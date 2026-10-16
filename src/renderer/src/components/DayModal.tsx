@@ -6,7 +6,7 @@ import { humanDate, todayStr } from '../lib/dates'
 import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
-import { formatOdds, ODDS_PLACEHOLDER, parseOdds } from '../lib/odds'
+import { formatOdds, ODDS_PLACEHOLDER, oddsInputMode, parseOdds } from '../lib/odds'
 import { clvOf, round2, total as sumTotal } from '../lib/stats'
 import { MAX_AMOUNT, storableOdds, suggestedAmount } from '../lib/validate'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
@@ -74,6 +74,11 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, bankroll
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null
     const timer = confirmTimer
+    // Ready to type on a computer. On a touch screen, focusing the stake would
+    // open the keyboard and scroll the dialog past the day's total and bets,
+    // so the dialog itself takes focus instead.
+    if (window.matchMedia?.('(pointer: coarse)').matches) dialogRef.current?.focus({ preventScroll: true })
+    else stakeRef.current?.focus({ preventScroll: true })
     return () => {
       if (timer.current) clearTimeout(timer.current)
       // Send focus back where it came from so keyboard users aren't dumped at
@@ -275,7 +280,7 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, bankroll
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="modal card day-modal" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={dialogRef}>
+      <div className="modal card day-modal" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={dialogRef} tabIndex={-1}>
         <header className="modal-head">
           <div>
             <h2 id={titleId}>{humanDate(date)}</h2>
@@ -388,7 +393,6 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, bankroll
                   value={stakeStr}
                   aria-describedby={noteId}
                   onChange={(e) => handleStake(e.target.value)}
-                  autoFocus
                 />
               </div>
             </label>
@@ -399,7 +403,10 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, bankroll
               </span>
               <input
                 type="text"
-                inputMode="decimal"
+                inputMode={oddsInputMode(oddsFormat)}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 className="odds-input"
                 placeholder={ODDS_PLACEHOLDER[oddsFormat]}
                 value={oddsStr}
@@ -435,7 +442,10 @@ export default function DayModal({ date, bets, oddsFormat, suggestions, bankroll
               </span>
               <input
                 type="text"
-                inputMode="decimal"
+                inputMode={oddsInputMode(oddsFormat)}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 className="odds-input closing-input"
                 placeholder={ODDS_PLACEHOLDER[oddsFormat]}
                 value={closingStr}
