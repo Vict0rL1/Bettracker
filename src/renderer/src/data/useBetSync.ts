@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Bet, BetInput } from '../../../shared/types'
+import { newId } from '../lib/uuid'
 import { normalizeInput } from '../lib/validate'
 import { getBets, sendOp, subscribeToBets } from './bets'
 import { drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
@@ -236,9 +237,9 @@ export function useBetSync(
     (input: BetInput) => {
       const clean = normalizeInput(input) // throws on bad input, before anything is queued
       mutate({
-        opId: crypto.randomUUID(),
+        opId: newId(),
         kind: 'add',
-        id: crypto.randomUUID(),
+        id: newId(),
         input: clean,
         queuedAt: new Date().toISOString()
       })
@@ -249,14 +250,14 @@ export function useBetSync(
   const update = useCallback(
     (id: string, input: BetInput) => {
       const clean = normalizeInput(input)
-      mutate({ opId: crypto.randomUUID(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
+      mutate({ opId: newId(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
     },
     [mutate]
   )
 
   const remove = useCallback(
     (id: string) => {
-      mutate({ opId: crypto.randomUUID(), kind: 'delete', id })
+      mutate({ opId: newId(), kind: 'delete', id })
     },
     [mutate]
   )
@@ -265,9 +266,9 @@ export function useBetSync(
     (inputs: readonly BetInput[]): number => {
       // Validate the whole batch up front so a bad row fails the import instead
       // of half-writing it.
-      const entries = inputs.map((input) => ({ id: crypto.randomUUID(), input: normalizeInput(input) }))
+      const entries = inputs.map((input) => ({ id: newId(), input: normalizeInput(input) }))
       if (entries.length === 0) return 0
-      mutate({ opId: crypto.randomUUID(), kind: 'bulk-add', entries, queuedAt: new Date().toISOString() })
+      mutate({ opId: newId(), kind: 'bulk-add', entries, queuedAt: new Date().toISOString() })
       return entries.length
     },
     [mutate]
@@ -277,7 +278,7 @@ export function useBetSync(
     (changes: readonly { id: string; input: BetInput }[]) => {
       const editedAt = new Date().toISOString()
       // Validate the whole batch first so a bad row fails the edit instead of half-applying it.
-      const ops: PendingOp[] = changes.map(({ id, input }) => ({ opId: crypto.randomUUID(), kind: 'update', id, input: normalizeInput(input), editedAt }))
+      const ops: PendingOp[] = changes.map(({ id, input }) => ({ opId: newId(), kind: 'update', id, input: normalizeInput(input), editedAt }))
       mutateMany(ops)
     },
     [mutateMany]
@@ -285,7 +286,7 @@ export function useBetSync(
 
   const deleteBets = useCallback(
     (ids: readonly string[]) => {
-      mutateMany(ids.map((id) => ({ opId: crypto.randomUUID(), kind: 'delete', id })))
+      mutateMany(ids.map((id) => ({ opId: newId(), kind: 'delete', id })))
     },
     [mutateMany]
   )
@@ -295,7 +296,7 @@ export function useBetSync(
       const queuedAt = new Date().toISOString()
       mutateMany(
         rows.map((b) => ({
-          opId: crypto.randomUUID(),
+          opId: newId(),
           kind: 'add',
           id: b.id,
           input: normalizeInput({

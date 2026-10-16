@@ -129,10 +129,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 451 tests unitarios (vitest)
+npm test            # 450 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 64 comprobaciones Playwright, sin backend
+npm run test:e2e    # 66 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -434,6 +434,7 @@ src/renderer/src/lib/
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
   quick.ts      valores por defecto del registro rápido
+  uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
 src/renderer/src/demo/
@@ -452,7 +453,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       64 comprobaciones
+e2e/*.spec.ts                       66 comprobaciones
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

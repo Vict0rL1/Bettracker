@@ -2047,6 +2047,7 @@ tr.is-pending td {
 
 /* Language toggle, next to the theme switch: the name of the other language. */
 .lang-btn {
+  width: auto; /* .btn-icon is a 28px square; the name needs its own width */
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--border);

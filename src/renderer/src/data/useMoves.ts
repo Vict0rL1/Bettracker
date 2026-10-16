@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, MoveInput } from '../../../shared/types'
+import { newId } from '../lib/uuid'
 import { normalizeMove } from '../lib/validate'
 import { afterFailedRead, drainOutbox, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
@@ -258,7 +259,7 @@ export function useMoves(
   const add = useCallback(
     (input: MoveInput) => {
       const clean = normalizeMove(input) // throws on bad input, before anything is queued
-      mutate({ opId: crypto.randomUUID(), kind: 'add', id: crypto.randomUUID(), input: clean, queuedAt: new Date().toISOString() })
+      mutate({ opId: newId(), kind: 'add', id: newId(), input: clean, queuedAt: new Date().toISOString() })
     },
     [mutate]
   )
@@ -266,14 +267,14 @@ export function useMoves(
   const update = useCallback(
     (id: string, input: MoveInput) => {
       const clean = normalizeMove(input)
-      mutate({ opId: crypto.randomUUID(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
+      mutate({ opId: newId(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
     },
     [mutate]
   )
 
   const remove = useCallback(
     (id: string) => {
-      mutate({ opId: crypto.randomUUID(), kind: 'delete', id })
+      mutate({ opId: newId(), kind: 'delete', id })
     },
     [mutate]
   )
@@ -281,7 +282,7 @@ export function useMoves(
   const restore = useCallback(
     (m: BankrollMove) => {
       const clean = normalizeMove({ date: m.date, amount: m.amount, note: m.note })
-      mutate({ opId: crypto.randomUUID(), kind: 'add', id: m.id, input: clean, queuedAt: new Date().toISOString() })
+      mutate({ opId: newId(), kind: 'add', id: m.id, input: clean, queuedAt: new Date().toISOString() })
     },
     [mutate]
   )
