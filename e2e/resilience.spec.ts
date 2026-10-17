@@ -122,11 +122,13 @@ test.describe('several windows of the app', () => {
     await stake.fill('35')
     await stake.press('Enter')
     await other.keyboard.press('Escape')
+    // The first window goes away before the connection comes back.
+    await page.close()
 
-    await setDown(page, false)
-    await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect.poll(async () => (await serverSettings(page))?.odds_format, { timeout: 15_000 }).toBe('decimal')
-    await expect.poll(async () => (await serverSettings(page))?.default_stake, { timeout: 15_000 }).toBe(35)
+    await setDown(other, false)
+    await other.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect.poll(async () => (await serverSettings(other))?.default_stake, { timeout: 15_000 }).toBe(35)
+    await expect.poll(async () => (await serverSettings(other))?.odds_format, { timeout: 15_000 }).toBe('decimal')
   })
 })
 
