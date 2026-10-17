@@ -107,6 +107,16 @@ close a dialog.
    retires the legacy keys at the end of 2026. Never the **secret** key
    (`sb_secret_…`) or **service_role**: they skip row-level security, and the
    build refuses them.
+4. Open **Authentication → URL Configuration**. Set **Site URL** to the
+   address where you'll use the app (your Netlify address, say), and list the
+   others you sign up from under **Redirect URLs** (`http://localhost:5173`
+   for dev). The confirmation email links back to the address you signed up
+   from when it's listed there, and otherwise to the Site URL — on a new
+   project, `http://localhost:3000`, which shows an error page (the account is
+   confirmed all the same: go back to the app and sign in). For an app only you
+   use, you can turn **Confirm email** off instead, in the **Email** provider's
+   settings (**Authentication → Sign In / Providers**). A link that has expired,
+   or was already opened, brings you to the sign-in screen, which says so.
 
 ### 2. Point the app at your project
 

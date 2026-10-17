@@ -75,7 +75,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw authFailure(error)
       },
       async signUp(email, password) {
-        const { data, error } = await supabase.auth.signUp({ email, password })
+        // The confirmation email links back to this address when the project
+        // allows it (Authentication → URL Configuration → Redirect URLs);
+        // otherwise Supabase uses its Site URL. Not from a desktop file:// page.
+        const here = /^https?:$/.test(window.location.protocol) ? window.location.origin : undefined
+        const { data, error } = await supabase.auth.signUp({ email, password, options: here ? { emailRedirectTo: here } : undefined })
         if (error) throw authFailure(error)
         // When email confirmation is on, no session comes back until confirmed.
         return { needsConfirmation: !data.session }

@@ -271,6 +271,8 @@ export const en = {
   'login.err.rate': 'Too many tries in a short time. Wait a while and try again.',
   'login.err.signupOff': 'This Supabase project doesn’t take new accounts (sign-ups are off in its Authentication settings).',
   'login.err.email': 'Supabase doesn’t accept that email address. Use a real one.',
+  'login.err.link':
+    'That email link has expired or was already used. Sign in; if your account isn’t confirmed yet, sign up again with the same email to get a new link.',
 
   // First-run setup screen
   'setup.tag': 'Almost there — connect your Supabase project to enable cross-device sync.',
@@ -716,6 +718,8 @@ export const es: Record<StringKey, string> = {
   'login.err.rate': 'Demasiados intentos seguidos. Espera un rato y vuelve a probar.',
   'login.err.signupOff': 'Este proyecto de Supabase no admite cuentas nuevas (el registro está desactivado en sus ajustes de Authentication).',
   'login.err.email': 'Supabase no acepta ese correo. Usa uno real.',
+  'login.err.link':
+    'Ese enlace del correo ha caducado o ya se usó. Entra; si tu cuenta aún no está confirmada, vuelve a registrarte con el mismo correo para recibir otro enlace.',
 
   'setup.tag': 'Casi listo: conecta tu proyecto de Supabase para sincronizar entre dispositivos.',
   'setup.step1': 'Crea un proyecto gratuito en {site}.',

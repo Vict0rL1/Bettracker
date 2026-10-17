@@ -41,10 +41,25 @@ export function authErrorKey(e: AuthFailure): StringKey | null {
       return 'login.err.signupOff'
     case 'email_address_invalid':
       return 'login.err.email'
+    case 'otp_expired':
+      return 'login.err.link'
   }
   if (/invalid login credentials/i.test(e.message)) return 'login.err.credentials'
   if (/email not confirmed/i.test(e.message)) return 'login.err.unconfirmed'
   if (/already registered/i.test(e.message)) return 'login.err.exists'
   if (e.status === 429 || /rate limit/i.test(e.message)) return 'login.err.rate'
   return null
+}
+
+/**
+ * What Supabase puts in the address when an email link didn't work — most
+ * often a confirmation link that expired, or one already opened (some mail
+ * scanners open links before you do). supabase-js reads it and leaves it
+ * there; the sign-in screen says it in words.
+ */
+export function linkError(hash: string): AuthFailure | null {
+  const params = new URLSearchParams(hash.replace(/^#/, ''))
+  const message = params.get('error_description')
+  if (!message) return null
+  return { message, code: params.get('error_code') ?? undefined }
 }

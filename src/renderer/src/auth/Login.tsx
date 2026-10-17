@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from './AuthProvider'
 import { SparkIcon } from '../components/icons'
 import { useLang } from '../lib/i18n'
-import { authErrorKey, type AuthFailure } from './authErrors'
+import { authErrorKey, linkError, type AuthFailure } from './authErrors'
 
 type Mode = 'in' | 'up'
 
@@ -15,8 +15,14 @@ export default function Login() {
   const [busy, setBusy] = useState(false)
   // Kept as Supabase gave it and put into words when shown, so it follows a
   // change of language.
-  const [error, setError] = useState<AuthFailure | null>(null)
+  // An email link that didn't work opens the app with the reason in the address.
+  const [error, setError] = useState<AuthFailure | null>(() => linkError(window.location.hash))
   const [notice, setNotice] = useState<string | null>(null)
+
+  // Said once: a reload shouldn't say it again.
+  useEffect(() => {
+    if (linkError(window.location.hash)) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+  }, [])
 
   const errorText = (e: AuthFailure): string => {
     const key = authErrorKey(e)

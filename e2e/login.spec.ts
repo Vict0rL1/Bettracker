@@ -41,6 +41,15 @@ test.describe('signing in, when Supabase says no', () => {
     await expect(error).toContainText('Supabase ha rechazado la clave de esta app («Invalid API key»).')
   })
 
+  test('an expired confirmation link opens on the sign-in screen saying so, once', async ({ page }) => {
+    await page.goto('/#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired')
+    await expect(page.locator('.auth-card .auth-error')).toContainText('That email link has expired or was already used.')
+    expect(await page.evaluate(() => window.location.hash)).toBe('')
+    await page.reload()
+    await expect(page.locator('.auth-card')).toBeVisible()
+    await expect(page.locator('.auth-card .auth-error')).toHaveCount(0)
+  })
+
   test('a wrong password, an unconfirmed email and no connection, in plain words', async ({ page }) => {
     const answers: [Answer, string][] = [
       [{ status: 400, body: { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' } }, 'Wrong email or password.'],
@@ -53,4 +62,30 @@ test.describe('signing in, when Supabase says no', () => {
       await expect(error).toContainText(words)
     }
   })
+})
+
+// Supabase sends the confirmation link to its Site URL (http://localhost:3000
+// on a new project) unless the sign-up names another address it allows.
+test('signing up asks for the confirmation link to come back to this address', async ({ page }) => {
+  let signup = ''
+  await page.route('https://example.supabase.co/**', (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+    signup = route.request().url()
+    // Confirmation on: a user, and no session until the link is opened.
+    return route.fulfill({
+      status: 200,
+      headers: CORS,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'u1', aud: 'authenticated', role: '', email: 'you@example.com', confirmation_sent_at: '2026-10-17T10:00:00Z' })
+    })
+  })
+  await page.goto('/')
+  const form = page.locator('.auth-card')
+  await form.locator('.auth-toggle').click()
+  await form.locator('input[type=email]').fill('you@example.com')
+  await form.locator('input[type=password]').fill('hunter22')
+  await form.locator('.auth-submit').click()
+  await expect(form.locator('.auth-notice')).toContainText('Account created. Check your email to confirm')
+  expect(new URL(signup).pathname).toBe('/auth/v1/signup')
+  expect(new URL(signup).searchParams.get('redirect_to')).toBe('http://localhost:4173')
 })

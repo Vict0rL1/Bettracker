@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { authErrorKey, authFailure } from './authErrors'
+import { authErrorKey, authFailure, linkError } from './authErrors'
 
 describe('authErrorKey', () => {
   it.each([
@@ -18,7 +18,8 @@ describe('authErrorKey', () => {
     ['too many emails', { message: 'email rate limit exceeded', code: 'over_email_send_rate_limit', status: 429 }, 'login.err.rate'],
     ['too many requests', { message: 'Request rate limit reached', status: 429 }, 'login.err.rate'],
     ['sign-ups off', { message: 'Signups not allowed for this instance', code: 'signup_disabled', status: 422 }, 'login.err.signupOff'],
-    ['an address it refuses', { message: 'Email address "a@b.c" is invalid', code: 'email_address_invalid', status: 400 }, 'login.err.email']
+    ['an address it refuses', { message: 'Email address "a@b.c" is invalid', code: 'email_address_invalid', status: 400 }, 'login.err.email'],
+    ['an email link expired or already used', { message: 'Email link is invalid or has expired', code: 'otp_expired' }, 'login.err.link']
   ] as const)('%s', (_name, failure, key) => {
     expect(authErrorKey(failure)).toBe(key)
   })
@@ -35,5 +36,26 @@ describe('authFailure', () => {
     expect(e).toBeInstanceOf(Error)
     expect(e.message).toBe('Email not confirmed')
     expect(authErrorKey(e)).toBe('login.err.unconfirmed')
+  })
+})
+
+describe('linkError', () => {
+  it('reads the error Supabase puts in the address after an email link that didn’t work', () => {
+    const hash = '#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired'
+    expect(linkError(hash)).toEqual({ message: 'Email link is invalid or has expired', code: 'otp_expired' })
+    expect(authErrorKey(linkError(hash)!)).toBe('login.err.link')
+  })
+
+  it('keeps an error it doesn’t know, in Supabase’s words', () => {
+    expect(linkError('#error=server_error&error_description=Unable+to+exchange+external+code')).toEqual({
+      message: 'Unable to exchange external code',
+      code: undefined
+    })
+  })
+
+  it('is nothing for any other address: none, a session coming in, a plain anchor', () => {
+    expect(linkError('')).toBeNull()
+    expect(linkError('#access_token=a&refresh_token=b&type=signup')).toBeNull()
+    expect(linkError('#top')).toBeNull()
   })
 })

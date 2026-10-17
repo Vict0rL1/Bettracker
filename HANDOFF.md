@@ -62,8 +62,13 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    poner el directorio raíz en `/`. Así se conservan el dominio y las
    variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
    al viejo, con lo guardado sin conexión allí, y obligaría a cambiar las URL
-   de redirección en Supabase Auth. Si está en Netlify subida a mano
-   (Netlify Drop): `npm run build` con el `.env` bueno y arrastrar `dist/` a
+   de redirección en Supabase Auth. En Supabase, Authentication → URL
+   Configuration: **Site URL** = la dirección de la app publicada, y en
+   **Redirect URLs** las demás desde las que te registres
+   (`http://localhost:5173`); si no, el correo de confirmación lleva a
+   `http://localhost:3000` (la cuenta queda confirmada igual). Si está en
+   Netlify subida a mano (Netlify Drop): `npm run build` con el `.env` bueno
+   y arrastrar `dist/` a
    la página **Deploys** del sitio que ya existe; soltarlo en la lista de
    sitios crea otro, con otra dirección. El build comprueba antes la URL y
    la clave (ver "Decisiones"). El instalador de escritorio se construye
@@ -133,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 526 tests unitarios (vitest)
+npm test            # 530 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 84 comprobaciones Playwright, sin backend
+npm run test:e2e    # 86 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -333,6 +338,11 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   ya existente, demasiados intentos, registro desactivado y correo no
   aceptado, en en y es. Se guardan tal cual y se traducen al mostrarlos; lo
   que no se reconoce sale con las palabras de Supabase, como antes.
+- **El correo de confirmación vuelve a la app**: `signUp` pide
+  `emailRedirectTo` = la dirección actual (solo http/https; Supabase la usa si
+  está en Redirect URLs, si no, su Site URL). Un enlace caducado o ya abierto
+  (los escáneres de correo los abren antes) deja el error en la dirección;
+  la pantalla de entrada lo dice en en y es y lo quita de la dirección.
 - **Sin sesión, la cola espera** (`data/session.ts`, `SignedOutError`):
   cerrar sesión en un dispositivo cierra la de todos (`signOut` es global), y
   cuando la sesión de otro caduca y no se puede renovar, supabase-js manda
@@ -514,7 +524,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       84 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       86 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión)
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
