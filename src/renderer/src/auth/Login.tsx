@@ -6,7 +6,11 @@ import { authErrorKey, linkError, type AuthFailure } from './authErrors'
 
 type Mode = 'in' | 'up'
 
-export default function Login() {
+/**
+ * `onCancel`: shown again after a session ended, over this device's data;
+ * leaving goes back to it, changes still queued.
+ */
+export default function Login({ onCancel }: { onCancel?: () => void } = {}) {
   const { t } = useLang()
   const { signIn, signUp } = useAuth()
   const [mode, setMode] = useState<Mode>('in')
@@ -100,6 +104,11 @@ export default function Login() {
         >
           {mode === 'in' ? t('login.needAccount') : t('login.haveAccount')}
         </button>
+        {onCancel && (
+          <button type="button" className="auth-toggle login-back" onClick={onCancel}>
+            {t('login.back')}
+          </button>
+        )}
       </form>
     </div>
   )

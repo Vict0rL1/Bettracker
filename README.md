@@ -40,13 +40,38 @@ moment you're back online. The header badge tells you where you stand:
 |---|---|
 | 🟢 **Synced** | Everything is saved to the cloud and shared with your other devices |
 | 🟡 **Syncing n…** | Queued changes are being pushed right now |
-| ⚪ **Offline · n queued** | No connection, or no session (signing out on another device ends it here too) — changes are safe on this device and sync automatically once you're back and signed in |
+| ⚪ **Offline · n queued** | No connection — changes are safe on this device and will sync automatically |
+| 🟠 **Retrying · n queued** | Supabase failed for now (a 5xx, a rate limit) — changes are safe on this device and are tried again after a growing wait (1 s, 2 s, 4 s … up to 2 minutes) |
+| 🔴 **Not syncing · n queued** | Supabase refused this app's key or session — changes are safe on this device and sync once that is sorted out |
+| 🔴 **Signed out · n queued** | Your session ended (signing out on another device ends it everywhere) — changes are safe on this device; **Sign in again** sends them |
 | 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
 The count covers every queued change: bets, deposits and withdrawals.
 Signing out removes that device's local copy (cache and queued changes);
 anything already synced stays safe in your Supabase project. While changes
 are still queued, **Sign out** asks you to click again.
+
+Three more things stay on screen until you deal with them, because they are
+about changes that haven't reached the server:
+
+- **Signed out** — your session ended while changes waited here. **Sign in
+  again** opens the sign-in form over this device's data, queue included;
+  nothing is cleared.
+- **Not saved on this device** — the browser's storage refused the queue
+  (full, or turned off). Cached server data is dropped first to make room;
+  when even that isn't enough the change stays in that window only, keeps
+  syncing while it is open, and the toast says so instead of "Added".
+  **Try again** stores it once there is room.
+- **Refused** — Supabase refused a change for good (a check it fails, say).
+  It leaves the queue so it can't block the rest, and waits here with the
+  server's reason: **Send again** or **Discard**.
+
+Several windows of the app (two tabs, or a tab and the installed app) share
+one queue: each change is made to the stored queue under a lock that spans
+windows (the Web Locks API), only one window sends it at a time, and a change
+made in one window shows in the others. Over plain http on your local network
+(`npm run dev` on the phone) the browser has no such lock, and windows there
+don't coordinate.
 
 Small things that add up: a **light theme** (☀️ in the header — it follows your
 OS until you pick one, then stays put), **search and filters** over your history
@@ -244,7 +269,7 @@ given OS's installer must be built on that OS.
 | `npm run build:desktop` | Package a native desktop installer → `release/` |
 | `npm run build:desktop:dir` | The desktop app unpacked, without an installer → `release/` |
 | `npm run typecheck` | Type-check the web + desktop code and the e2e suite |
-| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed). The first time, run `npx playwright install chromium` |
+| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed), on ports 4183, 4182 and 4181 (`E2E_PORT`, `E2E_DEMO_PORT`, `E2E_DEV_PORT` move them). The first time, run `npx playwright install chromium` |
 | `bash supabase/tests/run.sh` | Run the migrations and `schema.sql` against a throwaway Postgres and check the result. Needs `psql`, `createdb`, `dropdb` and `pg_dump`, with the `PG*` variables pointing at a server where it may create databases (all named `bettracker_test_*`) |
 
 CI (`.github/workflows/ci.yml`) runs on every push and pull request: a secret
@@ -370,8 +395,10 @@ Bettracker/
         ├── data/useBetSync.ts  # bets state: cache, outbox, sync loop
         ├── data/offline.ts     # device cache + outbox
         ├── data/drain.ts       # replaying the outbox: what leaves it, what stays
-        ├── data/errors.ts      # reading a failed request: offline, signed out, migration needed, refused
+        ├── data/errors.ts      # reading a failed request: offline, paused, retry, migration needed, refused
         ├── data/session.ts     # no request for a user's rows without their session
+        ├── data/store.ts       # the queues in storage, shared by every window under a lock
+        ├── data/useOpQueue.ts  # a queue of ops as the bets and the moves keep it (storage, drain lock, refused)
         ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
         ├── lib/                # supabase client, validation, csv, odds, dates, stats, bankroll, format, strings, …
@@ -427,7 +454,13 @@ a key Supabase doesn't take stays queued too, and goes out after the next
 sign-in, or with a copy of the app that has the right key. The data layer
 asks for the session before every read and write, because without one
 supabase-js would go as nobody and row-level security would answer as for
-nobody: an empty history, an edit with no row to change.
+nobody: an empty history, an edit with no row to change. A request the server
+fails for now (a 5xx, a rate limit, a timeout) leaves the change queued and is
+tried again after a growing wait; only a refusal for good takes a change out
+of the queue, into the **Refused** notice. Every failure keeps its HTTP status
+and error code, which is what tells the two apart. Full reads page through
+the rows the server sends, from where the last page ended, so a project whose
+`max-rows` is below the 1,000 asked for still reads in full.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read
@@ -511,4 +544,7 @@ number follows your odds format setting, both as the odds box reads them. A
 cell that is not a price that can be stored counts for nothing. Lines that can't be read are skipped and reported
 rather than half-guessed, and the import queues through the same offline outbox
 as everything else — so it works with no connection and can't create duplicate
-rows if it's retried.
+rows if it's retried. It goes up in chunks of 250, and the app keeps count of
+the chunks the server confirmed: an import cut halfway sends only the rest
+when it is retried, and a row that did land is never written over (another
+device may have edited or deleted it since).

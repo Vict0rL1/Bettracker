@@ -247,4 +247,25 @@ do $$ begin
   assert not exists (select 1 from public.bankroll_moves where id = '40000000-0000-0000-0000-000000000004'), 'a deleted user''s moves go with them';
   assert (select count(*) from public.bankroll_moves where user_id = '00000000-0000-0000-0000-000000000001') = 3, 'other users'' moves stay';
 end $$;
+-- 9. An import sent again after an interruption, as the app sends it
+-- (data/bets.ts, addBets): INSERT ... ON CONFLICT (id) DO NOTHING, as the
+-- signed-in user. The rows that never landed go in; a row that did, and was
+-- edited on another device since, stays as it is — its newer updated_at too.
+-- Rolled back.
+begin;
+set local role authenticated;
+insert into public.entries (id, user_id, date, amount, stake, note, updated_at)
+values ('50000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 10, 'import', '2026-07-01 10:00:00+00');
+update public.entries set note = 'edited elsewhere', updated_at = '2099-01-01 00:00:00+00' where id = '50000000-0000-4000-8000-000000000001';
+insert into public.entries (id, user_id, date, amount, stake, note, updated_at)
+values ('50000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 10, 'import', '2026-07-01 10:00:00+00'),
+       ('50000000-0000-4000-8000-000000000002', auth.uid(), '2026-07-02', 6, 10, 'import', '2026-07-01 10:00:00+00')
+on conflict (id) do nothing;
+do $$ begin
+  assert (select count(*) from public.entries where id in ('50000000-0000-4000-8000-000000000001', '50000000-0000-4000-8000-000000000002')) = 2, 'the row that never landed goes in';
+  assert (select note from public.entries where id = '50000000-0000-4000-8000-000000000001') = 'edited elsewhere', 'the row edited since keeps the edit';
+  assert (select updated_at from public.entries where id = '50000000-0000-4000-8000-000000000001') = '2099-01-01 00:00:00+00', 'and its newer updated_at';
+end $$;
+rollback;
+
 select 'checks passed' as result;

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { APP_URL } from './urls'
 
 // The production build (playwright.config.ts) without the harness: the real
 // supabase-js, signing in against https://example.supabase.co — which these
@@ -87,5 +88,5 @@ test('signing up asks for the confirmation link to come back to this address', a
   await form.locator('.auth-submit').click()
   await expect(form.locator('.auth-notice')).toContainText('Account created. Check your email to confirm')
   expect(new URL(signup).pathname).toBe('/auth/v1/signup')
-  expect(new URL(signup).searchParams.get('redirect_to')).toBe('http://localhost:4173')
+  expect(new URL(signup).searchParams.get('redirect_to')).toBe(APP_URL)
 })

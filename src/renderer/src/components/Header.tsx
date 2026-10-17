@@ -6,7 +6,8 @@ import { ClockIcon, DownloadIcon, MoonIcon, PlusIcon, SlidersIcon, SparkIcon, Su
 
 interface Props {
   email: string | null
-  status: SyncStatus
+  /** 'signedout': the session ended and changes wait for a sign-in. */
+  status: SyncStatus | 'signedout'
   /** Rows waiting to reach the server (not bets awaiting a result). */
   queuedCount: number
   /** Bets still waiting for a result. */
@@ -65,7 +66,13 @@ export default function Header({
         ? { label: queuedCount > 0 ? t('sync.syncingN', { n: queuedCount }) : t('sync.syncing'), title: t('sync.syncingTitle') }
         : status === 'behind'
           ? { label: queuedCount > 0 ? t('sync.behindN', { n: queuedCount }) : t('sync.behind'), title: t('sync.behindTitle') }
-          : { label: queuedCount > 0 ? t('sync.offlineN', { n: queuedCount }) : t('sync.offline'), title: t('sync.offlineTitle') }
+          : status === 'paused'
+            ? { label: queuedCount > 0 ? t('sync.pausedN', { n: queuedCount }) : t('sync.paused'), title: t('sync.pausedTitle') }
+            : status === 'retrying'
+              ? { label: queuedCount > 0 ? t('sync.retryingN', { n: queuedCount }) : t('sync.retrying'), title: t('sync.retryingTitle') }
+              : status === 'signedout'
+                ? { label: queuedCount > 0 ? t('sync.signedoutN', { n: queuedCount }) : t('sync.signedout'), title: t('sync.signedoutTitle') }
+                : { label: queuedCount > 0 ? t('sync.offlineN', { n: queuedCount }) : t('sync.offline'), title: t('sync.offlineTitle') }
 
   return (
     <header className="topbar">

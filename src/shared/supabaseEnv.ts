@@ -35,13 +35,15 @@ export type EnvProblem =
 /**
  * - 'unset': neither value — the app shows its setup steps;
  * - 'bad':   at least one problem, URL first;
- * - 'ok':    nothing to fault. `legacyKey`: the key is the old anon JWT,
- *            which Supabase is retiring.
+ * - 'ok':    nothing that can't work. `legacyKey`: the key is the old anon
+ *            JWT, which Supabase is retiring. `warnings`: what is likely
+ *            wrong but can't be told for sure offline — an anon key whose
+ *            project isn't the URL's (a vanity subdomain can look like a ref).
  */
 export type EnvCheck =
   | { status: 'unset' }
   | { status: 'bad'; problems: EnvProblem[] }
-  | { status: 'ok'; legacyKey: boolean }
+  | { status: 'ok'; legacyKey: boolean; warnings: EnvProblem[] }
 
 /** `https://<ref>.supabase.co` */
 const projectUrl = (ref: string): string => `https://${ref.toLowerCase()}.supabase.co`
@@ -67,9 +69,12 @@ function checkUrl(value: string): UrlResult {
     return bad({ code: 'url-database', fix: ref ? projectUrl(ref) : null })
   }
 
-  // The example in .env.example or the docs, still there.
-  const host = value.replace(/^[a-z]+:\/\//i, '').split(/[/?#:]/)[0]
-  if (/[<>[\]{}]|your[-_ ]?project|project[-_ ]?ref/i.test(value) || /^(?:x{3,}|xyzcompany)\.supabase\.co$/i.test(host)) {
+  // The example in .env.example or the docs, still there: a <ref> or {ref}
+  // anywhere, or a project label that is no project ("YOUR-PROJECT-ref",
+  // "xxxxxxxx"). Only a hosted project's label is read for words: anywhere
+  // else they could be real (a path, another host), and [] is IPv6.
+  const label = /^(?:[a-z]+:\/\/)?([^/?#:]+)\.supabase\.co(?:[/?#:]|$)/i.exec(value)?.[1] ?? ''
+  if (/[<>{}]/.test(value) || /your[-_ ]?project|project[-_ ]?ref|^x{3,}$|^xyzcompany$/i.test(label)) {
     return bad({ code: 'url-example' })
   }
 
@@ -168,11 +173,12 @@ export function checkSupabaseEnv(url: string | undefined, key: string | undefine
   const problems: EnvProblem[] = []
   if (urlResult.problem) problems.push(urlResult.problem)
   if (keyResult.problem) problems.push(keyResult.problem)
-  // What Supabase answers with "Invalid API key".
-  else if (urlResult.ref && keyResult.ref && urlResult.ref !== keyResult.ref) {
-    problems.push({ code: 'key-other-project', keyRef: keyResult.ref, urlRef: urlResult.ref })
-  }
-  return problems.length > 0 ? { status: 'bad', problems } : { status: 'ok', legacyKey: keyResult.legacy }
+  if (problems.length > 0) return { status: 'bad', problems }
+  // What Supabase answers with "Invalid API key" — unless the URL's label is
+  // a vanity subdomain that happens to look like a ref: said, not stopped.
+  const warnings: EnvProblem[] =
+    urlResult.ref && keyResult.ref && urlResult.ref !== keyResult.ref ? [{ code: 'key-other-project', keyRef: keyResult.ref, urlRef: urlResult.ref }] : []
+  return { status: 'ok', legacyKey: keyResult.legacy, warnings }
 }
 
 /**
@@ -253,7 +259,8 @@ const buildEn = {
     'BetTracker: VITE_SUPABASE_ANON_KEY is the old anon key. It works for now, but Supabase is retiring the old keys by the end of 2026: switch to the publishable key (sb_publishable_…, under Project Settings → API Keys) and build again.',
   unset:
     'BetTracker: there is no VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY, so this build will open on the setup screen. To publish it, fill in .env first.',
-  devBad: 'BetTracker: .env has a problem (the app shows it too):'
+  devBad: 'BetTracker: .env has a problem (the app shows it too):',
+  likely: 'BetTracker: .env is probably wrong (the build goes on; check it):'
 }
 
 const buildEs: typeof buildEn = {
@@ -263,7 +270,8 @@ const buildEs: typeof buildEn = {
     'BetTracker: VITE_SUPABASE_ANON_KEY es la clave anon antigua. Funciona por ahora, pero Supabase retira las claves antiguas a finales de 2026: cámbiala por la clave publishable (sb_publishable_…, en Project Settings → API Keys) y vuelve a compilar.',
   unset:
     'BetTracker: no hay VITE_SUPABASE_URL ni VITE_SUPABASE_ANON_KEY, así que este build abrirá la pantalla de configuración. Para publicarlo, rellena antes el .env.',
-  devBad: 'BetTracker: el .env tiene un problema (la app también lo muestra):'
+  devBad: 'BetTracker: el .env tiene un problema (la app también lo muestra):',
+  likely: 'BetTracker: el .env probablemente está mal (el build sigue; revísalo):'
 }
 
 type Lang = 'en' | 'es'
@@ -313,7 +321,10 @@ export function supabaseEnvCheck(lang: Lang = terminalLang()): Plugin {
         err.stack = err.message
         throw err
       }
-      if (check.status === 'ok' && check.legacyKey) config.logger.warn(text.legacy)
+      if (check.status === 'ok') {
+        if (check.warnings.length > 0) config.logger.warn([text.likely, ...envProblemLines(check.warnings, lang).map((l) => `  • ${l}`)].join('\n'))
+        if (check.legacyKey) config.logger.warn(text.legacy)
+      }
       if (check.status === 'unset' && build) config.logger.warn(text.unset)
     }
   }

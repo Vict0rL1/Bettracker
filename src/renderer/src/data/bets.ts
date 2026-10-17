@@ -98,14 +98,16 @@ export async function addBet(input: BetInput, id?: string, queuedAt?: string): P
   const clean = normalizeInput(input)
   const user_id = await signedInUserId()
   const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}), ...(queuedAt ? { updated_at: queuedAt } : {}) }
-  const { data, error } = await supabase.from(TABLE).insert(payload).select().single()
+  const { data, error, status } = await supabase.from(TABLE).insert(payload).select().single()
   if (error) {
     if (error.code === '23505' && id) {
       // Already inserted by an earlier attempt whose response we never saw.
-      const { data: existing } = await supabase.from(TABLE).select('*').eq('id', id).single()
-      if (existing) return toBet(existing as Row)
+      const back = await supabase.from(TABLE).select('*').eq('id', id).maybeSingle()
+      // Couldn't tell: the same failure, tried again later.
+      if (back.error) throw describeError(back.error, back.status)
+      if (back.data) return toBet(back.data as Row)
     }
-    throw describeError(error)
+    throw describeError(error, status)
   }
   return toBet(data as Row)
 }
@@ -127,14 +129,14 @@ export async function addBet(input: BetInput, id?: string, queuedAt?: string): P
  */
 export async function updateBet(id: string, input: BetInput, editedAt: string): Promise<Bet | null> {
   const clean = normalizeInput(input)
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from(TABLE)
     .update({ ...toRowPayload(clean), updated_at: editedAt })
     .eq('id', id)
     .lte('updated_at', editedAt)
     .select()
     .maybeSingle()
-  if (error) throw describeError(error)
+  if (error) throw describeError(error, status)
   return data ? toBet(data as Row) : null
 }
 
@@ -159,38 +161,53 @@ export async function updateBetLegacy(id: string, input: BetInput, editedAt: str
   if ('sport' in input) payload.sport = input.sport ?? ''
   if ('book' in input) payload.book = input.book ?? ''
   if ('betType' in input) payload.bet_type = input.betType ?? ''
-  const { data, error } = await supabase.from(TABLE).update(payload).eq('id', id).lte('updated_at', editedAt).select().maybeSingle()
-  if (error) throw describeError(error)
+  const { data, error, status } = await supabase.from(TABLE).update(payload).eq('id', id).lte('updated_at', editedAt).select().maybeSingle()
+  if (error) throw describeError(error, status)
   return data ? toBet(data as Row) : null
 }
 
 /** Delete one bet by id. */
 export async function deleteBet(id: string): Promise<boolean> {
-  const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
-  if (error) throw describeError(error)
+  const { error, count, status } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
+  if (error) throw describeError(error, status)
   return (count ?? 0) > 0
 }
 
+/** Rows per request of an import. */
+export const IMPORT_CHUNK = 250
+
 /**
  * Insert many bets at once (CSV import). Rows are sent in chunks so a large
- * file doesn't hit request-size limits, and ids are client-generated so a
- * partially-applied import can be re-run without duplicating rows.
- * `queuedAt` is written as each row's `updated_at`, as in addBet.
+ * file doesn't hit request-size limits. `queuedAt` is written as each row's
+ * `updated_at`, as in addBet.
+ *
+ * An interrupted import is sent again, and must not undo what happened to
+ * the rows that did land: another device may have edited one since (a newer
+ * `updated_at`) or deleted it. So the chunks the server confirmed are
+ * skipped (`done`, kept up to date through `progress`), and a row that is
+ * already there is left as the server has it (ON CONFLICT DO NOTHING) — the
+ * chunk whose answer was lost may have landed. Ids are client-generated, so
+ * a row of this import can only collide with itself. Resolves with how many
+ * rows this call inserted.
  */
-export async function addBets(inputs: readonly { id: string; input: BetInput }[], queuedAt?: string): Promise<number> {
-  if (inputs.length === 0) return 0
+export async function addBets(
+  inputs: readonly { id: string; input: BetInput }[],
+  queuedAt?: string,
+  done = 0,
+  progress?: (done: number) => Promise<void>
+): Promise<number> {
+  if (inputs.length <= done) return 0
   const user_id = await signedInUserId()
   const stamp = queuedAt ? { updated_at: queuedAt } : {}
   const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)), ...stamp }))
 
-  const CHUNK = 250
   let written = 0
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK)
-    // upsert (not insert) so re-running an interrupted import is idempotent.
-    const { error, count } = await supabase.from(TABLE).upsert(chunk, { count: 'exact', onConflict: 'id' })
-    if (error) throw describeError(error)
+  for (let i = done; i < rows.length; i += IMPORT_CHUNK) {
+    const chunk = rows.slice(i, i + IMPORT_CHUNK)
+    const { error, count, status } = await supabase.from(TABLE).upsert(chunk, { count: 'exact', onConflict: 'id', ignoreDuplicates: true })
+    if (error) throw describeError(error, status)
     written += count ?? chunk.length
+    await progress?.(i + chunk.length)
   }
   return written
 }
@@ -201,13 +218,13 @@ export async function addBets(inputs: readonly { id: string; input: BetInput }[]
  * way that version sent it. Resolves with the row the server returned, when
  * there is one.
  */
-export async function sendOp(op: PendingOp): Promise<Bet | null> {
+export async function sendOp(op: PendingOp, progress?: (done: number) => Promise<void>): Promise<Bet | null> {
   // An edit or a delete sent without a session would find no row and leave
   // the queue as if refused: it waits for the next sign-in instead.
   await signedInUserId()
   if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
   if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
-  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op))
+  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op), op.done ?? 0, progress)
   else await deleteBet(op.id)
   return null
 }

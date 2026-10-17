@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_SETTINGS, type Settings, type SettingsPatch } from '../../../shared/types'
-import { loadSettingsCache, loadSettingsOutbox, saveSettingsCache, saveSettingsOutbox, type PendingSettings } from './offline'
-import { migrationNotice, pushSettings, retryPlan } from './drain'
-import { classifySyncError } from './errors'
+import {
+  afterSettingsAnswer,
+  loadSettingsCache,
+  loadSettingsOutbox,
+  mergeSettingsPending,
+  queueKeys,
+  saveSettingsCache,
+  saveSettingsOutbox,
+  type PendingSettings
+} from './offline'
+import { backoff, migrationNotice, pushSettings, retryPlan, type SettingsPushResult } from './drain'
+import { classifySyncError, SignedOutError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
+import { queueStore, withLock } from './store'
 
 export interface SettingsSync {
   /** Last-known row with any pending edit applied; defaults until the first load. */
@@ -19,16 +29,22 @@ export interface SettingsSync {
    * bankroll.
    */
   loaded: boolean
-  update: (patch: SettingsPatch) => void
+  /** Storage refused the pending change: it is only in this window until it syncs. */
+  unsaved: boolean
+  /** Resolves once the change is pending: true when this device's storage holds it. */
+  update: (patch: SettingsPatch) => Promise<boolean>
+  saveAgain: () => Promise<boolean>
 }
 
 const RETRY_INTERVAL_MS = 20_000
 
 /**
  * Per-user settings, offline-first like the bets but far simpler: there is
- * one row, so the outbox is at most one merged patch. Edits apply to the UI
- * at once and are pushed on enqueue, reconnect, resume and a slow retry; the
- * same last-write-wins-by-edit-time rule as bets decides conflicts.
+ * one row, so the outbox is at most one merged patch, kept in storage and
+ * changed under a lock every window shares (see store.ts). Edits apply to the
+ * UI at once and are pushed on enqueue, reconnect, resume and a slow retry;
+ * the same last-write-wins-by-edit-time rule as bets decides conflicts. An
+ * answer settles only the patch that went: what was edited meanwhile stays.
  */
 export function useSettings(
   userId: string | null,
@@ -38,6 +54,7 @@ export function useSettings(
 ): SettingsSync {
   const [server, setServerState] = useState<Settings | null>(null)
   const [pending, setPendingState] = useState<PendingSettings | null>(null)
+  const [held, setHeld] = useState(false)
   const [blocked, setBlockedState] = useState(false)
   const blockedRef = useRef(false)
   const setBlocked = useCallback((next: boolean) => {
@@ -48,12 +65,28 @@ export function useSettings(
   const pendingRef = useRef<PendingSettings | null>(null)
   const syncingRef = useRef(false)
   const noticeRef = useRef(migrationNotice())
+  const failNoticeRef = useRef(migrationNotice())
+  const backoffRef = useRef(backoff())
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canSyncRef = useRef(canSync)
   canSyncRef.current = canSync
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
   const onNoticeRef = useRef(onNotice)
   onNoticeRef.current = onNotice
+
+  const store = useMemo(
+    () =>
+      userId
+        ? queueStore<PendingSettings | null>({
+            lock: `bettracker:queue:settings:${userId}`,
+            load: () => loadSettingsOutbox(userId),
+            save: (p) => saveSettingsOutbox(userId, p),
+            recover: mergeSettingsPending
+          })
+        : null,
+    [userId]
+  )
 
   const setServer = useCallback(
     (s: Settings) => {
@@ -63,29 +96,41 @@ export function useSettings(
     },
     [userId]
   )
-  const setPending = useCallback(
+  const mirror = useCallback(
     (p: PendingSettings | null) => {
       pendingRef.current = p
       setPendingState(p)
-      if (userId) saveSettingsOutbox(userId, p)
+      setHeld(store?.held ?? false)
     },
-    [userId]
+    [store]
+  )
+  const change = useCallback(
+    async (fn: (current: PendingSettings | null) => PendingSettings | null) => {
+      if (!store) return false
+      const r = await store.update(fn)
+      mirror(r.value)
+      return r.saved
+    },
+    [store, mirror]
   )
 
-  // A request failed. Unreachable is silent; a missing migration is said once,
-  // not on every retry or resume, until a request goes through again.
+  // A request failed. Unreachable is silent; a missing migration, a key
+  // Supabase refuses and a passing server failure are said once per episode,
+  // until a request goes through again; a refusal for good, each time.
   const report = useCallback((err: unknown) => {
     const failure = classifySyncError(err)
     if (failure === 'rejected') onErrorRef.current(err)
     else if (failure === 'behind') {
       setBlocked(true)
       if (noticeRef.current.found()) onErrorRef.current(err)
-    }
-  }, [])
+    } else if ((failure === 'retry' || failure === 'paused') && !(err instanceof SignedOutError) && failNoticeRef.current.found()) onErrorRef.current(err)
+  }, [setBlocked])
   const reached = useCallback(() => {
     noticeRef.current.clear()
+    failNoticeRef.current.clear()
+    backoffRef.current.reset()
     setBlocked(false)
-  }, [])
+  }, [setBlocked])
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
@@ -94,40 +139,60 @@ export function useSettings(
       reached()
       setServer(row ?? { ...DEFAULT_SETTINGS })
     } catch (err) {
-      report(err)
+      // A read is retried by the timer anyway: only what it can't fix is said.
+      const failure = classifySyncError(err)
+      if (failure !== 'retry' && failure !== 'paused') report(err)
     }
   }, [userId, setServer, report, reached])
 
+  const syncNowRef = useRef<() => Promise<void>>(async () => {})
+
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current || !canSyncRef.current || !userId || !pendingRef.current) return
+    if (syncingRef.current || !canSyncRef.current || !userId || !store || !pendingRef.current) return
+    if (backoffRef.current.waiting) return
     syncingRef.current = true
+    let out: SettingsPushResult | null
     try {
-      const out = await pushSettings({
-        pending: () => pendingRef.current,
-        setPending,
-        save: (p) => saveSettings(p.patch, p.editedAt)
-      })
-      if (out?.stop === 'saved') {
-        reached()
-        setServer(out.row)
-      } else if (out?.stop === 'conflict') {
-        reached()
-        onNoticeRef.current?.('conflict')
-        await refresh()
-      } else if (out?.stop === 'behind' || out?.stop === 'rejected') report(out.error)
+      out = await withLock(`bettracker:drain:settings:${userId}`, () =>
+        pushSettings({
+          pending: () => store.read(),
+          settle: async (sent) => void (await change((current) => afterSettingsAnswer(current, sent))),
+          save: (p) => saveSettings(p.patch, p.editedAt)
+        })
+      )
     } finally {
       syncingRef.current = false
     }
-  }, [userId, setPending, setServer, refresh, report, reached])
+    if (out?.stop === 'saved') {
+      reached()
+      setServer(out.row)
+    } else if (out?.stop === 'conflict') {
+      reached()
+      onNoticeRef.current?.('conflict')
+      await refresh()
+    } else if (out?.stop === 'retry') {
+      report(out.error)
+      const wait = backoffRef.current.failed(out.error)
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = setTimeout(() => void syncNowRef.current(), wait)
+    } else if (out?.stop === 'behind' || out?.stop === 'rejected' || out?.stop === 'paused') report(out.error)
+    // Answered (saved, beaten or refused): an edit made while it was out is
+    // still pending, and goes now.
+    if ((out?.stop === 'saved' || out?.stop === 'conflict' || out?.stop === 'rejected') && pendingRef.current) setTimeout(() => void syncNowRef.current(), 0)
+  }, [userId, store, change, setServer, refresh, report, reached])
+  syncNowRef.current = syncNow
 
   // Boot from the device cache.
   useEffect(() => {
     serverRef.current = null
     pendingRef.current = null
     noticeRef.current.clear()
+    failNoticeRef.current.clear()
+    backoffRef.current.reset()
     setBlocked(false)
     setServerState(null)
     setPendingState(null)
+    setHeld(false)
     if (!userId) return
     const cached = loadSettingsCache(userId)
     const queued = loadSettingsOutbox(userId)
@@ -135,7 +200,29 @@ export function useSettings(
     pendingRef.current = queued
     if (cached) setServerState(cached)
     setPendingState(queued)
-  }, [userId])
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
+  }, [userId, setBlocked])
+
+  // Another window changed the pending patch, or refreshed the cached row.
+  useEffect(() => {
+    if (!userId || !store) return
+    const keys = queueKeys(userId)
+    const onStorage = (e: StorageEvent): void => {
+      if ((e.key === keys.settings || e.key === null) && !store.held) mirror(store.read())
+      if (e.key === keys.settingsCache) {
+        const cached = loadSettingsCache(userId)
+        if (cached) {
+          serverRef.current = cached
+          setServerState(cached)
+        }
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [userId, store, mirror])
 
   useEffect(() => {
     if (!userId || !canSync) return
@@ -170,15 +257,23 @@ export function useSettings(
   }, [userId, syncNow, refresh])
 
   const update = useCallback(
-    (patch: SettingsPatch) => {
-      const merged: PendingSettings = { patch: { ...(pendingRef.current?.patch ?? {}), ...patch }, editedAt: new Date().toISOString() }
-      setPending(merged)
-      setTimeout(() => void syncNow(), 0)
+    async (patch: SettingsPatch): Promise<boolean> => {
+      const editedAt = new Date().toISOString()
+      // Merged into what is pending now, other windows' edits included.
+      const saved = await change((current) => ({ patch: { ...(current?.patch ?? {}), ...patch }, editedAt }))
+      setTimeout(() => void syncNowRef.current(), 0)
+      return saved
     },
-    [setPending, syncNow]
+    [change]
   )
+
+  const saveAgain = useCallback(async (): Promise<boolean> => {
+    const saved = await change((current) => current)
+    if (saved) setTimeout(() => void syncNowRef.current(), 0)
+    return saved
+  }, [change])
 
   const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}) }
 
-  return { settings, dirty: pending !== null, blocked, loaded: server !== null || blocked, update }
+  return { settings, dirty: pending !== null, blocked, loaded: server !== null || blocked, unsaved: held && pending !== null, update, saveAgain }
 }

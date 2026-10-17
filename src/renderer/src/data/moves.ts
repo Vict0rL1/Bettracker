@@ -56,7 +56,7 @@ export async function getMoves(): Promise<BankrollMove[]> {
 export async function addMove(input: MoveInput, id: string, stamp: string): Promise<BankrollMove> {
   const clean = normalizeMove(input)
   const user_id = await signedInUserId()
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from(TABLE)
     .insert({ id, user_id, date: clean.date, amount: clean.amount, note: clean.note, updated_at: stamp })
     .select()
@@ -65,10 +65,12 @@ export async function addMove(input: MoveInput, id: string, stamp: string): Prom
     if (error.code === '23505') {
       // Already inserted by an earlier attempt whose response we never saw.
       // Never an upsert: that could overwrite a newer edit made elsewhere.
-      const { data: existing } = await supabase.from(TABLE).select('*').eq('id', id).single()
-      if (existing) return toMove(existing as Row)
+      const back = await supabase.from(TABLE).select('*').eq('id', id).maybeSingle()
+      // Couldn't tell: the same failure, tried again later.
+      if (back.error) throw describeError(back.error, back.status)
+      if (back.data) return toMove(back.data as Row)
     }
-    throw describeError(error)
+    throw describeError(error, status)
   }
   return toMove(data as Row)
 }
@@ -80,20 +82,20 @@ export async function addMove(input: MoveInput, id: string, stamp: string): Prom
  */
 export async function updateMove(id: string, input: MoveInput, editedAt: string): Promise<BankrollMove | null> {
   const clean = normalizeMove(input)
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from(TABLE)
     .update({ date: clean.date, amount: clean.amount, note: clean.note, updated_at: editedAt })
     .eq('id', id)
     .lte('updated_at', editedAt)
     .select()
     .maybeSingle()
-  if (error) throw describeError(error)
+  if (error) throw describeError(error, status)
   return data ? toMove(data as Row) : null
 }
 
 export async function deleteMove(id: string): Promise<boolean> {
-  const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
-  if (error) throw describeError(error)
+  const { error, count, status } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
+  if (error) throw describeError(error, status)
   return (count ?? 0) > 0
 }
 

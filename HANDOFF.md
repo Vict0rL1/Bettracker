@@ -138,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 530 tests unitarios (vitest)
+npm test            # 577 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 86 comprobaciones Playwright, sin backend
+npm run test:e2e    # 102 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -177,7 +177,7 @@ ediciones con la regla de conflicto, borrados, upserts; latencia y caída de
 conexión opcionales) para probar la sincronización de verdad. Es el mismo
 que usa `npm run demo` (`src/renderer/src/demo/fakeSupabase.ts`), con su
 estado bajo `e2e:` en vez de `demo:`; `e2e/demo.spec.ts` prueba la demo tal
-cual se construye (`npm run demo:serve`, en el puerto 4172). `'behind'` es
+cual se construye (`npm run demo:serve`, en el puerto 4182). `'behind'` es
 una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
 (`e2e:migrated-005` la "ejecuta"). La opción `moves` siembra la caché de
 ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
@@ -338,6 +338,46 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   ya existente, demasiados intentos, registro desactivado y correo no
   aceptado, en en y es. Se guardan tal cual y se traducen al mostrarlos; lo
   que no se reconoce sale con las palabras de Supabase, como antes.
+- **Auditoría de sincronización (seis defectos, todos con test que los
+  reproduce con el código anterior):**
+  1. *Reintentar una importación pisaba ediciones nuevas.* El upsert de
+     `addBets` sobrescribía las filas que ya habían llegado (y bajaba su
+     `updated_at`). Ahora la operación guarda `done` (filas confirmadas,
+     por lotes de 250), el reintento empieza después y usa `ON CONFLICT DO
+     NOTHING`: una fila que ya está se queda como la tiene el servidor.
+     `applyOutbox` y `reconcile` muestran la del servidor. El Deshacer de un
+     borrado sigue siendo un alta normal (no pasa por aquí).
+     `supabase/tests/checks.sql` (9) lo comprueba con RLS en Postgres.
+  2. *Varias pestañas se pisaban la cola.* Cada una escribía la cola que
+     leyó al arrancar. Ahora la cola guardada es la verdad: cada cambio es
+     leer-modificar-escribir bajo un candado entre ventanas (Web Locks,
+     `bettracker:queue:<cola>:<usuario>`), y solo una ventana la vacía a la
+     vez (`bettracker:drain:…`), leyéndola antes de cada operación y
+     enviando la versión guardada al marcarla `sent`. Las demás se enteran
+     por el evento `storage`. Apuestas, movimientos y ajustes. Mismas
+     claves y formato: nada que migrar. Sin Web Locks (http en la red
+     local) el candado es solo de la ventana, como antes.
+  3. *Un fallo al guardar se daba por guardado.* La caché se puede perder
+     (`writeExpendable`); la cola no (`writeDurable`): si no cabe, se tiran
+     las cachés y se reintenta, y si aun así falla la cola se queda en la
+     ventana (`held`), sigue sincronizando, el aviso lo dice y el toast no
+     dice "añadida". "Reintentar" la guarda cuando hay sitio.
+  4. *Errores temporales tiraban la cola.* `describeError` guarda status y
+     código (`SyncError`). 5xx, 408, 429 y códigos PGRST000–003, 08…, 40001,
+     40P01, 53…, 57P01–03, 57014 → `'retry'` con espera creciente (1 s, 2 s…
+     hasta 2 min, ±20 %; un 429 empieza en 5 s); 401, clave o JWT →
+     `'paused'`; solo un rechazo definitivo saca el cambio, a la lista de
+     rechazadas (`bettracker:refused:<usuario>`, `moves-refused`), visible
+     tras recargar, con "Volver a enviar" y "Descartar". Sesión terminada →
+     insignia "Sesión cerrada" y "Volver a entrar" sin borrar la cola.
+  5. *Un rechazo de ajustes borraba un parche más nuevo.* Ahora cualquier
+     respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
+     editado mientras tanto sigue pendiente y sale enseguida.
+  6. *Un `max-rows` menor truncaba el historial.* `readAll` avanza por las
+     filas recibidas y para con el total contado (o, sin total, con una
+     página vacía). Apuestas y movimientos.
+- **Puertos de la suite e2e**: 4183 (build), 4182 (demo), 4181 (dev), en
+  `e2e/urls.ts`; ninguna spec lleva una URL fija.
 - **El correo de confirmación vuelve a la app**: `signUp` pide
   `emailRedirectTo` = la dirección actual (solo http/https; Supabase la usa si
   está en Redirect URLs, si no, su Site URL). Un enlace caducado o ya abierto
@@ -351,8 +391,8 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   borrado no encontraban la fila y salían de la cola, y una lectura volvía
   vacía y borraba la copia del dispositivo. Ahora cada lectura y cada envío
   piden antes la sesión; sin ella, o con una clave que Supabase no acepta o
-  un JWT caducado (`isAuthError`), el cambio se queda en cola como sin
-  conexión y sale tras el siguiente inicio de sesión. Un rechazo de RLS sigue
+  un JWT caducado (`isAuthError`), el cambio se queda en cola, en pausa
+  (`'paused'`), y sale tras el siguiente inicio de sesión. Un rechazo de RLS sigue
   siendo un rechazo: con la sesión pedida antes, ya no viene de esto.
 - **En el móvil** (revisado con capturas a 320, 360, 390 y 430 px, en los dos
   temas y los dos idiomas):
@@ -517,15 +557,20 @@ src/renderer/src/data/
   moves.ts, useMoves.ts                   ingresos y retiradas: servidor y sincronización
   readAll.ts                              leer todas las filas, por páginas
   drain.ts                                vaciar la cola: qué sale y qué se queda
-  errors.ts                               leer un fallo: sin conexión, sin sesión, falta migración, rechazo
+  errors.ts                               leer un fallo: sin conexión, en pausa, reintentar, falta migración, rechazo
   session.ts                              ninguna petición de las filas de un usuario sin su sesión
+  store.ts                                las colas en el almacenamiento, compartidas entre ventanas con candado
+  useOpQueue.ts                           una cola de operaciones (apuestas o movimientos): candados, rechazadas
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       86 comprobaciones (mobile.spec.ts: el móvil;
-                                    setup.spec.ts y login.spec.ts: el .env y el inicio de sesión)
+e2e/*.spec.ts                       102 comprobaciones (mobile.spec.ts: el móvil;
+                                    setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
+                                    resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
+                                    importación cortada, paginación, ajustes en vuelo)
+e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

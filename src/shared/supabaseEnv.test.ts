@@ -37,18 +37,26 @@ describe('checkSupabaseEnv: nothing set', () => {
 
 describe('checkSupabaseEnv: what passes', () => {
   it.each<[string, string, string, EnvCheck]>([
-    ['a project URL and its publishable key', URL_OK, PUBLISHABLE, { status: 'ok', legacyKey: false }],
-    ['the old anon key of the same project, flagged as old', URL_OK, anon(), { status: 'ok', legacyKey: true }],
-    ['a trailing slash', `${URL_OK}/`, PUBLISHABLE, { status: 'ok', legacyKey: false }],
-    ['capitals in the address', `https://${REF.toUpperCase()}.supabase.co`, anon(), { status: 'ok', legacyKey: true }],
-    ['spaces around both', `  ${URL_OK}  `, `  ${PUBLISHABLE}\n`, { status: 'ok', legacyKey: false }],
+    ['a project URL and its publishable key', URL_OK, PUBLISHABLE, { status: 'ok', legacyKey: false, warnings: [] }],
+    ['the old anon key of the same project, flagged as old', URL_OK, anon(), { status: 'ok', legacyKey: true, warnings: [] }],
+    ['a trailing slash', `${URL_OK}/`, PUBLISHABLE, { status: 'ok', legacyKey: false, warnings: [] }],
+    ['capitals in the address', `https://${REF.toUpperCase()}.supabase.co`, anon(), { status: 'ok', legacyKey: true, warnings: [] }],
+    ['spaces around both', `  ${URL_OK}  `, `  ${PUBLISHABLE}\n`, { status: 'ok', legacyKey: false, warnings: [] }],
     // `supabase start`: plain http on this machine, and keys without a ref.
-    ['the CLI’s local stack', 'http://127.0.0.1:54321', jwt({ iss: 'supabase-demo', role: 'anon', exp: 1983812996 }), { status: 'ok', legacyKey: true }],
+    ['the CLI’s local stack', 'http://127.0.0.1:54321', jwt({ iss: 'supabase-demo', role: 'anon', exp: 1983812996 }), { status: 'ok', legacyKey: true, warnings: [] }],
     // A vanity subdomain is not the ref, so there is nothing to compare.
-    ['a vanity subdomain', 'https://my-bets.supabase.co', anon(), { status: 'ok', legacyKey: true }],
-    ['a self-hosted Supabase under a path', 'https://example.com/supabase', anon(OTHER), { status: 'ok', legacyKey: true }]
+    ['a vanity subdomain', 'https://my-bets.supabase.co', anon(), { status: 'ok', legacyKey: true, warnings: [] }],
+    ['a self-hosted Supabase under a path', 'https://example.com/supabase', anon(OTHER), { status: 'ok', legacyKey: true, warnings: [] }]
   ])('%s', (_name, url, key, expected) => {
     expect(checkSupabaseEnv(url, key)).toEqual(expected)
+  })
+
+  // Read as examples left in, they stopped working setups.
+  it('takes words and brackets as an example only where an example puts them', () => {
+    expect(codes('http://[::1]:54321', PUBLISHABLE)).toEqual([])
+    expect(codes('https://example.com/project-ref', PUBLISHABLE)).toEqual([])
+    expect(codes('https://your-projects.example.com', PUBLISHABLE)).toEqual([])
+    expect(codes('https://mybettrackerdatabase.supabase.co', PUBLISHABLE)).toEqual([])
   })
 
   it('accepts only URLs that supabase-js accepts, and stops the ones it would throw on (a blank page)', () => {
@@ -151,11 +159,16 @@ describe('checkSupabaseEnv: the key', () => {
     expect(problems(URL_OK, REF)).toEqual([{ code: 'key-unknown' }])
   })
 
-  it('an anon key from another project: what Supabase calls "Invalid API key"', () => {
-    expect(problems(URL_OK, anon(OTHER))).toEqual([{ code: 'key-other-project', keyRef: OTHER, urlRef: REF }])
+  // A warning, not a stop: a vanity subdomain of 20 letters looks like a ref.
+  it('an anon key from another project, what Supabase calls "Invalid API key", is said without stopping anything', () => {
+    expect(checkSupabaseEnv(URL_OK, anon(OTHER))).toEqual({
+      status: 'ok',
+      legacyKey: true,
+      warnings: [{ code: 'key-other-project', keyRef: OTHER, urlRef: REF }]
+    })
     // Nothing to compare with a custom domain, a vanity subdomain or a broken URL.
-    expect(codes('https://api.example.com', anon(OTHER))).toEqual([])
-    expect(codes('https://my-bets.supabase.co', anon(OTHER))).toEqual([])
+    expect(checkSupabaseEnv('https://api.example.com', anon(OTHER))).toMatchObject({ status: 'ok', warnings: [] })
+    expect(checkSupabaseEnv('https://my-bets.supabase.co', anon(OTHER))).toMatchObject({ status: 'ok', warnings: [] })
     expect(codes(`${URL_OK}/rest/v1`, anon(OTHER))).toEqual(['url-path'])
   })
 })
@@ -241,6 +254,12 @@ describe('supabaseEnvCheck (the build)', () => {
     const old = run({ VITE_SUPABASE_URL: URL_OK, VITE_SUPABASE_ANON_KEY: anon() })
     expect(old.go).not.toThrow()
     expect(old.warn).toHaveBeenCalledWith(expect.stringContaining('retiring the old keys by the end of 2026'))
+  })
+
+  it('builds with a key from another project, saying so', () => {
+    const { go, warn } = run({ VITE_SUPABASE_URL: URL_OK, VITE_SUPABASE_ANON_KEY: anon(OTHER) })
+    expect(go).not.toThrow()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`from another Supabase project (${OTHER})`))
   })
 
   it('builds without a .env, saying that build opens on the setup screen', () => {

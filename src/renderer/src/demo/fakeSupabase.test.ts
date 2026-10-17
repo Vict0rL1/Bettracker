@@ -6,6 +6,7 @@ interface Result {
   data: unknown
   error: { message: string; code: string } | null
   count?: number
+  status?: number
 }
 interface Chain extends PromiseLike<Result> {
   select(columns?: string, opts?: unknown): Chain
@@ -16,7 +17,7 @@ interface Chain extends PromiseLike<Result> {
   maybeSingle(): Chain
   insert(payload: unknown): Chain
   update(payload: unknown): Chain
-  upsert(payload: unknown): Chain
+  upsert(payload: unknown, opts?: { ignoreDuplicates?: boolean }): Chain
   delete(): Chain
 }
 interface Fake {
@@ -27,6 +28,7 @@ interface Fake {
     signOut(): Promise<unknown>
   }
   from(table: string): Chain
+  __endSession(): void
 }
 
 const USER = { id: 'u1', email: 'demo@example.com' }
@@ -221,7 +223,7 @@ describe('fake Supabase: an up-to-date database', () => {
 })
 
 describe('fake Supabase: no connection', () => {
-  const failedFetch = { data: null, error: { message: 'TypeError: Failed to fetch', code: '' } }
+  const failedFetch = { data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0 }
 
   it('fails every request while the e2e connection is down', async () => {
     const fake = install('e2e:', false)
@@ -243,5 +245,58 @@ describe('fake Supabase: no connection', () => {
     const fake = install('e2e:', false)
     migrate('e2e:')
     expect((await fake.from('entries').select()).error).toBeNull()
+  })
+})
+
+// What the e2e suite uses to play a server that misbehaves the way real ones do.
+describe('fake Supabase: a server that misbehaves on purpose', () => {
+  it('answers no more than max-rows rows a read, whatever page was asked for', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:rows', JSON.stringify(Array.from({ length: 700 }, (_, i) => ({ id: `r${i}` }))))
+    localStorage.setItem('e2e:max-rows', '300')
+    const first = await fake.from('entries').select('*', { count: 'exact' }).range(0, PAGE_SIZE - 1)
+    expect((first.data as unknown[]).length).toBe(300)
+    expect(first.count).toBe(700)
+    // As the app reads it: page by page from what came, all 700.
+    expect(await readAll((from, to) => fake.from('entries').select('*', { count: 'exact' }).range(from, to))).toHaveLength(700)
+  })
+
+  it('refuses the next writes with the status asked for, changing nothing', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:fail', JSON.stringify({ status: 503, message: 'Service Unavailable', times: 2 }))
+    for (let i = 0; i < 2; i++) expect(await fake.from('entries').insert({ id: 'a' })).toMatchObject({ error: { message: 'Service Unavailable' }, status: 503 })
+    expect(await fake.from('entries').insert({ id: 'a' })).toMatchObject({ error: null, status: 201 })
+    expect(JSON.parse(localStorage.getItem('e2e:rows') ?? '[]')).toHaveLength(1)
+  })
+
+  it('drops the connection for writes after the ones it was told to let through', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:writes-left', '1')
+    expect(await fake.from('entries').insert({ id: 'a' })).toMatchObject({ error: null })
+    expect(await fake.from('entries').insert({ id: 'b' })).toMatchObject({ error: { message: 'TypeError: Failed to fetch' }, status: 0 })
+    expect(JSON.parse(localStorage.getItem('e2e:rows') ?? '[]')).toHaveLength(1)
+  })
+
+  it('leaves a row that is there as it is on an upsert that ignores duplicates', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:rows', JSON.stringify([{ id: 'a', note: 'edited elsewhere', updated_at: 'T9' }]))
+    const out = await fake.from('entries').upsert([{ id: 'a', note: 'import', updated_at: 'T1' }, { id: 'b', note: 'import', updated_at: 'T1' }], { ignoreDuplicates: true })
+    expect(out.count).toBe(1)
+    const rows = JSON.parse(localStorage.getItem('e2e:rows') ?? '[]') as { id: string; note: string }[]
+    expect(rows.find((r) => r.id === 'a')?.note).toBe('edited elsewhere')
+    expect(rows.find((r) => r.id === 'b')?.note).toBe('import')
+  })
+
+  it('ends the session when told to, saying SIGNED_OUT', async () => {
+    const fake = install('e2e:', false)
+    const events: string[] = []
+    fake.auth.onAuthStateChange((event) => void events.push(event))
+    fake.__endSession()
+    expect(events).toEqual(['SIGNED_OUT'])
+    expect((await fake.auth.getSession()).data.session).toBeNull()
   })
 })

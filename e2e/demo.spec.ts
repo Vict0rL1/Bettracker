@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
+import { APP_URL, DEMO_URL } from './urls'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
-test.use({ baseURL: 'http://localhost:4172' })
+test.use({ baseURL: DEMO_URL })
 
 const storedBets = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as unknown[]).length)
@@ -64,24 +65,51 @@ test.describe('demo', () => {
 
   // Signing out on another device ends the session on this one too. A change
   // that went out without it used to be refused, dropped from the queue, and
-  // lost; now it waits for the session to come back.
-  test('a change made after the session ended elsewhere waits for it, instead of being lost', async ({ page }) => {
+  // lost; and with no way back but signing out, which wipes the queue.
+  test('a change made after the session ended elsewhere waits for a new sign-in, which sends it', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
-    await page.evaluate(() => localStorage.setItem('demo:signed-out', '1'))
-
+    await page.context().setOffline(true)
     await addLoss(page, '15')
-    await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
+    // Signed out on another device meanwhile: this one's session ends.
+    await page.evaluate(() => (window as unknown as { __supabaseMock: { __endSession(): void } }).__supabaseMock.__endSession())
+    await page.context().setOffline(false)
+
+    await expect(page.locator('.sync-badge')).toHaveText('Signed out · 1 queued')
+    await expect(page.locator('.signed-out-notice')).toContainText('1 change wait here')
     await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
     expect(await storedBets(page)).toBe(0)
 
-    // The session is back (signed in again): the queued bet goes through.
-    await page.evaluate(() => {
-      localStorage.removeItem('demo:signed-out')
-      window.dispatchEvent(new Event('online'))
-    })
+    // Sign in again, without signing out: the queue is still there and goes.
+    await page.locator('.notice-sign-in').click()
+    const form = page.locator('.auth-card')
+    await form.locator('input[type=email]').fill('demo@example.com')
+    await form.locator('input[type=password]').fill('anything')
+    await form.locator('.auth-submit').click()
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
     expect(await storedBets(page)).toBe(1)
+  })
+
+  test('the way back to the sign-in form also leads back to this device’s data', async ({ page }) => {
+    await page.goto('/')
+    await addLoss(page, '15')
+    await page.evaluate(() => (window as unknown as { __supabaseMock: { __endSession(): void } }).__supabaseMock.__endSession())
+    await page.locator('.notice-sign-in').click()
+    await page.locator('.login-back').click()
+    await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
+  })
+
+  // A key or URL in .env was written into the demo's bundle (and the demo is
+  // served on the local network).
+  test('carries nothing of .env in its bundle', async ({ page }) => {
+    const html = await (await page.request.get('/')).text()
+    const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1])
+    expect(scripts.length).toBeGreaterThan(0)
+    for (const src of scripts) {
+      const js = await (await page.request.get(src)).text()
+      expect(js).not.toContain('demomustnotshipthis')
+      expect(js).not.toContain('demo_must_not_ship_this')
+    }
   })
 
   test('starts as an up-to-date database: a deposit syncs', async ({ page }) => {
@@ -127,7 +155,7 @@ test.describe('demo', () => {
 
 test.describe('the real app', () => {
   // The production build the rest of the suite runs (see playwright.config.ts), here without the harness.
-  test.use({ baseURL: 'http://localhost:4173' })
+  test.use({ baseURL: APP_URL })
 
   test('has none of the demo in it: no bar, no fake backend, so signed out it asks you to sign in', async ({ page }) => {
     await page.goto('/')

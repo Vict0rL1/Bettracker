@@ -34,10 +34,24 @@ export interface FakeSupabaseConfig {
  *                    the wire while the test keeps using the app;
  *  - `e2e:writes`    how many write requests have been answered, so a test
  *                    can wait for a retry to have happened;
+ *  - `e2e:writes-started`  how many write requests have gone out, answered
+ *                    or not, so a test can act while one is on the wire;
  *  - `e2e:down`      set: the connection is down, and every request fails
- *                    the way supabase-js reports a failed fetch.
- * The demo adds `demo:signed-out`. A row written without `updated_at` gets
- * the time it was answered, as the server's now() would.
+ *                    the way supabase-js reports a failed fetch;
+ *  - `e2e:max-rows`  the most rows one read answers (PostgREST's max-rows),
+ *                    when lower than the page asked for;
+ *  - `e2e:fail`      `{ status, message, code?, times }`: the next `times`
+ *                    writes are refused with that status (a 503, a 429, a
+ *                    400 for good) and change nothing;
+ *  - `e2e:writes-left`  that many more writes go through; after them the
+ *                    connection drops for writes (an import cut halfway);
+ *  - `e2e:signed-out`  the session has ended (see `__endSession`).
+ * A row written without `updated_at` gets the time it was answered, as the
+ * server's now() would. Answers carry the HTTP status PostgREST would give.
+ *
+ * `window.__supabaseMock.__endSession()` ends the session the way a sign-out
+ * on another device does once this device's token runs out: getSession
+ * answers none from then on, and the app hears SIGNED_OUT.
  *
  * The e2e harness hands this function to Playwright's `addInitScript`, which
  * sends its source text to the page: it must not use anything from outside
@@ -55,11 +69,14 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     lteSet: boolean
     /** `.range(from, to)`: the rows of one page, both ends included. */
     range: [number, number] | null
+    /** upsert's `ignoreDuplicates`: ON CONFLICT DO NOTHING. */
+    ignoreDuplicates: boolean
   }
   interface Answer {
     data: unknown
     error: { message: string; code: string } | null
     count?: number
+    status?: number
   }
   type Listener = (event: string, session: unknown) => void
 
@@ -75,6 +92,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   const migrated = (): boolean => flag('migrated')
   const latency = (): number => Number(localStorage.getItem(key('latency')) || 0)
   const down = (): boolean => flag('down') || (cfg.demo && typeof navigator !== 'undefined' && navigator.onLine === false)
+  const maxRows = (): number => Number(localStorage.getItem(key('max-rows')) || 0)
   const NO_COLUMN = { message: "Could not find the 'closing_odds' column of 'entries' in the schema cache", code: 'PGRST204' }
   const NO_TABLE = { message: "Could not find the table 'public.user_settings' in the schema cache", code: 'PGRST205' }
   const NO_MOVES_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
@@ -106,8 +124,11 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     const all = read<Row[]>(name, [])
     if (q.action === 'select') {
       if (q.eq.id !== undefined) return { data: all.find((r) => r.id === q.eq.id) ?? null, error: null }
-      // A list is read page by page (data/readAll.ts): one page, and the count of them all.
-      const page = q.range ? all.slice(q.range[0], q.range[1] + 1) : all
+      // A list is read page by page (data/readAll.ts): one page, and the count
+      // of them all. Never more rows than max-rows, whatever was asked.
+      const cap = maxRows()
+      const end = q.range ? q.range[1] + 1 : all.length
+      const page = all.slice(q.range ? q.range[0] : 0, cap > 0 ? Math.min(end, (q.range ? q.range[0] : 0) + cap) : end)
       return { data: page, error: null, count: all.length }
     }
     if (q.action === 'delete') {
@@ -133,20 +154,46 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     if (q.action === 'upsert' && name === 'rows') {
       const payload = q.payload as Row[]
       const byId = new Map(all.map((r) => [r.id, r]))
-      for (const r of payload) byId.set(r.id, { ...(byId.get(r.id) ?? {}), ...stamp(r) })
+      let written = 0
+      for (const r of payload) {
+        // ignoreDuplicates: a row already there stays as it is.
+        if (q.ignoreDuplicates && byId.has(r.id)) continue
+        byId.set(r.id, { ...(byId.get(r.id) ?? {}), ...stamp(r) })
+        written++
+      }
       write(name, [...byId.values()])
-      return { data: null, error: null, count: payload.length }
+      return { data: null, error: null, count: written }
     }
     return { data: null, error: unmodelled(name + ' ' + q.action) }
   }
 
+  const STATUS: Record<string, number> = { '22007': 400, '23505': 409, PGRST204: 400, PGRST205: 404, FAKE: 501 }
   function answer(q: Query): Answer {
+    const out = respond(q)
+    return { ...out, status: out.error ? (out.status ?? STATUS[out.error.code] ?? 400) : q.action === 'insert' ? 201 : 200 }
+  }
+
+  function respond(q: Query): Answer {
     // Postgres refuses a conflict check against something that is no time (an edit with no editedAt).
     if (q.lteSet && (typeof q.lte !== 'string' || isNaN(Date.parse(q.lte)))) {
       return { data: null, error: { message: `invalid input syntax for type timestamp with time zone: "${String(q.lte)}"`, code: '22007' } }
     }
-    if (down()) return { data: null, error: { message: 'TypeError: Failed to fetch', code: '' } }
-    if (q.action !== 'select') localStorage.setItem(key('writes'), String(Number(localStorage.getItem(key('writes')) || 0) + 1))
+    const lost = { data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0 }
+    if (down()) return lost
+    if (q.action !== 'select') {
+      const left = localStorage.getItem(key('writes-left'))
+      if (left !== null) {
+        if (Number(left) <= 0) return lost
+        localStorage.setItem(key('writes-left'), String(Number(left) - 1))
+      }
+      const fail = read<{ status: number; message: string; code?: string; times: number } | null>('fail', null)
+      if (fail && fail.times > 0) {
+        if (fail.times === 1) localStorage.removeItem(key('fail'))
+        else write('fail', { ...fail, times: fail.times - 1 })
+        return { data: null, error: { message: fail.message, code: fail.code ?? '' }, status: fail.status }
+      }
+      localStorage.setItem(key('writes'), String(Number(localStorage.getItem(key('writes')) || 0) + 1))
+    }
     if (q.table === 'user_settings') return settings(q)
     if (q.table === 'bankroll_moves') {
       if (!flag('migrated-005')) return { data: null, error: NO_MOVES_TABLE }
@@ -156,7 +203,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   }
 
   function from(tableName: string) {
-    const q: Query = { table: tableName, action: 'select', payload: null, eq: {}, lte: undefined, lteSet: false, range: null }
+    const q: Query = { table: tableName, action: 'select', payload: null, eq: {}, lte: undefined, lteSet: false, range: null, ignoreDuplicates: false }
     const chain = {
       select: () => chain,
       order: () => chain,
@@ -185,9 +232,10 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
         q.payload = p
         return chain
       },
-      upsert(p: unknown) {
+      upsert(p: unknown, opts?: { ignoreDuplicates?: boolean }) {
         q.action = 'upsert'
         q.payload = p
+        q.ignoreDuplicates = opts?.ignoreDuplicates === true
         return chain
       },
       delete() {
@@ -195,6 +243,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
         return chain
       },
       then<A, B = never>(resolve?: (value: Answer) => A | PromiseLike<A>, reject?: (reason: unknown) => B | PromiseLike<B>): Promise<A | B> {
+        if (q.action !== 'select') localStorage.setItem(key('writes-started'), String(Number(localStorage.getItem(key('writes-started')) || 0) + 1))
         return new Promise((r) => setTimeout(r, latency()))
           .then(() => answer(q))
           .then(resolve, reject)
@@ -203,9 +252,9 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     return chain
   }
 
-  // Signing in and out: the demo's own; the e2e session never ends.
+  // Signing in and out: the demo's own; the e2e session ends only when a test ends it.
   const listeners = new Set<Listener>()
-  const current = (): typeof session | null => (cfg.demo && flag('signed-out') ? null : session)
+  const current = (): typeof session | null => (flag('signed-out') ? null : session)
   const signIn = () => {
     // Signing in needs the server, as it does with Supabase.
     if (down()) return Promise.resolve({ data: { session: null, user: null }, error: { message: 'Failed to fetch', status: 0 } })
@@ -234,6 +283,10 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       }
     },
     from,
+    __endSession() {
+      localStorage.setItem(key('signed-out'), '1')
+      for (const fn of listeners) fn('SIGNED_OUT', null)
+    },
     channel() {
       const channel = { on: () => channel, subscribe: () => channel }
       return channel

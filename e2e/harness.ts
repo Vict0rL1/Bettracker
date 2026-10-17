@@ -187,6 +187,10 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
         if (server.settingsRow) localStorage.setItem('e2e:settings', JSON.stringify(server.settingsRow))
       }
       if (outbox) localStorage.setItem(`bettracker:outbox:${user.id}`, JSON.stringify(outbox))
+      // No backend: a device whose session ran out and can't be renewed
+      // offline. Supabase keeps it stored, so the app does not take it for a
+      // session that ended for good (signed out on another device).
+      if (!server) localStorage.setItem('bettracker-auth', JSON.stringify({ e2e: 'a session this device cannot renew offline' }))
     },
     {
       mock: server ? null : MOCK,

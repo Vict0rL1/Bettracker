@@ -78,6 +78,23 @@ export const en = {
   'sync.behind': 'Update needed',
   'sync.behindN': 'Update needed · {n} queued',
   'sync.behindTitle': 'Your Supabase database is missing a migration — changes are kept on this device and will sync as soon as it is updated',
+  'sync.paused': 'Not syncing',
+  'sync.pausedN': 'Not syncing · {n} queued',
+  'sync.pausedTitle': 'Supabase refused this app’s key or session — changes are kept on this device and sync once that is sorted out',
+  'sync.retrying': 'Retrying',
+  'sync.retryingN': 'Retrying · {n} queued',
+  'sync.retryingTitle': 'Supabase had a problem — changes are kept on this device and are tried again in a moment',
+  'sync.signedout': 'Signed out',
+  'sync.signedoutN': 'Signed out · {n} queued',
+  'sync.signedoutTitle': 'Your session has ended — changes are kept on this device and sync after you sign in again',
+  'notice.signedOut': 'Your session on this device has ended (signing out on another device ends it everywhere). {changes} wait here: sign in again to sync them.',
+  'notice.signedOutNone': 'Your session on this device has ended (signing out on another device ends it everywhere). Sign in again to sync.',
+  'notice.signIn': 'Sign in again',
+  'notice.unsaved': '{changes} couldn’t be saved on this device: its storage is full or turned off. They are only in this window — keep it open until they sync, or make room and try again.',
+  'notice.saveAgain': 'Try again',
+  'notice.refused': 'Supabase refused {changes} for good: {reason}',
+  'notice.refusedRetry': 'Send again',
+  'notice.refusedDiscard': 'Discard',
 
   // Hero stats
   'hero.monthPL': '{month} P/L',
@@ -273,6 +290,8 @@ export const en = {
   'login.err.email': 'Supabase doesn’t accept that email address. Use a real one.',
   'login.err.link':
     'That email link has expired or was already used. Sign in; if your account isn’t confirmed yet, sign up again with the same email to get a new link.',
+  'login.err.server': 'Supabase couldn’t take that right now. Try again in a moment.',
+  'login.back': 'Back to this device’s data',
 
   // First-run setup screen
   'setup.tag': 'Almost there — connect your Supabase project to enable cross-device sync.',
@@ -359,6 +378,8 @@ export const en = {
   // Bulk editing + undo
   'toast.undo': 'Undo',
   'toast.undone': 'Undone',
+  'toast.notSaved': 'Not saved on this device: it is only in this window until it syncs',
+  'toast.serverRetry': 'Supabase had a problem ({reason}). Your changes are kept on this device and are tried again in a moment.',
   'toast.deletedN': 'Deleted {bets}',
   'toast.retagged': 'Retagged {bets}',
   'toast.retagNothing': 'Nothing to change — those tags are already set',
@@ -533,6 +554,23 @@ export const es: Record<StringKey, string> = {
   'sync.behind': 'Falta actualizar',
   'sync.behindN': 'Falta actualizar · {n} en cola',
   'sync.behindTitle': 'A tu base de datos de Supabase le falta una migración: los cambios se guardan en este dispositivo y se sincronizarán en cuanto se actualice',
+  'sync.paused': 'Sin sincronizar',
+  'sync.pausedN': 'Sin sincronizar · {n} en cola',
+  'sync.pausedTitle': 'Supabase ha rechazado la clave o la sesión de esta app: los cambios se guardan en este dispositivo y se sincronizan cuando se resuelva',
+  'sync.retrying': 'Reintentando',
+  'sync.retryingN': 'Reintentando · {n} en cola',
+  'sync.retryingTitle': 'Supabase ha tenido un problema: los cambios se guardan en este dispositivo y se vuelven a intentar en un momento',
+  'sync.signedout': 'Sesión cerrada',
+  'sync.signedoutN': 'Sesión cerrada · {n} en cola',
+  'sync.signedoutTitle': 'Tu sesión ha terminado: los cambios se guardan en este dispositivo y se sincronizan cuando vuelvas a entrar',
+  'notice.signedOut': 'Tu sesión en este dispositivo ha terminado (cerrar sesión en otro dispositivo la cierra en todos). {changes} esperan aquí: vuelve a entrar para sincronizarlos.',
+  'notice.signedOutNone': 'Tu sesión en este dispositivo ha terminado (cerrar sesión en otro dispositivo la cierra en todos). Vuelve a entrar para sincronizar.',
+  'notice.signIn': 'Volver a entrar',
+  'notice.unsaved': '{changes} no se han podido guardar en este dispositivo: su almacenamiento está lleno o desactivado. Solo están en esta ventana: déjala abierta hasta que se sincronicen, o haz sitio y reinténtalo.',
+  'notice.saveAgain': 'Reintentar',
+  'notice.refused': 'Supabase ha rechazado definitivamente {changes}: {reason}',
+  'notice.refusedRetry': 'Volver a enviar',
+  'notice.refusedDiscard': 'Descartar',
 
   'hero.monthPL': 'P/L de {month}',
   'hero.lifetimePL': 'P/L total',
@@ -720,6 +758,8 @@ export const es: Record<StringKey, string> = {
   'login.err.email': 'Supabase no acepta ese correo. Usa uno real.',
   'login.err.link':
     'Ese enlace del correo ha caducado o ya se usó. Entra; si tu cuenta aún no está confirmada, vuelve a registrarte con el mismo correo para recibir otro enlace.',
+  'login.err.server': 'Supabase no ha podido atenderlo ahora. Vuelve a probar en un momento.',
+  'login.back': 'Volver a los datos de este dispositivo',
 
   'setup.tag': 'Casi listo: conecta tu proyecto de Supabase para sincronizar entre dispositivos.',
   'setup.step1': 'Crea un proyecto gratuito en {site}.',
@@ -798,6 +838,8 @@ export const es: Record<StringKey, string> = {
 
   'toast.undo': 'Deshacer',
   'toast.undone': 'Deshecho',
+  'toast.notSaved': 'No se ha guardado en este dispositivo: solo está en esta ventana hasta que se sincronice',
+  'toast.serverRetry': 'Supabase ha tenido un problema ({reason}). Tus cambios se guardan en este dispositivo y se vuelven a intentar en un momento.',
   'toast.deletedN': '{bets} eliminadas',
   'toast.retagged': '{bets} reetiquetadas',
   'toast.retagNothing': 'Nada que cambiar: esas etiquetas ya están puestas',

@@ -26,6 +26,8 @@ export function authErrorKey(e: AuthFailure): StringKey | null {
   // legacy key, a secret key in a browser. It sends no code.
   if (/\bapi keys?\b/i.test(e.message)) return 'login.err.key'
   if (e.status === 0 || isNetworkError(e.message)) return 'login.err.network'
+  // A 5xx comes from supabase-js with no words of its own ("{}").
+  if (e.status !== undefined && e.status >= 500) return 'login.err.server'
   switch (e.code) {
     case 'invalid_credentials':
       return 'login.err.credentials'

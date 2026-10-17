@@ -32,6 +32,9 @@ export default defineConfig(({ mode }) => ({
   publicDir: 'public',
   envDir: projectDir,
   base: '/',
+  // The demo has its own backend: none of .env goes into it (a key in .env
+  // would otherwise be written into the demo's bundle, and served on the LAN).
+  ...(mode === 'demo' ? { envPrefix: 'BETTRACKER_DEMO_ONLY_' } : {}),
   server: {
     host: true, // expose on the LAN so you can open the dev app on your phone
     // The demo gets its own port, so its browser storage never mixes with the

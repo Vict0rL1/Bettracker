@@ -310,12 +310,26 @@ h2 {
 }
 
 /* Waiting on a migration: amber like syncing, but still — nothing is moving. */
-.sync-badge.behind {
+.sync-badge.behind,
+.sync-badge.retrying {
   background: var(--amber-dim);
   color: var(--amber);
 }
 
 .sync-badge.behind .sync-dot {
+  box-shadow: none;
+  animation: none;
+}
+
+/* Waiting on a sign-in or a key: nothing moves until the user acts. */
+.sync-badge.paused,
+.sync-badge.signedout {
+  background: var(--red-dim);
+  color: var(--red-text);
+}
+
+.sync-badge.paused .sync-dot,
+.sync-badge.signedout .sync-dot {
   box-shadow: none;
   animation: none;
 }
@@ -2296,6 +2310,32 @@ tr.is-pending td {
 
 .loss-change {
   white-space: nowrap;
+}
+
+/* ---- what needs the user for changes to sync: a sign-in, room, a refusal ---- */
+
+.sync-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--red);
+  background: var(--red-dim);
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.sync-notice-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-notice-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* ---- history: selection + bulk bar ---- */

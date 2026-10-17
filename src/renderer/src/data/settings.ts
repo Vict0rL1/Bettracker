@@ -48,8 +48,8 @@ export async function getSettings(): Promise<Settings | null> {
   // Without a session no row would come back, and the defaults would replace
   // this user's settings on the device.
   await signedInUserId()
-  const { data, error } = await supabase.from(TABLE).select('*').maybeSingle()
-  if (error) throw describeError(error)
+  const { data, error, status } = await supabase.from(TABLE).select('*').maybeSingle()
+  if (error) throw describeError(error, status)
   return data ? toSettings(data as Row) : null
 }
 
@@ -65,19 +65,19 @@ export async function saveSettings(patch: SettingsPatch, editedAt: string): Prom
   const fields = { ...toRowPatch(patch), updated_at: editedAt }
 
   const updated = await supabase.from(TABLE).update(fields).eq('user_id', user_id).lte('updated_at', editedAt).select().maybeSingle()
-  if (updated.error) throw describeError(updated.error)
+  if (updated.error) throw describeError(updated.error, updated.status)
   if (updated.data) return toSettings(updated.data as Row)
 
   // No row matched: either there is none yet, or it is newer than this edit.
   const existing = await supabase.from(TABLE).select('updated_at').eq('user_id', user_id).maybeSingle()
-  if (existing.error) throw describeError(existing.error)
+  if (existing.error) throw describeError(existing.error, existing.status)
   if (existing.data) return null
 
   const inserted = await supabase.from(TABLE).insert({ user_id, ...fields }).select().single()
   if (inserted.error) {
     // Lost a race with another device's first save; treat as a conflict.
     if (inserted.error.code === '23505') return null
-    throw describeError(inserted.error)
+    throw describeError(inserted.error, inserted.status)
   }
   return toSettings(inserted.data as Row)
 }

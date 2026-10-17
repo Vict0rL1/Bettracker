@@ -23,6 +23,22 @@ export const envProblems: readonly EnvProblem[] = env?.status === 'bad' ? env.pr
 /** True when the app has a backend to talk to: a Supabase project, or the fake one. */
 export const isConfigured = Boolean(injected) || env?.status === 'ok'
 
+/** Where supabase-js keeps the session on this device. */
+export const AUTH_STORAGE_KEY = 'bettracker-auth'
+
+/**
+ * True while this device holds a session, even one that ran out and can't be
+ * renewed for want of a connection. False once Supabase ended it (a sign-out
+ * on another device): then only a new sign-in brings it back.
+ */
+export function hasStoredSession(): boolean {
+  try {
+    return localStorage.getItem(AUTH_STORAGE_KEY) !== null
+  } catch {
+    return true
+  }
+}
+
 function makeClient(): SupabaseClient {
   if (injected) return injected
 
@@ -36,11 +52,13 @@ function makeClient(): SupabaseClient {
     })
   }
 
-  return createClient(url as string, anonKey as string, {
+  // As checked: a stray newline at the end of the key would otherwise reach
+  // the realtime connection's URL and break live sync.
+  return createClient((url as string).trim(), (anonKey as string).trim(), {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      storageKey: 'bettracker-auth'
+      storageKey: AUTH_STORAGE_KEY
     }
   })
 }

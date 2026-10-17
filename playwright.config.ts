@@ -1,13 +1,12 @@
 import fs from 'node:fs'
 import { defineConfig } from '@playwright/test'
+import { APP_PORT, APP_URL, DEMO_PORT, DEMO_URL, DEV_PORT, DEV_URL } from './e2e/urls'
 
 // Chromium: el que diga PLAYWRIGHT_CHROMIUM, o el preinstalado del contenedor de desarrollo
 // si existe, o el que `playwright install chromium` haya bajado (CI).
 const chromium =
   process.env.PLAYWRIGHT_CHROMIUM ??
   (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined)
-
-const PORT = 4173
 
 // Made of parts so the CI secret scan has nothing that looks like a key.
 const PLACEHOLDER_KEY = ['sb', 'publishable', 'e2e', 'placeholder'].join('_')
@@ -26,7 +25,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: APP_URL,
     // The app follows the browser language; the specs assert English copy.
     locale: 'en-US',
     launchOptions: chromium ? { executablePath: chromium } : {},
@@ -34,8 +33,9 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'npm run e2e:serve',
-      url: `http://localhost:${PORT}/`,
+      // As `npm run e2e:serve`, on the port of e2e/urls.ts.
+      command: `npx vite build --outDir ../../dist-e2e && npx vite preview --outDir ../../dist-e2e --port ${APP_PORT} --strictPort`,
+      url: `${APP_URL}/`,
       timeout: 180_000,
       reuseExistingServer: !process.env.CI,
       env: {
@@ -45,8 +45,8 @@ export default defineConfig({
     },
     // `npm run dev` with a URL that lacks https://, for e2e/setup.spec.ts.
     {
-      command: 'npx vite --port 4171 --strictPort',
-      url: 'http://localhost:4171/',
+      command: `npx vite --port ${DEV_PORT} --strictPort`,
+      url: `${DEV_URL}/`,
       timeout: 180_000,
       reuseExistingServer: !process.env.CI,
       env: {
@@ -54,13 +54,18 @@ export default defineConfig({
         VITE_SUPABASE_ANON_KEY: PLACEHOLDER_KEY
       }
     },
-    // `npm run demo` as built, for e2e/demo.spec.ts: it brings its own fake
-    // backend, so it needs neither credentials nor the harness.
+    // `npm run demo` as built (as `npm run demo:serve`), for e2e/demo.spec.ts:
+    // it brings its own fake backend, so it needs neither credentials nor the
+    // harness. The .env values given here must not end up in it.
     {
-      command: 'npm run demo:serve',
-      url: 'http://localhost:4172/',
+      command: `npx vite build --mode demo --outDir ../../dist-demo && npx vite preview --outDir ../../dist-demo --port ${DEMO_PORT} --strictPort`,
+      url: `${DEMO_URL}/`,
       timeout: 180_000,
-      reuseExistingServer: !process.env.CI
+      reuseExistingServer: !process.env.CI,
+      env: {
+        VITE_SUPABASE_URL: 'https://demomustnotshipthis.supabase.co',
+        VITE_SUPABASE_ANON_KEY: ['sb', 'publishable', 'demo', 'must', 'not', 'ship', 'this'].join('_')
+      }
     }
   ]
 })

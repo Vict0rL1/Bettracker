@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, type BankrollMove, type Bet } from '../../../shared/types'
 import { bet } from '../test-utils'
 import {
+  afterSettingsAnswer,
   applyMoveOutbox,
   applyOutbox,
   clearUserData,
+  mergeSettingsPending,
+  readOutbox,
   enqueueOp,
   headAsSent,
   insertStamp,
@@ -126,6 +129,29 @@ describe('cache and outbox persistence', () => {
 
   it('returns an empty outbox when nothing is stored', () => {
     expect(loadOutbox('u1')).toEqual([])
+  })
+
+  // Failing to store a cache is fine (the server has it); failing to store a
+  // queue is not, and it used to be swallowed as if it had worked.
+  it('a cache that can’t be stored is let go; a queue that can’t be stored says so', () => {
+    const setItem = localStorage.setItem.bind(localStorage)
+    localStorage.setItem = () => {
+      throw Object.assign(new Error('The quota has been exceeded.'), { name: 'QuotaExceededError' })
+    }
+    try {
+      expect(() => saveCache('u1', [bet({})])).not.toThrow()
+      expect(() => saveOutbox('u1', [add('a')])).toThrow(/could not store/)
+      expect(() => saveMoveOutbox('u1', [])).toThrow(/could not store/)
+      expect(() => saveSettingsOutbox('u1', { patch: { unitSize: 25 }, editedAt: 'E' })).toThrow(/could not store/)
+    } finally {
+      localStorage.setItem = setItem
+    }
+  })
+
+  it('reads the queue exactly as stored for a change under its lock: the head is not marked sent', () => {
+    saveOutbox('u1', [add('a')])
+    expect(readOutbox('u1')[0].sent).toBeUndefined()
+    expect(loadOutbox('u1')[0].sent).toBe(true)
   })
 
   it('wipes both on sign-out', () => {
@@ -451,6 +477,16 @@ describe('reconcile', () => {
     const first = reconcile([], bulk(['x']), null)
     expect(reconcile(first, bulk(['x']), null)).toHaveLength(1)
   })
+
+  // A row an earlier attempt stored may have been edited on another device
+  // since: the server kept that (the retry inserts only missing rows), and so
+  // does the device.
+  it('keeps a row the server already had when an import is replayed, as the server has it', () => {
+    const edited = bet({ id: 'x', note: 'edited elsewhere', updatedAt: 'T9' })
+    const rows = reconcile([edited], bulk(['x', 'y']), null)
+    expect(rows.find((b) => b.id === 'x')).toEqual(edited)
+    expect(rows.map((b) => b.id).sort()).toEqual(['x', 'y'])
+  })
 })
 
 describe('deposits and withdrawals', () => {
@@ -580,5 +616,46 @@ describe('deposits and withdrawals', () => {
       const server = [mv({ id: 'a', note: 'theirs' })]
       expect(reconcileMove(server, editMove('a', 9), null)).toEqual(server)
     })
+  })
+})
+
+describe('applyOutbox — an import that partly landed', () => {
+  it('shows a row the server already has as the server has it, and the rest from the import', () => {
+    const edited = bet({ id: 'x', note: 'edited elsewhere', updatedAt: 'T9' })
+    const view = applyOutbox([edited], [bulk(['x', 'y'])])
+    expect(view.find((b) => b.id === 'x')).toEqual(edited)
+    expect(view.map((b) => b.id).sort()).toEqual(['x', 'y'])
+  })
+})
+
+describe('settings: what an answer leaves pending', () => {
+  const sent = { patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E1' }
+
+  it('nothing, when nothing was edited while it was out', () => {
+    expect(afterSettingsAnswer(sent, sent)).toBeNull()
+    expect(afterSettingsAnswer({ ...sent }, sent)).toBeNull()
+    expect(afterSettingsAnswer(null, sent)).toBeNull()
+  })
+
+  it('the fields edited since, with the newest edit time', () => {
+    expect(afterSettingsAnswer({ patch: { unitSize: 25, lossLimit: 200, oddsFormat: 'decimal' }, editedAt: 'E2' }, sent)).toEqual({
+      patch: { lossLimit: 200, oddsFormat: 'decimal' },
+      editedAt: 'E2'
+    })
+  })
+
+  it('a field set to null since is an edit too', () => {
+    expect(afterSettingsAnswer({ patch: { unitSize: null, lossLimit: 100 }, editedAt: 'E2' }, sent)).toEqual({ patch: { unitSize: null }, editedAt: 'E2' })
+  })
+})
+
+describe('settings: two windows’ pending patches as one', () => {
+  it('the newer edit wins field by field', () => {
+    const older = { patch: { unitSize: 10, lossLimit: 100 }, editedAt: 'E1' }
+    const newer = { patch: { unitSize: 25 }, editedAt: 'E2' }
+    expect(mergeSettingsPending(older, newer)).toEqual({ patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E2' })
+    expect(mergeSettingsPending(newer, older)).toEqual({ patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E2' })
+    expect(mergeSettingsPending(null, newer)).toBe(newer)
+    expect(mergeSettingsPending(older, null)).toBe(older)
   })
 })

@@ -24,9 +24,15 @@ describe('authErrorKey', () => {
     expect(authErrorKey(failure)).toBe(key)
   })
 
+  // supabase-js turns a 5xx into a message of "{}": shown as it came, it said nothing.
+  it('says a server failure in words', () => {
+    expect(authErrorKey({ message: '{}', status: 500 })).toBe('login.err.server')
+    expect(authErrorKey({ message: '{}', status: 503 })).toBe('login.err.server')
+  })
+
   it('leaves anything else in Supabase’s own words', () => {
     expect(authErrorKey({ message: 'Password should contain at least one character of each: abc', code: 'weak_password', status: 422 })).toBeNull()
-    expect(authErrorKey({ message: 'Database error saving new user', status: 500 })).toBeNull()
+    expect(authErrorKey({ message: 'Signups not allowed for otp', status: 422 })).toBeNull()
   })
 })
 

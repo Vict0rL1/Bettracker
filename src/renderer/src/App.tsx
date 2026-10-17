@@ -13,10 +13,15 @@ import PendingPanel from './components/PendingPanel'
 import QuickAdd from './components/QuickAdd'
 import RangeBar from './components/RangeBar'
 import SettingsDialog from './components/SettingsDialog'
+import SyncNotices from './components/SyncNotices'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
 import { useAuth } from './auth/AuthProvider'
+import { authErrorKey } from './auth/authErrors'
 import { combinedStatus } from './data/drain'
+import { classifySyncError } from './data/errors'
+import { StorageWriteError } from './data/store'
+import { hasStoredSession } from './lib/supabase'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
 import { useSettings } from './data/useSettings'
@@ -65,9 +70,19 @@ export default function App() {
   const [bankrollOpen, setBankrollOpen] = useState(false)
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
+  // An error in the user's words where the app knows it: storage that
+  // refused a change, a key Supabase refuses, a server failure that passes.
   const showError = useCallback(
     (err: unknown) => {
-      const text = err instanceof Error ? err.message : t('common.error')
+      const message = err instanceof Error ? err.message : ''
+      let text = message || t('common.error')
+      if (err instanceof StorageWriteError) text = t('toast.notSaved')
+      else if (message) {
+        const failure = classifySyncError(err)
+        const key = failure === 'paused' ? authErrorKey({ message }) : null
+        if (key) text = t(key)
+        else if (failure === 'retry') text = t('toast.serverRetry', { reason: message })
+      }
       setToast({ kind: 'error', text })
     },
     [t]
@@ -81,7 +96,9 @@ export default function App() {
     dirty: settingsDirty,
     blocked: settingsBlocked,
     loaded: settingsLoaded,
-    update: updateSettings
+    unsaved: settingsUnsaved,
+    update: updateSettings,
+    saveAgain: saveSettingsAgain
   } = useSettings(activeUserId, Boolean(session), showError, showNotice)
   const moves = useMoves(activeUserId, Boolean(session), showError, showNotice)
   // One badge for the three queues. A settings change or a deposit waiting on
@@ -93,6 +110,16 @@ export default function App() {
     settingsDirty && settingsBlocked ? 'behind' : 'synced'
   ])
   const badgeQueued = queuedCount + moves.queuedCount
+
+  // Signed out on another device: this device's session is gone for good,
+  // and only a new sign-in sends what waits here (see SyncNotices).
+  const [reauth, setReauth] = useState(false)
+  useEffect(() => {
+    if (session) setReauth(false)
+  }, [session])
+  const sessionEnded = !loading && !session && Boolean(offlineUser) && !hasStoredSession()
+  const unsavedCount = (sync.unsaved ? queuedCount : 0) + (moves.unsaved ? moves.queuedCount : 0) + (settingsUnsaved ? 1 : 0)
+  const refusedList = [...sync.refused, ...moves.refused]
 
   // Amounts show in units when the user has a unit size and asked for them.
   const unit = effectiveUnit(settings)
@@ -176,83 +203,91 @@ export default function App() {
     [isOffline, t]
   )
 
-  // Mutations apply instantly (optimistic) and sync in the background.
-  const handleAdd = useCallback(
-    async (input: BetInput) => {
-      try {
-        sync.addBet(input)
-        setToast({ kind: 'ok', text: savedNote(t(input.status === 'pending' ? 'toast.loggedPending' : 'toast.added'), input.date) })
-      } catch (err) {
-        showError(err)
+  // Mutations apply instantly (optimistic) and sync in the background. The
+  // toast says it is done only once storage holds the change: one that is
+  // only in this window says so instead (see SyncNotices).
+  const done = useCallback(
+    (saved: boolean, text: string, undo?: () => Promise<boolean>) => {
+      if (!saved) {
+        setToast({ kind: 'error', text: t('toast.notSaved') })
+        return
       }
-    },
-    [sync, savedNote, showError, t]
-  )
-
-  const handleUpdate = useCallback(
-    async (id: string, input: BetInput) => {
-      try {
-        sync.updateBet(id, input)
-        setToast({ kind: 'ok', text: savedNote(t('toast.updated'), input.date) })
-      } catch (err) {
-        showError(err)
+      if (!undo) {
+        setToast({ kind: 'ok', text })
+        return
       }
-    },
-    [sync, savedNote, showError, t]
-  )
-
-  /** A toast that offers to put things back. The undo goes through the outbox too, so it works offline. */
-  const undoable = useCallback(
-    (text: string, undo: () => void) =>
+      // An offer to put things back. The undo goes through the outbox too, so it works offline.
       setToast({
         kind: 'ok',
         text,
         action: {
           label: t('toast.undo'),
           onClick: () => {
-            try {
-              undo()
-              setToast({ kind: 'ok', text: savedNote(t('toast.undone')) })
-            } catch (err) {
-              showError(err)
-            }
+            undo().then(
+              (kept) => setToast(kept ? { kind: 'ok', text: savedNote(t('toast.undone')) } : { kind: 'error', text: t('toast.notSaved') }),
+              showError
+            )
           }
         }
-      }),
+      })
+    },
     [savedNote, showError, t]
+  )
+
+  const handleAdd = useCallback(
+    async (input: BetInput) => {
+      try {
+        const saved = await sync.addBet(input)
+        done(saved, savedNote(t(input.status === 'pending' ? 'toast.loggedPending' : 'toast.added'), input.date))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [sync, savedNote, showError, done, t]
+  )
+
+  const handleUpdate = useCallback(
+    async (id: string, input: BetInput) => {
+      try {
+        const saved = await sync.updateBet(id, input)
+        done(saved, savedNote(t('toast.updated'), input.date))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [sync, savedNote, showError, done, t]
   )
 
   const handleDelete = useCallback(
     async (id: string) => {
       try {
         const gone = (bets ?? []).find((b) => b.id === id)
-        sync.deleteBet(id)
-        if (gone) undoable(savedNote(t('toast.deleted')), () => sync.restoreBets([gone]))
-        else setToast({ kind: 'ok', text: savedNote(t('toast.deleted')) })
+        const saved = await sync.deleteBet(id)
+        done(saved, savedNote(t('toast.deleted')), gone ? () => sync.restoreBets([gone]) : undefined)
       } catch (err) {
         showError(err)
       }
     },
-    [bets, sync, savedNote, showError, undoable, t]
+    [bets, sync, savedNote, showError, done, t]
   )
 
   const handleBulkDelete = useCallback(
-    (ids: string[]) => {
+    async (ids: string[]) => {
       try {
         const wanted = new Set(ids)
         const gone = (bets ?? []).filter((b) => wanted.has(b.id))
         if (gone.length === 0) return
-        sync.deleteBets(gone.map((b) => b.id))
-        undoable(savedNote(t('toast.deletedN', { bets: tn('bet', gone.length) })), () => sync.restoreBets(gone))
+        const saved = await sync.deleteBets(gone.map((b) => b.id))
+        done(saved, savedNote(t('toast.deletedN', { bets: tn('bet', gone.length) })), () => sync.restoreBets(gone))
       } catch (err) {
         showError(err)
       }
     },
-    [bets, sync, savedNote, showError, undoable, t, tn]
+    [bets, sync, savedNote, showError, done, t, tn]
   )
 
   const handleBulkRetag = useCallback(
-    (ids: string[], patch: TagPatch) => {
+    async (ids: string[], patch: TagPatch) => {
       try {
         const wanted = new Set(ids)
         const plan = retagPlan((bets ?? []).filter((b) => wanted.has(b.id)), patch)
@@ -260,17 +295,17 @@ export default function App() {
           setToast({ kind: 'ok', text: t('toast.retagNothing') })
           return
         }
-        sync.updateBets(plan.next)
-        undoable(savedNote(t('toast.retagged', { bets: tn('bet', plan.next.length) })), () => sync.updateBets(plan.prev))
+        const saved = await sync.updateBets(plan.next)
+        done(saved, savedNote(t('toast.retagged', { bets: tn('bet', plan.next.length) })), () => sync.updateBets(plan.prev))
       } catch (err) {
         showError(err)
       }
     },
-    [bets, sync, savedNote, showError, undoable, t, tn]
+    [bets, sync, savedNote, showError, done, t, tn]
   )
 
   const handleBulkSettle = useCallback(
-    (ids: string[], status: Exclude<BetStatus, 'pending'>) => {
+    async (ids: string[], status: Exclude<BetStatus, 'pending'>) => {
       try {
         const wanted = new Set(ids)
         const plan = settlePlan((bets ?? []).filter((b) => wanted.has(b.id)), status)
@@ -279,26 +314,30 @@ export default function App() {
           setToast({ kind: 'ok', text: t('toast.settleNone') + skipped })
           return
         }
-        sync.updateBets(plan.next)
-        undoable(savedNote(t('toast.settledN', { bets: tn('bet', plan.next.length), status: t(`statusWord.${status}`) }) + skipped), () => sync.updateBets(plan.prev))
+        const saved = await sync.updateBets(plan.next)
+        done(
+          saved,
+          savedNote(t('toast.settledN', { bets: tn('bet', plan.next.length), status: t(`statusWord.${status}`) }) + skipped),
+          () => sync.updateBets(plan.prev)
+        )
       } catch (err) {
         showError(err)
       }
     },
-    [bets, sync, savedNote, showError, undoable, t, tn]
+    [bets, sync, savedNote, showError, done, t, tn]
   )
 
   // Settling from the history table: when the result follows from stake and
   // odds it's one tap; when it doesn't (no odds on a win), open the day so the
   // user can type it.
   const handleSettle = useCallback(
-    (bet: Bet, next: BetStatus, amount: number | null) => {
+    async (bet: Bet, next: BetStatus, amount: number | null) => {
       if (next === 'won' && amount === null) {
         setModalDate(bet.date)
         return
       }
       try {
-        sync.updateBet(bet.id, {
+        const saved = await sync.updateBet(bet.id, {
           date: bet.date,
           amount,
           stake: bet.stake,
@@ -310,50 +349,50 @@ export default function App() {
           book: bet.book,
           betType: bet.betType
         })
-        setToast({ kind: 'ok', text: savedNote(t('toast.settled', { status: t(`statusWord.${next}`) }), bet.date) })
+        done(saved, savedNote(t('toast.settled', { status: t(`statusWord.${next}`) }), bet.date))
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError, t]
+    [sync, savedNote, showError, done, t]
   )
 
   // Deposits and withdrawals. The toast names the kind (in Spanish an ingreso
   // and a retirada take different endings).
   const handleAddMove = useCallback(
-    (input: MoveInput) => {
+    async (input: MoveInput) => {
       try {
-        moves.addMove(input)
-        setToast({ kind: 'ok', text: savedNote(t(kindOf(input.amount) === 'deposit' ? 'toast.depositAdded' : 'toast.withdrawalAdded'), input.date) })
+        const saved = await moves.addMove(input)
+        done(saved, savedNote(t(kindOf(input.amount) === 'deposit' ? 'toast.depositAdded' : 'toast.withdrawalAdded'), input.date))
       } catch (err) {
         showError(err)
       }
     },
-    [moves, savedNote, showError, t]
+    [moves, savedNote, showError, done, t]
   )
 
   const handleUpdateMove = useCallback(
-    (id: string, input: MoveInput) => {
+    async (id: string, input: MoveInput) => {
       try {
-        moves.updateMove(id, input)
-        setToast({ kind: 'ok', text: savedNote(t(kindOf(input.amount) === 'deposit' ? 'toast.depositUpdated' : 'toast.withdrawalUpdated'), input.date) })
+        const saved = await moves.updateMove(id, input)
+        done(saved, savedNote(t(kindOf(input.amount) === 'deposit' ? 'toast.depositUpdated' : 'toast.withdrawalUpdated'), input.date))
       } catch (err) {
         showError(err)
       }
     },
-    [moves, savedNote, showError, t]
+    [moves, savedNote, showError, done, t]
   )
 
   const handleDeleteMove = useCallback(
-    (m: BankrollMove) => {
+    async (m: BankrollMove) => {
       try {
-        moves.deleteMove(m.id)
-        undoable(savedNote(t(kindOf(m.amount) === 'deposit' ? 'toast.depositDeleted' : 'toast.withdrawalDeleted')), () => moves.restoreMove(m))
+        const saved = await moves.deleteMove(m.id)
+        done(saved, savedNote(t(kindOf(m.amount) === 'deposit' ? 'toast.depositDeleted' : 'toast.withdrawalDeleted')), () => moves.restoreMove(m))
       } catch (err) {
         showError(err)
       }
     },
-    [moves, savedNote, showError, undoable, t]
+    [moves, savedNote, showError, done, t]
   )
 
   // What the Bankroll dialog's changes wait for, judged per queue: a
@@ -387,20 +426,22 @@ export default function App() {
           setToast({ kind: 'error', text: errors[0] ?? t('toast.importNothing') })
           return
         }
-        const count = sync.importBets(rows)
+        const { count, saved } = await sync.importBets(rows)
         const notes: string[] = []
         if (skipped > 0) notes.push(t('toast.skipped', { lines: tn('line', skipped) }))
         if (noStake > 0) notes.push(t('toast.noStake', { n: noStake }))
-        setToast({ kind: 'ok', text: savedNote(t('toast.imported', { bets: tn('bet', count) }) + (notes.length ? ` · ${notes.join(' · ')}` : '')) })
+        done(saved, savedNote(t('toast.imported', { bets: tn('bet', count) }) + (notes.length ? ` · ${notes.join(' · ')}` : '')))
       } catch (err) {
         showError(err)
       }
     },
-    [sync, savedNote, showError, t, tn, settings.oddsFormat]
+    [sync, savedNote, showError, done, t, tn, settings.oddsFormat]
   )
 
   if (loading) return <Boot />
   if (!activeUserId) return <Login />
+  // Signing in again over this device's data: its queues wait meanwhile.
+  if (reauth && !session) return <Login onCancel={() => setReauth(false)} />
 
   // No cached data yet: wait for the first fetch unless we're offline, in
   // which case show the (empty) app instead of blocking forever.
@@ -412,7 +453,7 @@ export default function App() {
       <div className="app">
         <Header
           email={activeEmail}
-          status={badgeStatus}
+          status={sessionEnded ? 'signedout' : badgeStatus}
           queuedCount={badgeQueued}
           pendingCount={openList.length}
           unsynced={badgeQueued + (settingsDirty ? 1 : 0)}
@@ -425,6 +466,26 @@ export default function App() {
           onOpenPending={() => setPendingOpen(true)}
           onLogToday={() => setModalDate(todayStr())}
           onSignOut={signOut}
+        />
+
+        <SyncNotices
+          signedOut={sessionEnded ? badgeQueued + (settingsDirty ? 1 : 0) : null}
+          unsaved={unsavedCount}
+          refused={refusedList.length > 0 ? { count: refusedList.length, reason: refusedList[0].reason } : null}
+          onSignIn={() => setReauth(true)}
+          onSaveAgain={() => {
+            void Promise.all([sync.saveAgain(), moves.saveAgain(), saveSettingsAgain()]).then((all) => {
+              if (!all.every(Boolean)) setToast({ kind: 'error', text: t('toast.notSaved') })
+            })
+          }}
+          onRetryRefused={() => {
+            void sync.retryRefused()
+            void moves.retryRefused()
+          }}
+          onDiscardRefused={() => {
+            void sync.discardRefused()
+            void moves.discardRefused()
+          }}
         />
 
         {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}

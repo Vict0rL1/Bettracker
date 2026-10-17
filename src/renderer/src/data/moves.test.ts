@@ -46,7 +46,7 @@ beforeEach(() => {
 
 describe('getMoves', () => {
   it('reads every move of the table in date order, coercing numeric strings', async () => {
-    state.replies = [{ data: [ROW, { ...ROW, id: 'm2', amount: '500', note: null }], error: null }]
+    state.replies = [{ data: [ROW, { ...ROW, id: 'm2', amount: '500', note: null }], error: null, count: 2 }]
     expect(await getMoves()).toEqual([
       { id: 'm1', date: '2026-03-01', amount: -120.5, note: 'rent', createdAt: 'C', updatedAt: 'S' },
       { id: 'm2', date: '2026-03-01', amount: 500, note: '', createdAt: 'C', updatedAt: 'S' }
@@ -54,6 +54,22 @@ describe('getMoves', () => {
     expect(call('from')?.args).toEqual(['bankroll_moves'])
     expect(calls('order').map((c) => c.args[0])).toEqual(['date', 'created_at', 'id'])
     expect(calls('range').map((c) => c.args)).toEqual([[0, 999]])
+  })
+
+  // Used to jump a whole page ahead after a short one, missing the rows between.
+  it('goes on from the rows that came when the server answers fewer than asked (a lower max-rows)', async () => {
+    const page = (n: number, from: number) => Array.from({ length: n }, (_, i) => ({ ...ROW, id: `m${from + i}` }))
+    state.replies = [
+      { data: page(200, 0), error: null, count: 450 },
+      { data: page(200, 200), error: null, count: 450 },
+      { data: page(50, 400), error: null, count: 450 }
+    ]
+    expect((await getMoves()).map((m) => m.id)).toEqual(page(450, 0).map((r) => r.id))
+    expect(calls('range').map((c) => c.args)).toEqual([
+      [0, 999],
+      [200, 1199],
+      [400, 1399]
+    ])
   })
 
   it('reads page by page until the counted total is in', async () => {

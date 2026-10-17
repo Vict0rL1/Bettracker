@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { supabase } from '../lib/supabase'
+import { AUTH_STORAGE_KEY, supabase } from '../lib/supabase'
 import { clearUserData, loadLastUser, saveLastUser, type OfflineUser } from '../data/offline'
 import { authFailure } from './authErrors'
 
@@ -95,7 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Offline sign-out: the server call failed, clear locally anyway.
         }
         try {
-          localStorage.removeItem('bettracker-auth')
+          localStorage.removeItem(AUTH_STORAGE_KEY)
         } catch {
           // storage unavailable — nothing more to clear
         }
