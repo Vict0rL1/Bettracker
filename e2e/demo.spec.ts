@@ -62,6 +62,28 @@ test.describe('demo', () => {
     expect(await storedBets(page)).toBe(1)
   })
 
+  // Signing out on another device ends the session on this one too. A change
+  // that went out without it used to be refused, dropped from the queue, and
+  // lost; now it waits for the session to come back.
+  test('a change made after the session ended elsewhere waits for it, instead of being lost', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await page.evaluate(() => localStorage.setItem('demo:signed-out', '1'))
+
+    await addLoss(page, '15')
+    await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
+    await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
+    expect(await storedBets(page)).toBe(0)
+
+    // The session is back (signed in again): the queued bet goes through.
+    await page.evaluate(() => {
+      localStorage.removeItem('demo:signed-out')
+      window.dispatchEvent(new Event('online'))
+    })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect(await storedBets(page)).toBe(1)
+  })
+
   test('starts as an up-to-date database: a deposit syncs', async ({ page }) => {
     await page.goto('/')
     await page.locator('.mini-bankroll').click()

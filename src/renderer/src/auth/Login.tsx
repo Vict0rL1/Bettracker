@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAuth } from './AuthProvider'
 import { SparkIcon } from '../components/icons'
 import { useLang } from '../lib/i18n'
+import { authErrorKey, type AuthFailure } from './authErrors'
 
 type Mode = 'in' | 'up'
 
@@ -12,8 +13,15 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Kept as Supabase gave it and put into words when shown, so it follows a
+  // change of language.
+  const [error, setError] = useState<AuthFailure | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+
+  const errorText = (e: AuthFailure): string => {
+    const key = authErrorKey(e)
+    return key ? t(key) : e.message || t('common.error')
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -31,7 +39,7 @@ export default function Login() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.error'))
+      setError(err instanceof Error ? (err as Error & AuthFailure) : { message: '' })
     } finally {
       setBusy(false)
     }
@@ -68,7 +76,7 @@ export default function Login() {
           />
         </label>
 
-        {error && <div className="auth-error">{error}</div>}
+        {error && <div className="auth-error">{errorText(error)}</div>}
         {notice && <div className="auth-notice">{notice}</div>}
 
         <button type="submit" className="btn btn-primary auth-submit" disabled={busy}>

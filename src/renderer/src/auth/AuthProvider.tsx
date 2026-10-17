@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { clearUserData, loadLastUser, saveLastUser, type OfflineUser } from '../data/offline'
+import { authFailure } from './authErrors'
 
 interface AuthState {
   session: Session | null
@@ -71,11 +72,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       offlineUser: session ? null : loadLastUser(),
       async signIn(email, password) {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) throw new Error(error.message)
+        if (error) throw authFailure(error)
       },
       async signUp(email, password) {
         const { data, error } = await supabase.auth.signUp({ email, password })
-        if (error) throw new Error(error.message)
+        if (error) throw authFailure(error)
         // When email confirmation is on, no session comes back until confirmed.
         return { needsConfirmation: !data.session }
       },

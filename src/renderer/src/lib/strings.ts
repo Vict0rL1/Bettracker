@@ -1,3 +1,5 @@
+import { envStrings } from '../../../shared/supabaseEnv'
+
 /**
  * Every string the interface shows, in English and Spanish.
  *
@@ -260,13 +262,24 @@ export const en = {
   'login.needAccount': 'Need an account? Sign up',
   'login.haveAccount': 'Already have an account? Sign in',
   'login.created': 'Account created. Check your email to confirm, then sign in.',
+  'login.err.key':
+    'Supabase rejected this app’s key (“Invalid API key”). In .env, use the publishable key (sb_publishable_…) of the same project as the URL, then restart the app, or build it again and upload it.',
+  'login.err.network': 'Couldn’t reach Supabase. Check your connection and try again.',
+  'login.err.credentials': 'Wrong email or password.',
+  'login.err.unconfirmed': 'Confirm your email first: open the link Supabase sent you, then sign in.',
+  'login.err.exists': 'That email already has an account. Sign in instead.',
+  'login.err.rate': 'Too many tries in a short time. Wait a while and try again.',
+  'login.err.signupOff': 'This Supabase project doesn’t take new accounts (sign-ups are off in its Authentication settings).',
+  'login.err.email': 'Supabase doesn’t accept that email address. Use a real one.',
 
   // First-run setup screen
   'setup.tag': 'Almost there — connect your Supabase project to enable cross-device sync.',
   'setup.step1': 'Create a free project at {site}.',
   'setup.step2': "Run the SQL in {file} from the project's SQL editor.",
-  'setup.step3': 'Copy {example} to {env} and fill in your project URL and anon key (Project Settings → API).',
-  'setup.step4': 'Restart the app ({cmd}).',
+  'setup.step3':
+    'Copy {example} to {env} and fill in your project URL (https://<ref>.supabase.co) and its publishable key (sb_publishable_…, under Project Settings → API Keys).',
+  'setup.step4': 'Restart the app ({cmd}). For a published copy, build it again ({build}) and upload {dist} again.',
+  'setup.fixEnv': 'Your .env needs a fix:',
   'setup.foot': 'Full instructions are in the README.',
 
   // Quick add
@@ -446,7 +459,10 @@ export const en = {
   'toast.depositDeleted': 'Deleted a deposit',
   'toast.withdrawalDeleted': 'Deleted a withdrawal',
   'header.signOutUnsynced': 'Sign out anyway?',
-  'header.signOutUnsyncedTitle': 'Not synced yet: {changes}. Signing out deletes from this device whatever it has not sent.'
+  'header.signOutUnsyncedTitle': 'Not synced yet: {changes}. Signing out deletes from this device whatever it has not sent.',
+
+  // What is wrong with .env (src/shared/supabaseEnv.ts, where the build reads them too)
+  ...envStrings.en
 } as const
 
 export type StringKey = keyof typeof en
@@ -691,12 +707,23 @@ export const es: Record<StringKey, string> = {
   'login.needAccount': '¿No tienes cuenta? Regístrate',
   'login.haveAccount': '¿Ya tienes cuenta? Entra',
   'login.created': 'Cuenta creada. Confírmala desde tu correo y luego entra.',
+  'login.err.key':
+    'Supabase ha rechazado la clave de esta app («Invalid API key»). En el .env, usa la clave publishable (sb_publishable_…) del mismo proyecto que la URL; luego reinicia la app, o vuelve a compilarla y súbela.',
+  'login.err.network': 'No se ha podido conectar con Supabase. Revisa la conexión y vuelve a probar.',
+  'login.err.credentials': 'Correo o contraseña incorrectos.',
+  'login.err.unconfirmed': 'Primero confirma tu correo: abre el enlace que te ha enviado Supabase y luego entra.',
+  'login.err.exists': 'Ese correo ya tiene cuenta. Entra con él.',
+  'login.err.rate': 'Demasiados intentos seguidos. Espera un rato y vuelve a probar.',
+  'login.err.signupOff': 'Este proyecto de Supabase no admite cuentas nuevas (el registro está desactivado en sus ajustes de Authentication).',
+  'login.err.email': 'Supabase no acepta ese correo. Usa uno real.',
 
   'setup.tag': 'Casi listo: conecta tu proyecto de Supabase para sincronizar entre dispositivos.',
   'setup.step1': 'Crea un proyecto gratuito en {site}.',
   'setup.step2': 'Ejecuta el SQL de {file} desde el editor SQL del proyecto.',
-  'setup.step3': 'Copia {example} a {env} y rellena la URL del proyecto y la clave anon (Project Settings → API).',
-  'setup.step4': 'Reinicia la app ({cmd}).',
+  'setup.step3':
+    'Copia {example} a {env} y rellena la URL del proyecto (https://<ref>.supabase.co) y su clave publishable (sb_publishable_…, en Project Settings → API Keys).',
+  'setup.step4': 'Reinicia la app ({cmd}). Si la tienes publicada, vuelve a compilarla ({build}) y sube otra vez {dist}.',
+  'setup.fixEnv': 'Hay que corregir el .env:',
   'setup.foot': 'Las instrucciones completas están en el README.',
 
   'quick.fab': 'Registro rápido',
@@ -867,5 +894,7 @@ export const es: Record<StringKey, string> = {
   'toast.depositDeleted': 'Ingreso eliminado',
   'toast.withdrawalDeleted': 'Retirada eliminada',
   'header.signOutUnsynced': '¿Salir de todos modos?',
-  'header.signOutUnsyncedTitle': 'Sin sincronizar: {changes}. Al salir se borra de este dispositivo lo que no ha enviado.'
+  'header.signOutUnsyncedTitle': 'Sin sincronizar: {changes}. Al salir se borra de este dispositivo lo que no ha enviado.',
+
+  ...envStrings.es
 }

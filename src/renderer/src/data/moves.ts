@@ -3,6 +3,7 @@ import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
 import { normalizeMove } from '../lib/validate'
 import { describeError } from './errors'
+import { signedInUserId } from './session'
 import { readAll } from './readAll'
 import { insertStamp, type MoveOp } from './offline'
 
@@ -31,15 +32,9 @@ function toMove(row: Row): BankrollMove {
   }
 }
 
-async function currentUserId(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession()
-  if (error) throw error
-  const id = data.session?.user?.id
-  if (!id) throw new Error('You are signed out — sign in to sync your deposits and withdrawals')
-  return id
-}
-
 export async function getMoves(): Promise<BankrollMove[]> {
+  // Without a session the answer would be no rows, not this user's rows.
+  await signedInUserId()
   const rows = await readAll<Row>((from, to) =>
     supabase
       .from(TABLE)
@@ -60,7 +55,7 @@ export async function getMoves(): Promise<BankrollMove[]> {
  */
 export async function addMove(input: MoveInput, id: string, stamp: string): Promise<BankrollMove> {
   const clean = normalizeMove(input)
-  const user_id = await currentUserId()
+  const user_id = await signedInUserId()
   const { data, error } = await supabase
     .from(TABLE)
     .insert({ id, user_id, date: clean.date, amount: clean.amount, note: clean.note, updated_at: stamp })
@@ -108,6 +103,8 @@ export async function deleteMove(id: string): Promise<boolean> {
  * corrupt queue: it is refused, and the drain drops it.
  */
 export async function sendMoveOp(op: MoveOp): Promise<BankrollMove | null> {
+  // As sendOp: without a session it waits for the next sign-in.
+  await signedInUserId()
   if (op.kind === 'add') return addMove(op.input, op.id, insertStamp(op))
   if (op.kind === 'update') return updateMove(op.id, op.input, op.editedAt)
   if (op.kind === 'delete') {

@@ -62,7 +62,11 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    poner el directorio raíz en `/`. Así se conservan el dominio y las
    variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
    al viejo, con lo guardado sin conexión allí, y obligaría a cambiar las URL
-   de redirección en Supabase Auth. El instalador de escritorio se construye
+   de redirección en Supabase Auth. Si está en Netlify subida a mano
+   (Netlify Drop): `npm run build` con el `.env` bueno y arrastrar `dist/` a
+   la página **Deploys** del sitio que ya existe; soltarlo en la lista de
+   sitios crea otro, con otra dirección. El build comprueba antes la URL y
+   la clave (ver "Decisiones"). El instalador de escritorio se construye
    con `npm run build:desktop`.
 3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
    conexión (una recarga basta); el escritorio hay que reinstalarlo.
@@ -129,10 +133,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 451 tests unitarios (vitest)
+npm test            # 526 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 77 comprobaciones Playwright, sin backend
+npm run test:e2e    # 84 comprobaciones Playwright, sin backend
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -222,7 +226,8 @@ Playwright llegara a `localhost`; en CI no.
   tipografía y espaciado, breakpoints 1120/640, Recharts cargado en diferido.
 - Toda la interfaz en `lib/strings.ts` (en/es) con `t()`/`tn()` y botón de
   idioma; el idioma sigue al navegador y se recuerda. Mensajes de validación
-  y de red quedan en inglés (decisión acordada); el dinero se formatea en USD.
+  y de red quedan en inglés (decisión acordada; los de inicio de sesión y los
+  del `.env` sí se traducen, ver "Decisiones"); el dinero se formatea en USD.
 
 ### Fase 5 · features (orden del plan)
 1. **Registro rápido** (`QuickAdd.tsx`): botón flotante y tecla `T`; stake,
@@ -305,6 +310,40 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
 
 ## Decisiones tomadas y por qué
 
+- **El `.env` se comprueba antes de usarlo** (`src/shared/supabaseEnv.ts`):
+  - `npm run build` (y el de escritorio) se para si la URL o la clave no
+    pueden funcionar o publicarían un secreto, y dice qué poner. `npm run
+    dev` y `preview` solo avisan, y la app enseña lo mismo en la pantalla de
+    configuración, en vez de quedarse en blanco (una URL sin `https://` hacía
+    que supabase-js lanzara un error al cargar). La demo no se comprueba;
+  - detecta: URL sin `https://`, la del panel, la cadena de conexión de
+    Postgres (lleva la contraseña), una ruta de la API detrás, los ejemplos
+    sin cambiar, la clave secreta o `service_role`, una clave cortada o con
+    comillas o espacios, algo que no es una clave (el JWT secret) y una clave
+    anon de otro proyecto que el de la URL (lo que Supabase llama "Invalid
+    API key"). Una clave publishable no lleva su proyecto: ese caso sale al
+    iniciar sesión, con el mensaje que dice qué clave poner;
+  - la clave recomendada es la publishable (`sb_publishable_…`). La anon
+    antigua funciona, pero Supabase retira las claves antiguas a finales de
+    2026: el build lo avisa. La variable sigue llamándose
+    `VITE_SUPABASE_ANON_KEY`, para no romper los `.env` que ya existen;
+  - el idioma de lo que imprime el build es el de la terminal (`LANG`).
+- **Los errores de inicio de sesión salen en palabras** (`auth/authErrors.ts`):
+  clave rechazada, sin conexión, contraseña mal, correo sin confirmar, cuenta
+  ya existente, demasiados intentos, registro desactivado y correo no
+  aceptado, en en y es. Se guardan tal cual y se traducen al mostrarlos; lo
+  que no se reconoce sale con las palabras de Supabase, como antes.
+- **Sin sesión, la cola espera** (`data/session.ts`, `SignedOutError`):
+  cerrar sesión en un dispositivo cierra la de todos (`signOut` es global), y
+  cuando la sesión de otro caduca y no se puede renovar, supabase-js manda
+  las peticiones como nadie. Antes, eso tiraba lo que hubiera en cola: un
+  alta fallaba ("You are signed out") y se descartaba, una edición o un
+  borrado no encontraban la fila y salían de la cola, y una lectura volvía
+  vacía y borraba la copia del dispositivo. Ahora cada lectura y cada envío
+  piden antes la sesión; sin ella, o con una clave que Supabase no acepta o
+  un JWT caducado (`isAuthError`), el cambio se queda en cola como sin
+  conexión y sale tras el siguiente inicio de sesión. Un rechazo de RLS sigue
+  siendo un rechazo: con la sesión pedida antes, ya no viene de esto.
 - **En el móvil** (revisado con capturas a 320, 360, 390 y 430 px, en los dos
   temas y los dos idiomas):
   - nada puede ensanchar la página: el calendario y la rejilla usan
@@ -440,6 +479,8 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
 
 ```
 src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput
+src/shared/supabaseEnv.ts           comprueba VITE_SUPABASE_URL y _ANON_KEY (el build y la app)
+src/renderer/src/auth/authErrors.ts los rechazos de Supabase Auth, en palabras (en y es)
 src/renderer/src/lib/
   stats.ts      resumen, ROI, CLV, breakdown por tag/banda/día/mes
   bands.ts      bandas de cuota (único lugar)
@@ -466,13 +507,15 @@ src/renderer/src/data/
   moves.ts, useMoves.ts                   ingresos y retiradas: servidor y sincronización
   readAll.ts                              leer todas las filas, por páginas
   drain.ts                                vaciar la cola: qué sale y qué se queda
-  errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
+  errors.ts                               leer un fallo: sin conexión, sin sesión, falta migración, rechazo
+  session.ts                              ninguna petición de las filas de un usuario sin su sesión
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       77 comprobaciones (mobile.spec.ts: el móvil)
+e2e/*.spec.ts                       84 comprobaciones (mobile.spec.ts: el móvil;
+                                    setup.spec.ts y login.spec.ts: el .env y el inicio de sesión)
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

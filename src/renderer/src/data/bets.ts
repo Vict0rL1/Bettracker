@@ -3,6 +3,7 @@ import { statusForAmount, isBetStatus, type Bet, type BetInput } from '../../../
 import { supabase } from '../lib/supabase'
 import { isValidDate, MAX_AMOUNT, normalizeInput, round2, type CleanBet } from '../lib/validate'
 import { describeError } from './errors'
+import { signedInUserId } from './session'
 import { readAll } from './readAll'
 import { insertStamp, type PendingOp } from './offline'
 
@@ -68,15 +69,9 @@ function toRowPayload(clean: CleanBet): Record<string, unknown> {
   }
 }
 
-async function currentUserId(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession()
-  if (error) throw error
-  const id = data.session?.user?.id
-  if (!id) throw new Error('You are signed out — sign in to sync your bets')
-  return id
-}
-
 export async function getBets(): Promise<Bet[]> {
+  // Without a session the answer would be no rows, not this user's rows.
+  await signedInUserId()
   const rows = await readAll<Row>((from, to) =>
     supabase
       .from(TABLE)
@@ -101,7 +96,7 @@ export async function getBets(): Promise<Bet[]> {
  */
 export async function addBet(input: BetInput, id?: string, queuedAt?: string): Promise<Bet> {
   const clean = normalizeInput(input)
-  const user_id = await currentUserId()
+  const user_id = await signedInUserId()
   const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}), ...(queuedAt ? { updated_at: queuedAt } : {}) }
   const { data, error } = await supabase.from(TABLE).insert(payload).select().single()
   if (error) {
@@ -184,7 +179,7 @@ export async function deleteBet(id: string): Promise<boolean> {
  */
 export async function addBets(inputs: readonly { id: string; input: BetInput }[], queuedAt?: string): Promise<number> {
   if (inputs.length === 0) return 0
-  const user_id = await currentUserId()
+  const user_id = await signedInUserId()
   const stamp = queuedAt ? { updated_at: queuedAt } : {}
   const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)), ...stamp }))
 
@@ -207,6 +202,9 @@ export async function addBets(inputs: readonly { id: string; input: BetInput }[]
  * there is one.
  */
 export async function sendOp(op: PendingOp): Promise<Bet | null> {
+  // An edit or a delete sent without a session would find no row and leave
+  // the queue as if refused: it waits for the next sign-in instead.
+  await signedInUserId()
   if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
   if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
   if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op))

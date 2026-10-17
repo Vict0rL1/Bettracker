@@ -15,6 +15,33 @@ export function isNetworkError(err: unknown): boolean {
 }
 
 /**
+ * A request with no session behind it: the session ran out and could not be
+ * renewed (signing out on another device ends it on every device, for one).
+ * Sent anyway, supabase-js would go as nobody, and row-level security would
+ * hide every row: a read would come back empty and wipe this device's copy,
+ * an edit would find nothing to change, an add would be refused. So the data
+ * layer asks first (data/session.ts) and stops with this.
+ */
+export class SignedOutError extends Error {
+  constructor() {
+    super('You are signed out — sign in to sync')
+    this.name = 'SignedOutError'
+  }
+}
+
+/**
+ * True when Supabase refused who was asking, not what was asked: no session,
+ * an expired or bad token, or an API key it doesn't take (another project's,
+ * or the legacy keys once they are switched off). Nothing is wrong with the
+ * change itself.
+ */
+export function isAuthError(err: unknown): boolean {
+  if (err instanceof SignedOutError) return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return /\bapi keys?\b|\bjwt\b/i.test(msg)
+}
+
+/**
  * True when the backend refused a request because the database is behind the
  * app — a migration hasn't been run. That covers a column or table the app
  * knows about but the database doesn't have yet (the settings table of 004,
@@ -47,7 +74,9 @@ export function describeError(error: { message: string }): Error {
 
 /**
  * What to do with a queued change whose request failed:
- *  - 'offline':  the server was unreachable. Keep it and retry later.
+ *  - 'offline':  the server was unreachable, or refused who was asking
+ *                (isAuthError). Keep it and retry later: after the next
+ *                sign-in, or with a copy of the app that has the right key.
  *  - 'behind':   the database is missing a migration. Keep it too: it goes
  *                through once the migration runs, and dropping it would lose
  *                what the user typed.
@@ -57,7 +86,7 @@ export function describeError(error: { message: string }): Error {
 export type SyncFailure = 'offline' | 'behind' | 'rejected'
 
 export function classifySyncError(err: unknown): SyncFailure {
-  if (isNetworkError(err)) return 'offline'
+  if (isNetworkError(err) || isAuthError(err)) return 'offline'
   if (err instanceof MigrationNeededError || isMigrationNeededError(err)) return 'behind'
   return 'rejected'
 }

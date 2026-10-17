@@ -4,7 +4,7 @@ import App from './App'
 import SetupNeeded from './components/SetupNeeded'
 import DemoBanner from './components/DemoBanner'
 import { AuthProvider } from './auth/AuthProvider'
-import { isConfigured } from './lib/supabase'
+import { envProblems, isConfigured } from './lib/supabase'
 import './index.css'
 
 createRoot(document.getElementById('root') as HTMLElement).render(
@@ -16,7 +16,7 @@ createRoot(document.getElementById('root') as HTMLElement).render(
         <App />
       </AuthProvider>
     ) : (
-      <SetupNeeded />
+      <SetupNeeded problems={envProblems} />
     )}
   </StrictMode>
 )

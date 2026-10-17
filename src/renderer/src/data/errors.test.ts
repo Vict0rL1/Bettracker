@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifySyncError, describeError, isMigrationNeededError, MIGRATION_HINT, MigrationNeededError } from './errors'
+import { classifySyncError, describeError, isAuthError, isMigrationNeededError, MIGRATION_HINT, MigrationNeededError, SignedOutError } from './errors'
 
 describe('isMigrationNeededError', () => {
   it('recognises both wordings Postgres and PostgREST use for a missing column', () => {
@@ -59,8 +59,30 @@ describe('classifySyncError — keep or drop a queued change', () => {
     expect(classifySyncError(new Error("Could not find the table 'public.user_settings' in the schema cache"))).toBe('behind')
   })
 
+  // These used to be dropped: a sign-out on another device, or a key the
+  // project stops taking, would have emptied the queue.
+  it('keeps it when Supabase refused who was asking rather than the change', () => {
+    expect(classifySyncError(new SignedOutError())).toBe('offline')
+    // The API gateway: a key from another project, the legacy keys switched off.
+    expect(classifySyncError(new Error('Invalid API key'))).toBe('offline')
+    expect(classifySyncError(new Error('Legacy API keys are disabled'))).toBe('offline')
+    // PostgREST: a token that ran out or doesn't check out.
+    expect(classifySyncError(describeError({ message: 'JWT expired' }))).toBe('offline')
+    expect(classifySyncError(describeError({ message: 'JWT could not be decoded' }))).toBe('offline')
+  })
+
   it('drops it when the server refused it for any other reason', () => {
     expect(classifySyncError(new Error('permission denied for table entries'))).toBe('rejected')
+    expect(classifySyncError(new Error('new row violates row-level security policy for table "entries"'))).toBe('rejected')
     expect(classifySyncError('something odd')).toBe('rejected')
+  })
+})
+
+describe('isAuthError', () => {
+  it('is about who asked, not what was asked', () => {
+    expect(isAuthError(new SignedOutError())).toBe(true)
+    expect(isAuthError(new Error('Invalid API key'))).toBe(true)
+    expect(isAuthError(new Error('value too long for type character varying(500)'))).toBe(false)
+    expect(isAuthError(new Error('Failed to fetch'))).toBe(false)
   })
 })

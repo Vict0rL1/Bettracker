@@ -4,7 +4,7 @@ import { newId } from '../lib/uuid'
 import { normalizeInput } from '../lib/validate'
 import { getBets, sendOp, subscribeToBets } from './bets'
 import { drainOutbox, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
-import { isNetworkError } from './errors'
+import { classifySyncError } from './errors'
 import {
   applyOutbox,
   enqueueOp,
@@ -111,7 +111,8 @@ export function useBetSync(
       setServer(rows)
       setOffline(false)
     } catch (err) {
-      if (isNetworkError(err)) setOffline(true)
+      // Unreachable, or signed out meanwhile: the device copy stays as it is.
+      if (classifySyncError(err) === 'offline') setOffline(true)
       else onErrorRef.current(err)
     }
   }, [userId, setServer])

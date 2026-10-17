@@ -2,6 +2,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import { DEFAULT_SETTINGS, isOddsFormat, type Settings, type SettingsPatch } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
 import { describeError } from './errors'
+import { signedInUserId } from './session'
 
 const TABLE = 'user_settings'
 
@@ -42,16 +43,11 @@ function toRowPatch(patch: SettingsPatch): Record<string, unknown> {
   return out
 }
 
-async function currentUserId(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession()
-  if (error) throw error
-  const id = data.session?.user?.id
-  if (!id) throw new Error('You are signed out — sign in to sync your settings')
-  return id
-}
-
 /** This user's row, or null when they have never changed a setting. */
 export async function getSettings(): Promise<Settings | null> {
+  // Without a session no row would come back, and the defaults would replace
+  // this user's settings on the device.
+  await signedInUserId()
   const { data, error } = await supabase.from(TABLE).select('*').maybeSingle()
   if (error) throw describeError(error)
   return data ? toSettings(data as Row) : null
@@ -65,7 +61,7 @@ export async function getSettings(): Promise<Settings | null> {
  * refreshes).
  */
 export async function saveSettings(patch: SettingsPatch, editedAt: string): Promise<Settings | null> {
-  const user_id = await currentUserId()
+  const user_id = await signedInUserId()
   const fields = { ...toRowPatch(patch), updated_at: editedAt }
 
   const updated = await supabase.from(TABLE).update(fields).eq('user_id', user_id).lte('updated_at', editedAt).select().maybeSingle()

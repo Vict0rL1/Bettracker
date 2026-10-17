@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * followed by a read of the row already there, and each needs its own answer.
  */
 const state = vi.hoisted(() => ({
+  /** What auth.getSession() answers: signed in unless a test says otherwise. */
+  session: { data: { session: { user: { id: 'user-1' } } as unknown }, error: null as Error | null },
   replies: [] as { data: unknown; error: { message: string; code?: string } | null; count?: number | null }[],
   calls: [] as { method: string; args: unknown[] }[]
 }))
@@ -22,13 +24,13 @@ vi.mock('../lib/supabase', () => {
   return {
     supabase: {
       ...chain,
-      auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } }, error: null }) }
+      auth: { getSession: async () => state.session }
     }
   }
 })
 
 import { addMove, deleteMove, getMoves, sendMoveOp, subscribeToMoves, updateMove } from './moves'
-import { MigrationNeededError } from './errors'
+import { MigrationNeededError, SignedOutError } from './errors'
 
 const calls = (method: string) => state.calls.filter((c) => c.method === method)
 const call = (method: string) => calls(method)[0]
@@ -37,6 +39,7 @@ const ROW = { id: 'm1', user_id: 'user-1', date: '2026-03-01', amount: '-120.50'
 const NO_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
 
 beforeEach(() => {
+  state.session = { data: { session: { user: { id: 'user-1' } } }, error: null }
   state.calls = []
   state.replies = []
 })
@@ -174,5 +177,17 @@ describe('subscribeToMoves', () => {
     expect(call('on')?.args[1]).toEqual({ event: '*', schema: 'public', table: 'bankroll_moves', filter: 'user_id=eq.user-1' })
     stop()
     expect(call('removeChannel')).toBeDefined()
+  })
+})
+
+describe('without a session', () => {
+  it('reads and sends nothing, and says signed out, which keeps the queue for the next sign-in', async () => {
+    state.session = { data: { session: null }, error: null }
+    await expect(getMoves()).rejects.toBeInstanceOf(SignedOutError)
+    await expect(sendMoveOp({ opId: 'o1', kind: 'update', id: 'm', input: { date: '2026-03-01', amount: 50 }, editedAt: 'E' })).rejects.toBeInstanceOf(
+      SignedOutError
+    )
+    await expect(sendMoveOp({ opId: 'o2', kind: 'delete', id: 'm' })).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
   })
 })

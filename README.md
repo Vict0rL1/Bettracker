@@ -40,7 +40,7 @@ moment you're back online. The header badge tells you where you stand:
 |---|---|
 | 🟢 **Synced** | Everything is saved to the cloud and shared with your other devices |
 | 🟡 **Syncing n…** | Queued changes are being pushed right now |
-| ⚪ **Offline · n queued** | No connection — changes are safe on this device and will sync automatically |
+| ⚪ **Offline · n queued** | No connection, or no session (signing out on another device ends it here too) — changes are safe on this device and sync automatically once you're back and signed in |
 | 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
 The count covers every queued change: bets, deposits and withdrawals.
@@ -101,8 +101,12 @@ close a dialog.
      figure and the settled bets until then, plus whatever deposits and
      withdrawals that device has queued. Don't sign out on that device until
      then — signing out clears its queue.
-3. Go to **Project Settings → API** and copy your **Project URL** and the
-   **anon public** key.
+3. Copy your **Project URL** (it looks like `https://<ref>.supabase.co`) and
+   your **publishable key** (`sb_publishable_…`, under **Project Settings →
+   API Keys**). The older **anon** key (`eyJ…`) works too, until Supabase
+   retires the legacy keys at the end of 2026. Never the **secret** key
+   (`sb_secret_…`) or **service_role**: they skip row-level security, and the
+   build refuses them.
 
 ### 2. Point the app at your project
 
@@ -110,7 +114,7 @@ close a dialog.
 git clone https://github.com/Vict0rL1/Bettracker.git
 cd Bettracker
 cp .env.example .env
-# edit .env and paste in your URL + anon key
+# edit .env and paste in your URL + publishable key
 npm install
 ```
 
@@ -118,11 +122,24 @@ npm install
 
 ```
 VITE_SUPABASE_URL=https://YOUR-PROJECT-ref.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-public-key
+VITE_SUPABASE_ANON_KEY=your-publishable-key
 ```
 
-(The anon key is safe to ship in a client app — it can only do what your
-row-level security policies allow.)
+(The variable keeps its old name; a publishable key goes in it. It is safe to
+ship in a client app — it can only do what your row-level security policies
+allow.)
+
+`npm run dev` and `npm run build` check these two values first. The build
+stops when they can't work, or would put a secret in the app, and says what to
+put instead; dev says it in the terminal and on the app's setup screen.
+It catches a URL without `https://`, the dashboard's address, the database
+connection string (it holds the database password), an API path after the
+address, the examples left in, a secret or `service_role` key, a key cut short
+or with quotes or spaces in it, something that isn't a key at all (the JWT
+secret, say), and an anon key from another project than the URL's, which is
+what Supabase calls **Invalid API key**. A publishable key carries no project
+to compare, so that last one shows at sign-in instead, where BetTracker says
+which key to use. A build with the old anon key also says when to switch it.
 
 ## Run it in dev
 
@@ -171,12 +188,16 @@ static host works. Build it, then deploy the `dist/` folder:
 npm run build          # type-checks, bundles, and generates the PWA -> dist/
 ```
 
-Easiest hosts (all have free tiers) — set the two `VITE_SUPABASE_*` values as
-build-time environment variables in the host's dashboard:
+The two `VITE_SUPABASE_*` values are written into the bundle when it is built:
+a `dist/` you build yourself takes them from your `.env`, and a host that
+builds from the repo needs them as build-time environment variables in its
+dashboard. Change them, and the app has to be built and uploaded again.
+Easiest hosts (all have free tiers):
 
 - **Vercel** — `vercel` (or connect the repo); framework preset "Vite".
-- **Netlify** — `netlify deploy --prod --dir dist`, or drag `dist/` onto the
-  dashboard.
+- **Netlify** — `netlify deploy --prod --dir dist`, or drag `dist/` onto your
+  site's **Deploys** page (dropping it on the sites list makes a new site,
+  at a new address).
 - **Cloudflare Pages / GitHub Pages** — serve `dist/` as static files.
 
 Then on your phone open the deployed URL and **Add to Home Screen**
@@ -331,14 +352,16 @@ Bettracker/
     ├── main/index.ts           # Electron: a native window around the web UI
     ├── preload/index.ts        # minimal (data goes over the network, not IPC)
     ├── shared/types.ts         # Bet, BetInput, Settings, OddsFormat, BankrollMove
+    ├── shared/supabaseEnv.ts   # checks VITE_SUPABASE_URL / _ANON_KEY (the build and the app)
     └── renderer/src/
         ├── App.tsx             # auth gate + dashboard + live sync wiring
-        ├── auth/               # AuthProvider + Login screen
+        ├── auth/               # AuthProvider + Login screen (+ authErrors.ts, Supabase's refusals in words)
         ├── data/bets.ts        # Supabase CRUD + realtime subscription
         ├── data/useBetSync.ts  # bets state: cache, outbox, sync loop
         ├── data/offline.ts     # device cache + outbox
         ├── data/drain.ts       # replaying the outbox: what leaves it, what stays
-        ├── data/errors.ts      # reading a failed request: offline, migration needed, refused
+        ├── data/errors.ts      # reading a failed request: offline, signed out, migration needed, refused
+        ├── data/session.ts     # no request for a user's rows without their session
         ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
         ├── lib/                # supabase client, validation, csv, odds, dates, stats, bankroll, format, strings, …
@@ -388,12 +411,20 @@ refuses a new bet on its first try, the edits queued for it are dropped with
 it (they could only be refused too); a delete or an Undo queued for it stays.
 Deposits and withdrawals have their own cache and outbox under exactly the
 same rules (and the same conflict rule), so one held back by a missing
-migration never holds back a bet.
+migration never holds back a bet. A change that finds no session (it ran out
+and couldn't be renewed: signing out on another device ends it here too) or
+a key Supabase doesn't take stays queued too, and goes out after the next
+sign-in, or with a copy of the app that has the right key. The data layer
+asks for the session before every read and write, because without one
+supabase-js would go as nobody and row-level security would answer as for
+nobody: an empty history, an edit with no row to change.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read
-or write another's rows. The anon key in the client grants nothing beyond those
-policies.
+or write another's rows. The publishable (or anon) key in the client grants
+nothing beyond those policies, and the build refuses a key that would (a secret
+or `service_role` key) or a database connection string, so neither can end up
+in a published bundle.
 
 ## Data model
 

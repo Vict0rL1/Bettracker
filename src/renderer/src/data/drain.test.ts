@@ -3,7 +3,7 @@ import type { BankrollMove, Bet, MoveInput, Settings } from '../../../shared/typ
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
 import { afterFailedRead, combinedStatus, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
-import { describeError, MigrationNeededError } from './errors'
+import { describeError, MigrationNeededError, SignedOutError } from './errors'
 import { applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
 const add = (id: string): PendingOp => ({ opId: `op-${id}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' })
@@ -101,6 +101,16 @@ describe('drainOutbox', () => {
     expect(h.queue()).toEqual(['op-a', 'op-d'])
   })
 
+  it('keeps the op and everything after it when the session ends partway (signed out on another device)', async () => {
+    const h = harness([add('a'), add('b'), del('c')], async (op) => {
+      if (op.opId !== 'op-a') throw new SignedOutError()
+      return bet()
+    })
+    expect(await drainOutbox(h.hooks)).toEqual({ stop: 'offline', processed: 1 })
+    expect(h.queue()).toEqual(['op-b', 'op-del-c'])
+    expect(h.rejected).toEqual([])
+  })
+
   it('drops an op the server refuses for good, and carries on', async () => {
     const h = harness([add('a'), add('b'), add('c')], async (op) => {
       if (op.opId === 'op-b') throw refused()
@@ -165,6 +175,14 @@ describe('pushSettings', () => {
   it('keeps the patch when the server is unreachable', async () => {
     const h = settingsHarness(patch, async () => {
       throw offline()
+    })
+    expect(await pushSettings(h.hooks)).toEqual({ stop: 'offline' })
+    expect(h.pending()).toBe(patch)
+  })
+
+  it('keeps the patch when the session has ended', async () => {
+    const h = settingsHarness(patch, async () => {
+      throw new SignedOutError()
     })
     expect(await pushSettings(h.hooks)).toEqual({ stop: 'offline' })
     expect(h.pending()).toBe(patch)

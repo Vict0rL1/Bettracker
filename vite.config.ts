@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { supabaseEnvCheck } from './src/shared/supabaseEnv'
 
 // The project folder (where package.json and .env live). `root` points Vite at
 // the renderer sources, but env files should load from the project folder so
@@ -45,6 +46,8 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     ...(mode === 'demo' ? [demo] : []),
+    // A build stops on a .env that can't work or would publish a secret.
+    supabaseEnvCheck(),
     react(),
     VitePWA({
       registerType: 'autoUpdate',

@@ -470,6 +470,31 @@ h2 {
   font-size: var(--fs-md);
 }
 
+/* What is wrong with .env: each line names the variable and the value to use. */
+.setup-problems p {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.setup-problems ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.45;
+}
+
+.setup-problems code {
+  background: var(--tint-2);
+  border-radius: 5px;
+  padding: 0 5px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  /* A URL is one long word: let it break rather than widen the card. */
+  overflow-wrap: anywhere;
+}
+
 /* ---------- buttons ---------- */
 .btn {
   display: inline-flex;

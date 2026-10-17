@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * holds. Enough to check what the data layer sends and how it reads replies.
  */
 const state = vi.hoisted(() => ({
+  /** What auth.getSession() answers: signed in unless a test says otherwise. */
+  session: { data: { session: { user: { id: 'user-1' } } as unknown }, error: null as Error | null },
   result: { data: null as unknown, error: null as { message: string; code?: string } | null, count: null as number | null },
   /** Answers for the next requests, in order; `result` once they run out. */
   queued: [] as { data: unknown; error: { message: string; code?: string } | null; count: number | null }[],
@@ -24,17 +26,19 @@ vi.mock('../lib/supabase', () => {
   return {
     supabase: {
       ...chain,
-      auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } }, error: null }) }
+      auth: { getSession: async () => state.session }
     }
   }
 })
 
 import { addBet, addBets, getBets, sendOp, updateBet, updateBetLegacy } from './bets'
-import { MigrationNeededError } from './errors'
+import { classifySyncError, MigrationNeededError, SignedOutError } from './errors'
+import type { PendingOp } from './offline'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
 
 beforeEach(() => {
+  state.session = { data: { session: { user: { id: 'user-1' } } }, error: null }
   state.calls = []
   state.result = { data: null, error: null, count: null }
   state.queued = []
@@ -226,5 +230,41 @@ describe('missing migration', () => {
     const out = await addBet({ date: '2026-03-01', stake: 30, odds: 2.1, status: 'pending' }, 'id-1')
     expect(call('insert')?.args[0]).toMatchObject({ id: 'id-1', user_id: 'user-1', amount: null, stake: 30, odds: 2.1, status: 'pending' })
     expect(out.status).toBe('pending')
+  })
+})
+
+// The session ran out and could not be renewed (a sign-out on another device
+// ends it everywhere). Sent anyway, as nobody, a read would come back empty
+// and an edit would find no row; an add used to be refused and dropped.
+describe('without a session', () => {
+  const ops: PendingOp[] = [
+    { opId: 'o1', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' },
+    { opId: 'o2', kind: 'update', id: 'a', input: { date: '2026-03-01', amount: 6 }, editedAt: 'E' },
+    { opId: 'o3', kind: 'delete', id: 'a' },
+    { opId: 'o4', kind: 'bulk-add', entries: [{ id: 'b', input: { date: '2026-03-01', amount: 1 } }], queuedAt: 'Q' }
+  ]
+
+  it('reads and sends nothing, and says signed out, which keeps the queue for the next sign-in', async () => {
+    state.session = { data: { session: null }, error: null }
+    await expect(getBets()).rejects.toBeInstanceOf(SignedOutError)
+    for (const op of ops) {
+      const err = await sendOp(op).catch((e: unknown) => e)
+      expect(err, op.kind).toBeInstanceOf(SignedOutError)
+      expect(classifySyncError(err), op.kind).toBe('offline')
+    }
+    expect(state.calls).toEqual([])
+  })
+
+  it('a token that could not be renewed for good (revoked) is a sign-out too', async () => {
+    state.session = { data: { session: null }, error: new Error('Invalid Refresh Token: Refresh Token Not Found') }
+    await expect(sendOp(ops[0])).rejects.toBeInstanceOf(SignedOutError)
+  })
+
+  it('one that could not be renewed for want of a connection is offline', async () => {
+    const err = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 })
+    state.session = { data: { session: null }, error: err }
+    await expect(getBets()).rejects.toBe(err)
+    expect(classifySyncError(err)).toBe('offline')
+    expect(state.calls).toEqual([])
   })
 })
