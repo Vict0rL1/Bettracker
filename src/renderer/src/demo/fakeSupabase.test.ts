@@ -280,6 +280,29 @@ describe('fake Supabase: a server that misbehaves on purpose', () => {
     expect(JSON.parse(localStorage.getItem('e2e:rows') ?? '[]')).toHaveLength(1)
   })
 
+  it('fails the next reads of the table it was told to, with the status asked for', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:fail-reads', JSON.stringify({ table: 'entries', status: 503, message: 'Service Unavailable', times: 1 }))
+    expect(await fake.from('bankroll_moves').select('*')).toMatchObject({ error: null })
+    expect(await fake.from('entries').select('*')).toMatchObject({ error: { message: 'Service Unavailable' }, status: 503 })
+    expect(await fake.from('entries').select('*')).toMatchObject({ error: null, status: 200 })
+  })
+
+  it('holds every write on the wire while told to, and answers it once let go; reads go through', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:hold', '1')
+    let answered = false
+    const write = Promise.resolve(fake.from('entries').insert({ id: 'a' })).then((r) => ((answered = true), r))
+    expect(await fake.from('entries').select('*')).toMatchObject({ error: null, data: [] })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(answered).toBe(false)
+    expect(localStorage.getItem('e2e:writes-started')).toBe('1')
+    localStorage.removeItem('e2e:hold')
+    expect(await write).toMatchObject({ error: null, status: 201 })
+  })
+
   it('leaves a row that is there as it is on an upsert that ignores duplicates', async () => {
     const fake = install('e2e:', false)
     migrate('e2e:')

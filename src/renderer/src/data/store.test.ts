@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { evictExpendable, queueStore, recoverOps, StorageWriteError, withLock, writeDurable, writeExpendable } from './store'
+import { evictExpendable, queueStore, StorageWriteError, withLock, writeDurable, writeExpendable, type Versions } from './store'
 
 /**
  * Storage that fills up: setItem throws QuotaExceededError once the stored
@@ -118,13 +118,14 @@ describe('withLock', () => {
 
 describe('queueStore', () => {
   type Op = { opId: string }
-  const make = () =>
+  const make = (versions?: () => Promise<Versions | null>) =>
     queueStore<Op[]>({
       lock: 'test-queue',
       load: () => JSON.parse(localStorage.getItem('q') ?? '[]') as Op[],
       save: (q) => writeDurable('q', q),
-      recover: recoverOps
+      versions
     })
+  const stored = (): string[] => (JSON.parse(storage.getItem('q') ?? '[]') as Op[]).map((o) => o.opId)
 
   // Two windows each kept their own copy and wrote it back whole: the last
   // write wiped the other's change.
@@ -137,11 +138,21 @@ describe('queueStore', () => {
     expect(mine.read().map((o) => o.opId)).toEqual(['a', 'b', 'c'])
   })
 
-  it('two windows changing it at once both get in', async () => {
-    const a = make()
-    const b = make()
-    await Promise.all(Array.from({ length: 10 }, (_, i) => (i % 2 ? a : b).update((q) => [...q, { opId: String(i) }])))
-    expect(a.read().map((o) => o.opId).sort()).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+  // Changed while another holder had it, a change read the queue from before
+  // the holder's write and wrote over it.
+  it('a change waits while another holder has the lock, then reads what it stored', async () => {
+    const q = make()
+    let release = (): void => {}
+    const holder = withLock('test-queue', () => new Promise<void>((r) => (release = r)))
+    let ran = false
+    const change = q.update((x) => ((ran = true), [...x, { opId: 'b' }]))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(ran).toBe(false)
+    storage.setItem('q', JSON.stringify([{ opId: 'a' }]))
+    release()
+    await holder
+    expect((await change).saved).toBe(true)
+    expect(stored()).toEqual(['a', 'b'])
   })
 
   it('holds the queue in this window when storage refuses it, and says so', async () => {
@@ -166,6 +177,88 @@ describe('queueStore', () => {
     const r = await q.update((x) => x)
     expect(r.saved).toBe(true)
     expect(q.held).toBe(false)
-    expect(JSON.parse(storage.getItem('q') ?? '[]')).toEqual([{ opId: 'mine' }, { opId: 'theirs' }])
+    expect(stored()).toEqual(['theirs', 'mine'])
+  })
+
+  // Recovery kept every op storage still had: an op this window had sent,
+  // or the add of a bet deleted here before it went, came back (and the add
+  // went out after the delete).
+  it('what this window took out while it held the queue stays out', async () => {
+    const q = make()
+    await q.update(() => [{ opId: 'sent-here' }, { opId: 'add-of-deleted-bet' }, { opId: 'b' }])
+    storage.refuse = true
+    await q.update((x) => x.filter((o) => o.opId !== 'sent-here'))
+    await q.update((x) => x.filter((o) => o.opId !== 'add-of-deleted-bet'))
+    // Another window stores an op of its own meanwhile.
+    storage.map.set('q', JSON.stringify([{ opId: 'sent-here' }, { opId: 'add-of-deleted-bet' }, { opId: 'b' }, { opId: 'theirs' }]))
+    storage.refuse = false
+    expect((await q.update((x) => x)).saved).toBe(true)
+    expect(stored()).toEqual(['b', 'theirs'])
+  })
+})
+
+/** The versions IndexedDB keeps, in memory. */
+const memoryVersions = () => {
+  const map = new Map<string, number>()
+  const versions: Versions = { get: async (lock) => map.get(lock) ?? 0, set: async (lock, v) => void map.set(lock, v) }
+  return { map, versions: async () => versions }
+}
+
+describe('queueStore across processes: the next holder reads the last write', () => {
+  type Op = { opId: string }
+  const make = (versions: () => Promise<Versions | null>) =>
+    queueStore<Op[]>({
+      lock: 'test-queue',
+      load: () => JSON.parse(localStorage.getItem('q') ?? '[]') as Op[],
+      save: (q) => writeDurable('q', q),
+      versions
+    })
+  /** Another window's write under the lock, as this window's copy of storage gets it: later. */
+  const arrives = (ops: Op[], version: number, ms: number) =>
+    setTimeout(() => {
+      storage.setItem('q', JSON.stringify(ops))
+      storage.setItem('test-queue:version', String(version))
+    }, ms)
+
+  // The lock was let go before this window's copy had the holder's write: it
+  // read the queue without it and wrote that back.
+  it('waits for the last holder’s write to reach this window before it reads', async () => {
+    const v = memoryVersions()
+    v.map.set('test-queue', 1)
+    arrives([{ opId: 'theirs' }], 1, 60)
+    const r = await make(v.versions).update((q) => [...q, { opId: 'mine' }])
+    expect(r).toEqual({ value: [{ opId: 'theirs' }, { opId: 'mine' }], saved: true })
+    // And counts the version up, here and where every window reads it.
+    expect(storage.getItem('test-queue:version')).toBe('2')
+    expect(v.map.get('test-queue')).toBe(2)
+  })
+
+  it('a read under the lock waits too', async () => {
+    const v = memoryVersions()
+    v.map.set('test-queue', 3)
+    arrives([{ opId: 'theirs' }], 3, 40)
+    expect(await make(v.versions).fresh()).toEqual([{ opId: 'theirs' }])
+  })
+
+  it('counts the version up only for what it stored', async () => {
+    const v = memoryVersions()
+    storage.refuse = true
+    expect((await make(v.versions).update((q) => [...q, { opId: 'a' }])).saved).toBe(false)
+    expect(v.map.get('test-queue')).toBeUndefined()
+    expect(storage.getItem('test-queue:version')).toBeNull()
+  })
+
+  it('does not wait for ever for a version that never comes (storage cleared by hand)', async () => {
+    vi.useFakeTimers()
+    try {
+      const v = memoryVersions()
+      v.map.set('test-queue', 5)
+      const pending = make(v.versions).update((q) => [...q, { opId: 'a' }])
+      await vi.advanceTimersByTimeAsync(2100)
+      expect((await pending).saved).toBe(true)
+      expect(v.map.get('test-queue')).toBe(6)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

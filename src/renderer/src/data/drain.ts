@@ -29,7 +29,7 @@ export type DrainResult =
 
 export interface DrainHooks<I = BetInput, R = Bet> {
   /** The queue as it is now, other windows' changes included. Read before every op: it can grow while a request is out. */
-  outbox: () => readonly PendingOp<I>[]
+  outbox: () => readonly PendingOp<I>[] | Promise<readonly PendingOp<I>[]>
   /**
    * Change the queue: `fn` gets it as stored now, and nothing else changes it
    * until it is stored again (see store.ts). Resolves with the new queue.
@@ -48,11 +48,24 @@ export interface DrainHooks<I = BetInput, R = Bet> {
    */
   applied: (op: PendingOp<I>, result: R | null, superseded: boolean) => void
   /**
-   * The server refused these for good: the op, with the edits queued for a
-   * bet it never made. They have left the queue; keep them where the user
-   * can send them again.
+   * The server refused these for good: the op, with what was queued after
+   * it for a bet it never made. Keep them where the user can send them
+   * again; they leave the queue once this resolves.
    */
   rejected: (ops: PendingOp<I>[], err: unknown) => void | Promise<void>
+}
+
+/** What was queued for an add's bet after it, up to the next add of that bet (an Undo, which starts it anew). */
+function queuedAfter<I>(queue: readonly PendingOp<I>[], add: PendingOp<I>): PendingOp<I>[] {
+  const at = queue.findIndex((o) => o.opId === add.opId)
+  if (add.kind === 'bulk-add' || at < 0) return []
+  const after: PendingOp<I>[] = []
+  for (const o of queue.slice(at + 1)) {
+    if (o.kind === 'bulk-add' || o.id !== add.id) continue
+    if (o.kind === 'add') break
+    after.push(o)
+  }
+  return after
 }
 
 const markSent = <I>(queue: PendingOp<I>[], opId: string, sent: boolean): PendingOp<I>[] =>
@@ -72,7 +85,7 @@ const markSent = <I>(queue: PendingOp<I>[], opId: string, sent: boolean): Pendin
 export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): Promise<DrainResult> {
   let processed = 0
   const forBet = (o: PendingOp<I>, op: PendingOp<I>): boolean => o.kind !== 'bulk-add' && op.kind !== 'bulk-add' && o.id === op.id
-  for (let head = h.outbox()[0]; head !== undefined; head = h.outbox()[0]) {
+  for (let head = (await h.outbox())[0]; head !== undefined; head = (await h.outbox())[0]) {
     let op: PendingOp<I> = head
     const firstTry = !op.sent
     if (firstTry) {
@@ -86,7 +99,7 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
     }
     try {
       const result = await h.send(op, progress)
-      h.applied(op, result, h.outbox().some((o) => o.opId !== op.opId && forBet(o, op)))
+      h.applied(op, result, (await h.outbox()).some((o) => o.opId !== op.opId && forBet(o, op)))
       await h.update((q) => q.filter((o) => o.opId !== op.opId))
       processed++
     } catch (err) {
@@ -104,22 +117,22 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
         return { stop: failure, processed, error: err }
       }
       // The server refused this op for good (validation, RLS, row gone). It
-      // leaves the queue so it can't block it, with the edits queued for its
-      // bet if it was an add refused on its first try (not as a duplicate):
-      // it never made the bet, so they would only come back refused, as false
-      // "newer edit" notices. Not after an earlier attempt (it may have
-      // landed), and not for an import (earlier chunks may have landed);
-      // deletes stay either way, as a delete of a missing row is harmless.
+      // leaves the queue so it can't block it. An add refused on its first
+      // try (not as a duplicate) never made the bet, so what was queued for
+      // that bet after it goes with it, up to an Undo that adds the bet again:
+      // its edits would only come back refused, as false "newer edit"
+      // notices, and with its delete kept beside it, sending them again does
+      // what the user did (an add then a delete is nothing). Not after an
+      // earlier attempt (it may have landed), and not for an import (earlier
+      // chunks may have landed).
       const neverMade = op.kind === 'add' && firstTry && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
-      const gone: PendingOp<I>[] = []
-      await h.update((q) =>
-        q.filter((o) => {
-          const leaves = o.opId === op.opId || (neverMade && o.kind === 'update' && forBet(o, op))
-          if (leaves) gone.push(o)
-          return !leaves
-        })
-      )
-      await h.rejected(gone.length > 0 ? gone : [op], err)
+      const queue = await h.outbox()
+      const gone = [queue.find((o) => o.opId === op.opId) ?? op, ...(neverMade ? queuedAfter(queue, op) : [])]
+      // Kept apart before it leaves the queue: a window closed in between
+      // leaves it in both (sent twice at worst), never in neither. It leaves
+      // by id, so the change takes out the same ops when replayed (see store.ts).
+      await h.rejected(gone, err)
+      await h.update((q) => q.filter((o) => !gone.some((g) => g.opId === o.opId)))
     }
   }
   return { stop: 'done', processed }
@@ -136,7 +149,8 @@ export type SettingsPushResult =
   | { stop: 'paused' | 'retry' | 'behind' | 'rejected'; error: unknown }
 
 export interface SettingsPushHooks {
-  pending: () => PendingSettings | null
+  /** The patch pending now, other windows' edits included. */
+  pending: () => PendingSettings | null | Promise<PendingSettings | null>
   /**
    * `sent` has had its answer: take it out of what is pending (see
    * afterSettingsAnswer), keeping whatever was edited since it went.
@@ -152,7 +166,7 @@ export interface SettingsPushHooks {
  * settles the patch that went: an edit made while it was out stays pending.
  */
 export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushResult | null> {
-  const p = h.pending()
+  const p = await h.pending()
   if (!p) return null
   try {
     const saved = await h.save(p)

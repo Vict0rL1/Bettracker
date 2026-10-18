@@ -220,16 +220,6 @@ export function afterSettingsAnswer(current: PendingSettings | null, sent: Pendi
   return Object.keys(left).length > 0 ? { patch: left as SettingsPatch, editedAt: current.editedAt } : null
 }
 
-/**
- * Two windows' pending patches as one, for when storage takes them again:
- * the newer edit's fields win.
- */
-export function mergeSettingsPending(stored: PendingSettings | null, mine: PendingSettings | null): PendingSettings | null {
-  if (!stored || !mine) return mine ?? stored
-  const [older, newer] = stored.editedAt <= mine.editedAt ? [stored, mine] : [mine, stored]
-  return { patch: { ...older.patch, ...newer.patch }, editedAt: newer.editedAt }
-}
-
 export const loadLastUser = (): OfflineUser | null => readJson<OfflineUser>(LAST_USER_KEY)
 export const saveLastUser = (user: OfflineUser): void => writeExpendable(LAST_USER_KEY, user)
 
@@ -308,9 +298,10 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
     if (op.kind === 'add') {
       map.set(op.id, optimisticRow(op.id, op.input, op.queuedAt, insertStamp(op)))
     } else if (op.kind === 'bulk-add') {
-      // A row an earlier attempt already stored is the server's now, edited
-      // since perhaps: only the rows it doesn't have yet show from the import.
-      for (const { id, input } of op.entries) if (!map.has(id)) map.set(id, optimisticRow(id, input, op.queuedAt))
+      // Only the rows the server has not confirmed yet show from the import,
+      // and only where it has no row: a confirmed row is the server's (see
+      // landImport), edited or deleted elsewhere since perhaps.
+      for (const { id, input } of op.entries.slice(op.done ?? 0)) if (!map.has(id)) map.set(id, optimisticRow(id, input, op.queuedAt))
     } else if (op.kind === 'update') {
       const current = map.get(op.id)
       if (current && op.legacy) map.set(op.id, { ...applyLegacyEdit(current, op.input), updatedAt: op.editedAt })
@@ -368,6 +359,40 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
 }
 
 /**
+ * Put a change the server refused back in the queue, to be sent again. It
+ * was made before whatever has been queued for its bet since, so it must not
+ * override that: an edit adds nothing once a newer edit of the bet, a newer
+ * add of it (an Undo) or its delete is queued, as an edit carries the whole
+ * bet. Anything else is queued as a new change (see enqueueOp).
+ */
+export function requeueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: PendingOp<I>): PendingOp<I>[] {
+  if (op.kind === 'update') {
+    const newer = outbox.some(
+      (o) =>
+        o.kind !== 'bulk-add' &&
+        o.id === op.id &&
+        (o.kind === 'delete' || (o.kind === 'add' ? insertStamp(o) : o.editedAt) > op.editedAt)
+    )
+    if (newer) return [...outbox]
+  }
+  return enqueueOp(outbox, op)
+}
+
+/**
+ * Refused changes, sent again: each entry is the story of one bet (a refused
+ * add with what was queued for its bet after it, or a single change), given
+ * as new ops (new ids, never sent). It is folded together first, as it was
+ * queued, so an add the user then deleted comes to nothing again; what is
+ * left is queued without overriding what was queued since (see requeueOp).
+ */
+export function requeueRefused<I = BetInput>(outbox: readonly PendingOp<I>[], stories: readonly (readonly PendingOp<I>[])[]): PendingOp<I>[] {
+  return stories.reduce<PendingOp<I>[]>(
+    (queue, story) => story.reduce<PendingOp<I>[]>((told, op) => enqueueOp(told, op), []).reduce((q, op) => requeueOp(q, op), queue),
+    [...outbox]
+  )
+}
+
+/**
  * Fold a successfully synced op (and the row the server returned) into the
  * cached server state. An update that returned no row was refused by the
  * conflict check (or the row is gone): the local state is left as the server
@@ -375,18 +400,30 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
  */
 export function reconcile(server: readonly Bet[], op: PendingOp, result: Bet | null): Bet[] {
   if (op.kind === 'delete') return server.filter((b) => b.id !== op.id)
-  if (op.kind === 'bulk-add') {
-    // The server stored what we sent where it had no row yet, so keep those
-    // local rows rather than blanking them; a row it already had (stored by an
-    // earlier attempt, edited since perhaps) stays as it is there. The refresh
-    // that follows a drain trues up the timestamps.
-    const have = new Set(server.map((b) => b.id))
-    const added = op.entries.filter(({ id }) => !have.has(id)).map(({ id, input }) => optimisticRow(id, input, op.queuedAt))
-    return sortBets([...server, ...added])
-  }
+  // What this attempt sent: the rows an earlier one had confirmed are
+  // already the server's (see landImport).
+  if (op.kind === 'bulk-add') return landImport(server, op, op.done ?? 0, op.entries.length)
   if (!result) return [...server]
   const rest = server.filter((b) => b.id !== result.id)
   return sortBets([...rest, result])
+}
+
+/**
+ * The rows of an import from `from` to `to`, which the server has just
+ * confirmed, into the cached server copy: the server stored them where it had
+ * no row yet, so they show as sent, and the import no longer shows them
+ * itself (see applyOutbox). From then on they are the server's: one deleted
+ * on another device goes with the next refresh instead of coming back from
+ * the import. A row the copy already has stays as it is there. The refresh
+ * that follows a drain trues up the timestamps.
+ */
+export function landImport(server: readonly Bet[], op: Extract<PendingOp, { kind: 'bulk-add' }>, from: number, to: number): Bet[] {
+  const have = new Set(server.map((b) => b.id))
+  const added = op.entries
+    .slice(from, to)
+    .filter(({ id }) => !have.has(id))
+    .map(({ id, input }) => optimisticRow(id, input, op.queuedAt))
+  return added.length > 0 ? sortBets([...server, ...added]) : [...server]
 }
 
 /**

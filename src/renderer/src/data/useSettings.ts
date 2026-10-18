@@ -4,13 +4,12 @@ import {
   afterSettingsAnswer,
   loadSettingsCache,
   loadSettingsOutbox,
-  mergeSettingsPending,
   queueKeys,
   saveSettingsCache,
   saveSettingsOutbox,
   type PendingSettings
 } from './offline'
-import { backoff, migrationNotice, pushSettings, retryPlan, type SettingsPushResult } from './drain'
+import { backoff, migrationNotice, pushSettings, retryPlan, syncStatus, type SettingsPushResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
 import { queueStore, withLock } from './store'
@@ -31,6 +30,8 @@ export interface SettingsSync {
   loaded: boolean
   /** Storage refused the pending change: it is only in this window until it syncs. */
   unsaved: boolean
+  /** For the badge, while a change is pending: on its way, or what holds it back. */
+  status: SyncStatus
   /** Resolves once the change is pending: true when this device's storage holds it. */
   update: (patch: SettingsPatch) => Promise<boolean>
   saveAgain: () => Promise<boolean>
@@ -55,7 +56,13 @@ export function useSettings(
   const [server, setServerState] = useState<Settings | null>(null)
   const [pending, setPendingState] = useState<PendingSettings | null>(null)
   const [held, setHeld] = useState(false)
+  // Edits on their way to storage: on screen at once, before the lock and the
+  // write (see store.ts) are through, so what reads the settings next sees them.
+  const [storing, setStoring] = useState<SettingsPatch[]>([])
   const [blocked, setBlockedState] = useState(false)
+  // What stopped the last push short of an answer: the connection, the
+  // session or key, or a server failure that passes. Cleared by an answer.
+  const [stopped, setStopped] = useState<'offline' | 'paused' | 'retrying' | null>(null)
   const blockedRef = useRef(false)
   const setBlocked = useCallback((next: boolean) => {
     blockedRef.current = next
@@ -81,8 +88,7 @@ export function useSettings(
         ? queueStore<PendingSettings | null>({
             lock: `bettracker:queue:settings:${userId}`,
             load: () => loadSettingsOutbox(userId),
-            save: (p) => saveSettingsOutbox(userId, p),
-            recover: mergeSettingsPending
+            save: (p) => saveSettingsOutbox(userId, p)
           })
         : null,
     [userId]
@@ -130,6 +136,7 @@ export function useSettings(
     failNoticeRef.current.clear()
     backoffRef.current.reset()
     setBlocked(false)
+    setStopped(null)
   }, [setBlocked])
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -155,7 +162,7 @@ export function useSettings(
     try {
       out = await withLock(`bettracker:drain:settings:${userId}`, () =>
         pushSettings({
-          pending: () => store.read(),
+          pending: () => store.fresh(),
           settle: async (sent) => void (await change((current) => afterSettingsAnswer(current, sent))),
           save: (p) => saveSettings(p.patch, p.editedAt)
         })
@@ -171,11 +178,16 @@ export function useSettings(
       onNoticeRef.current?.('conflict')
       await refresh()
     } else if (out?.stop === 'retry') {
+      setStopped('retrying')
       report(out.error)
       const wait = backoffRef.current.failed(out.error)
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
       retryTimerRef.current = setTimeout(() => void syncNowRef.current(), wait)
-    } else if (out?.stop === 'behind' || out?.stop === 'rejected' || out?.stop === 'paused') report(out.error)
+    } else if (out?.stop === 'offline') setStopped('offline')
+    else if (out?.stop === 'behind' || out?.stop === 'rejected' || out?.stop === 'paused') {
+      setStopped(out.stop === 'paused' ? 'paused' : null)
+      report(out.error)
+    }
     // Answered (saved, beaten or refused): an edit made while it was out is
     // still pending, and goes now.
     if ((out?.stop === 'saved' || out?.stop === 'conflict' || out?.stop === 'rejected') && pendingRef.current) setTimeout(() => void syncNowRef.current(), 0)
@@ -193,6 +205,8 @@ export function useSettings(
     setServerState(null)
     setPendingState(null)
     setHeld(false)
+    setStoring([])
+    setStopped(null)
     if (!userId) return
     const cached = loadSettingsCache(userId)
     const queued = loadSettingsOutbox(userId)
@@ -259,10 +273,15 @@ export function useSettings(
   const update = useCallback(
     async (patch: SettingsPatch): Promise<boolean> => {
       const editedAt = new Date().toISOString()
-      // Merged into what is pending now, other windows' edits included.
-      const saved = await change((current) => ({ patch: { ...(current?.patch ?? {}), ...patch }, editedAt }))
-      setTimeout(() => void syncNowRef.current(), 0)
-      return saved
+      setStoring((xs) => [...xs, patch])
+      try {
+        // Merged into what is pending now, other windows' edits included.
+        const saved = await change((current) => ({ patch: { ...(current?.patch ?? {}), ...patch }, editedAt }))
+        setTimeout(() => void syncNowRef.current(), 0)
+        return saved
+      } finally {
+        setStoring((xs) => xs.filter((x) => x !== patch))
+      }
     },
     [change]
   )
@@ -273,7 +292,10 @@ export function useSettings(
     return saved
   }, [change])
 
-  const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}) }
+  const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}), ...Object.assign({}, ...storing) }
 
-  return { settings, dirty: pending !== null, blocked, loaded: server !== null || blocked, unsaved: held && pending !== null, update, saveAgain }
+  const dirty = pending !== null || storing.length > 0
+  const status = syncStatus({ canSync, offline: stopped === 'offline', queued: dirty ? 1 : 0, behind: blocked, paused: stopped === 'paused', retrying: stopped === 'retrying' })
+
+  return { settings, dirty, blocked, loaded: server !== null || blocked, unsaved: held && pending !== null, status, update, saveAgain }
 }

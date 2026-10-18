@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { checkSupabaseEnv, type EnvProblem } from '../../../shared/supabaseEnv'
+import { timeoutFetch } from './timeoutFetch'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -39,6 +40,9 @@ export function hasStoredSession(): boolean {
   }
 }
 
+/** How long a request may go without an answer before it counts as unreachable. */
+const REQUEST_TIMEOUT_MS = 30_000
+
 function makeClient(): SupabaseClient {
   if (injected) return injected
 
@@ -59,7 +63,9 @@ function makeClient(): SupabaseClient {
       persistSession: true,
       autoRefreshToken: true,
       storageKey: AUTH_STORAGE_KEY
-    }
+    },
+    // A request with no answer after this long is given up (see timeoutFetch).
+    global: { fetch: timeoutFetch(REQUEST_TIMEOUT_MS) }
   })
 }
 

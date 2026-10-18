@@ -207,11 +207,17 @@ export function useMoves(
     }
     // The server answered, so the connection is back whatever said otherwise.
     setOffline(false)
+    // Each stop says what holds the queue back now: a reason from an earlier
+    // stop would otherwise outrank it on the badge (see syncStatus).
     if (result.stop === 'paused') {
+      setRetrying(false)
+      setBehind(false)
       setPaused(true, result.error)
       return
     }
     if (result.stop === 'retry') {
+      setPaused(false)
+      setBehind(false)
       const wait = backoffRef.current.failed(result.error)
       setRetrying(true, result.error)
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
@@ -219,6 +225,8 @@ export function useMoves(
       return
     }
     if (result.stop === 'behind') {
+      setPaused(false)
+      setRetrying(false)
       setBehind(true, result.error)
       return
     }

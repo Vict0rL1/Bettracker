@@ -3,9 +3,9 @@ import type { Bet, BetInput } from '../../../shared/types'
 import { newId } from '../lib/uuid'
 import { normalizeInput } from '../lib/validate'
 import { getBets, sendOp, subscribeToBets } from './bets'
-import { backoff, migrationNotice, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { backoff, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
-import { applyOutbox, loadCache, loadRefused, opSize, queueKeys, readOutbox, reconcile, saveCache, saveOutbox, saveRefused, type PendingOp, type Refused } from './offline'
+import { applyOutbox, landImport, loadCache, loadRefused, opSize, queueKeys, readOutbox, reconcile, saveCache, saveOutbox, saveRefused, type PendingOp, type Refused } from './offline'
 import { useOpQueue } from './useOpQueue'
 
 export type { SyncStatus }
@@ -165,7 +165,17 @@ export function useBetSync(
     let result: DrainResult | null
     try {
       result = await drain<Bet>({
-        send: sendOp,
+        send: (op, progress) => {
+          if (op.kind !== 'bulk-add') return sendOp(op)
+          // Each chunk the server confirms is the server's from then on (see
+          // landImport): into the server copy first, then off the import.
+          let from = op.done ?? 0
+          return sendOp(op, async (done) => {
+            setServer(landImport(serverRef.current ?? [], op, from, done))
+            from = done
+            await progress(done)
+          })
+        },
         applied: (op, row, superseded) => {
           // A refused update lost to a newer edit elsewhere (or the bet is
           // gone). Nothing to retry: the refresh after the drain shows the
@@ -189,11 +199,17 @@ export function useBetSync(
     }
     // The server answered, so the connection is back whatever said otherwise.
     setOffline(false)
+    // Each stop says what holds the queue back now: a reason from an earlier
+    // stop would otherwise outrank it on the badge (see syncStatus).
     if (result.stop === 'paused') {
+      setRetrying(false)
+      setBehind(false)
       setPaused(true, result.error)
       return
     }
     if (result.stop === 'retry') {
+      setPaused(false)
+      setBehind(false)
       const wait = backoffRef.current.failed(result.error)
       setRetrying(true, result.error)
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
@@ -201,6 +217,8 @@ export function useBetSync(
       return
     }
     if (result.stop === 'behind') {
+      setPaused(false)
+      setRetrying(false)
       setBehind(true, result.error)
       return
     }
@@ -283,7 +301,13 @@ export function useBetSync(
       if (document.visibilityState === 'visible') void syncNow().then(() => refresh())
     }
     const timer = setInterval(() => {
-      if (outboxRef.current.length > 0) void syncNow()
+      // Read again while the bets have never been read: a first read that
+      // failed for now (a 503, say) on a connection the browser still thinks
+      // is up sends no online event, and a device with no copy would stay on
+      // the splash.
+      const plan = retryPlan({ queued: outboxRef.current.length > 0, loaded: serverRef.current !== null })
+      if (plan === 'read') void syncNow().then(() => refresh())
+      else if (plan === 'drain') void syncNow()
     }, RETRY_INTERVAL_MS)
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)

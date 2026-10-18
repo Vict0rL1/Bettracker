@@ -46,10 +46,14 @@ moment you're back online. The header badge tells you where you stand:
 | 🔴 **Signed out · n queued** | Your session ended (signing out on another device ends it everywhere) — changes are safe on this device; **Sign in again** sends them |
 | 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
-The count covers every queued change: bets, deposits and withdrawals.
-Signing out removes that device's local copy (cache and queued changes);
-anything already synced stays safe in your Supabase project. While changes
-are still queued, **Sign out** asks you to click again.
+The count covers every queued change: bets, deposits and withdrawals. A
+settings change waiting to sync shows on the badge too (without a count).
+A request the server never answers is given up after 30 seconds, as if the
+connection had dropped, and tried again later.
+Signing out removes that device's local copy (cache, queued changes and
+refused ones); anything already synced stays safe in your Supabase project.
+While changes are still queued or refused, **Sign out** asks you to click
+again.
 
 Three more things stay on screen until you deal with them, because they are
 about changes that haven't reached the server:
@@ -61,17 +65,22 @@ about changes that haven't reached the server:
   (full, or turned off). Cached server data is dropped first to make room;
   when even that isn't enough the change stays in that window only, keeps
   syncing while it is open, and the toast says so instead of "Added".
-  **Try again** stores it once there is room.
+  **Try again** stores it once there is room, on top of whatever other
+  windows stored meanwhile (what this window sent or deleted stays out).
 - **Refused** — Supabase refused a change for good (a check it fails, say).
   It leaves the queue so it can't block the rest, and waits here with the
-  server's reason: **Send again** or **Discard**.
+  server's reason: **Send again** (never over a newer edit of the same bet)
+  or **Discard**.
 
 Several windows of the app (two tabs, or a tab and the installed app) share
 one queue: each change is made to the stored queue under a lock that spans
 windows (the Web Locks API), only one window sends it at a time, and a change
-made in one window shows in the others. Over plain http on your local network
-(`npm run dev` on the phone) the browser has no such lock, and windows there
-don't coordinate.
+made in one window shows in the others. The lock alone isn't enough, because
+each window reads its own copy of the browser's storage, which another
+window's write reaches a moment later; so every change also counts up a
+version kept in IndexedDB, and the next window waits until its copy has it
+before reading. Over plain http on your local network (`npm run dev` on the
+phone) the browser has no such lock, and windows there don't coordinate.
 
 Small things that add up: a **light theme** (☀️ in the header — it follows your
 OS until you pick one, then stays put), **search and filters** over your history
@@ -397,11 +406,11 @@ Bettracker/
         ├── data/drain.ts       # replaying the outbox: what leaves it, what stays
         ├── data/errors.ts      # reading a failed request: offline, paused, retry, migration needed, refused
         ├── data/session.ts     # no request for a user's rows without their session
-        ├── data/store.ts       # the queues in storage, shared by every window under a lock
+        ├── data/store.ts       # the queues in storage, shared by every window under a lock (and a version in IndexedDB)
         ├── data/useOpQueue.ts  # a queue of ops as the bets and the moves keep it (storage, drain lock, refused)
         ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
-        ├── lib/                # supabase client, validation, csv, odds, dates, stats, bankroll, format, strings, …
+        ├── lib/                # supabase client (requests time out after 30 s), validation, csv, odds, dates, stats, bankroll, format, strings, …
         ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e) and its entry
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, …
 ```
@@ -547,4 +556,7 @@ as everything else — so it works with no connection and can't create duplicate
 rows if it's retried. It goes up in chunks of 250, and the app keeps count of
 the chunks the server confirmed: an import cut halfway sends only the rest
 when it is retried, and a row that did land is never written over (another
-device may have edited or deleted it since).
+device may have edited it since). A confirmed row is the server's from then
+on, so one deleted on another device stays deleted. Only rows of the chunk
+that was out when the connection dropped are sent again; if one of those
+had landed and was deleted elsewhere before the retry, it comes back.

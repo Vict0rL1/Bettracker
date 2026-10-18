@@ -45,7 +45,12 @@ export interface FakeSupabaseConfig {
  *                    400 for good) and change nothing;
  *  - `e2e:writes-left`  that many more writes go through; after them the
  *                    connection drops for writes (an import cut halfway);
- *  - `e2e:signed-out`  the session has ended (see `__endSession`).
+ *  - `e2e:signed-out`  the session has ended (see `__endSession`);
+ *  - `e2e:fail-reads`  `{ table, status, message, times }`: the next `times`
+ *                    reads of that table fail with that status (a 503);
+ *  - `e2e:hold`      set: every write waits on the wire, unanswered, until
+ *                    it is cleared, so a test acts while one is out for as
+ *                    long as it needs, whatever the machine's speed.
  * A row written without `updated_at` gets the time it was answered, as the
  * server's now() would. Answers carry the HTTP status PostgREST would give.
  *
@@ -91,6 +96,12 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   const session = { access_token: cfg.prefix + 'session', user: { id: cfg.user.id, email: cfg.user.email } }
   const migrated = (): boolean => flag('migrated')
   const latency = (): number => Number(localStorage.getItem(key('latency')) || 0)
+  /** A write waits while `hold` is set; a read never does. */
+  const held = (q: { action: string }): Promise<void> =>
+    new Promise((resolve) => {
+      const check = (): void => void (q.action === 'select' || !flag('hold') ? resolve() : setTimeout(check, 20))
+      check()
+    })
   const down = (): boolean => flag('down') || (cfg.demo && typeof navigator !== 'undefined' && navigator.onLine === false)
   const maxRows = (): number => Number(localStorage.getItem(key('max-rows')) || 0)
   const NO_COLUMN = { message: "Could not find the 'closing_odds' column of 'entries' in the schema cache", code: 'PGRST204' }
@@ -180,6 +191,14 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     }
     const lost = { data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0 }
     if (down()) return lost
+    if (q.action === 'select') {
+      const fail = read<{ table: string; status: number; message: string; times: number } | null>('fail-reads', null)
+      if (fail && fail.table === q.table && fail.times > 0) {
+        if (fail.times === 1) localStorage.removeItem(key('fail-reads'))
+        else write('fail-reads', { ...fail, times: fail.times - 1 })
+        return { data: null, error: { message: fail.message, code: '' }, status: fail.status }
+      }
+    }
     if (q.action !== 'select') {
       const left = localStorage.getItem(key('writes-left'))
       if (left !== null) {
@@ -245,6 +264,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       then<A, B = never>(resolve?: (value: Answer) => A | PromiseLike<A>, reject?: (reason: unknown) => B | PromiseLike<B>): Promise<A | B> {
         if (q.action !== 'select') localStorage.setItem(key('writes-started'), String(Number(localStorage.getItem(key('writes-started')) || 0) + 1))
         return new Promise((r) => setTimeout(r, latency()))
+          .then(() => held(q))
           .then(() => answer(q))
           .then(resolve, reject)
       }

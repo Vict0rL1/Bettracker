@@ -6,7 +6,6 @@ import {
   applyMoveOutbox,
   applyOutbox,
   clearUserData,
-  mergeSettingsPending,
   readOutbox,
   enqueueOp,
   headAsSent,
@@ -22,6 +21,9 @@ import {
   opSize,
   reconcile,
   reconcileMove,
+  landImport,
+  requeueOp,
+  requeueRefused,
   saveCache,
   saveMoveCache,
   saveMoveOutbox,
@@ -58,6 +60,9 @@ const bulk = (ids: string[]): PendingOp => ({
   entries: ids.map((id) => ({ id, input: { date: '2026-02-01', amount: 5, stake: 5 } })),
   queuedAt: '2026-02-01T10:00:00.000Z'
 })
+
+/** An import whose first `done` rows the server has confirmed. */
+const imported = (ids: string[], done: number) => ({ ...(bulk(ids) as Extract<PendingOp, { kind: 'bulk-add' }>), done })
 
 beforeEach(() => localStorage.clear())
 
@@ -443,6 +448,53 @@ describe('enqueueOp', () => {
   })
 })
 
+// "Send again" queued the refused edit as a new one, and enqueueOp folded it
+// into the newer edit queued since: the older content, with its older time,
+// replaced the newer edit.
+describe('requeueOp: a refused change sent again', () => {
+  const T10 = '2026-01-02T10:00:00.000Z'
+  const T11 = '2026-01-02T11:00:00.000Z'
+
+  it('an edit with a newer edit of its bet queued adds nothing, even once that one went out', () => {
+    const newer = update('a', 99, T11)
+    expect(requeueOp([newer], update('a', 1, T10))).toEqual([newer])
+    const out = { ...newer, sent: true as const }
+    expect(requeueOp([out], update('a', 1, T10))).toEqual([out])
+  })
+
+  it('nor with the bet deleted since, or added again by an Undo since', () => {
+    expect(requeueOp([del('a')], update('a', 1, T10))).toEqual([del('a')])
+    const undo = { ...add('a'), queuedAt: T11 }
+    expect(requeueOp([undo], update('a', 1, T10))).toEqual([undo])
+  })
+
+  it('otherwise it is queued as a new change: folded into an older edit not yet sent, or after the rest', () => {
+    const older = update('a', 5, '2026-01-02T09:00:00.000Z')
+    expect(requeueOp([older], update('a', 1, T10))).toEqual([{ ...older, input: { date: '2026-01-01', amount: 1, stake: null }, editedAt: T10 }])
+    expect(requeueOp([update('b', 7, T11)], update('a', 1, T10)).map((o) => o.opId)).toEqual([update('b', 7, T11).opId, update('a', 1, T10).opId])
+    expect(requeueOp([], add('a'))).toEqual([add('a')])
+  })
+})
+
+describe('requeueRefused: refused changes sent again, each as it was queued', () => {
+  const fresh = (ops: PendingOp[]) => ops.map((o) => ({ ...o, opId: `again-${o.opId}` }))
+
+  it('an add with its delete behind it is nothing', () => {
+    expect(requeueRefused([update('b', 1)], [fresh([add('a'), del('a')])])).toEqual([update('b', 1)])
+  })
+
+  it('an add with an edit behind it goes as one add, with the edit', () => {
+    const out = requeueRefused([], [fresh([add('a', { amount: 10 }), update('a', 55)])])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'add', id: 'a', input: { amount: 55 } })
+  })
+
+  it('a refused edit still gives way to a newer edit queued since', () => {
+    const newer = update('a', 99, '2026-01-02T11:00:00.000Z')
+    expect(requeueRefused([newer], [fresh([update('a', 1, '2026-01-02T10:00:00.000Z')])])).toEqual([newer])
+  })
+})
+
 describe('opSize', () => {
   it('counts rows, not ops', () => {
     expect(opSize(add('a'))).toBe(1)
@@ -626,6 +678,26 @@ describe('applyOutbox — an import that partly landed', () => {
     expect(view.find((b) => b.id === 'x')).toEqual(edited)
     expect(view.map((b) => b.id).sort()).toEqual(['x', 'y'])
   })
+
+  // A confirmed row the server no longer has was deleted on another device:
+  // the import showed it again.
+  it('shows nothing of the rows the server confirmed: those are the server’s', () => {
+    const view = applyOutbox([bet({ id: 'y' })], [imported(['x', 'y', 'z'], 2)])
+    expect(view.map((b) => b.id).sort()).toEqual(['y', 'z'])
+  })
+})
+
+describe('landImport: rows the server confirmed, into its copy', () => {
+  it('adds the confirmed rows it lacks, and leaves the rows it has as they are', () => {
+    const edited = bet({ id: 'x', note: 'edited elsewhere' })
+    const rows = landImport([edited], imported(['x', 'y', 'z'], 0), 0, 2)
+    expect(rows.map((b) => b.id).sort()).toEqual(['x', 'y'])
+    expect(rows.find((b) => b.id === 'x')).toEqual(edited)
+  })
+
+  it('on the answer, adds only what this attempt sent: an earlier attempt’s rows are the server’s already', () => {
+    expect(reconcile([], imported(['x', 'y', 'z'], 2), null).map((b) => b.id)).toEqual(['z'])
+  })
 })
 
 describe('settings: what an answer leaves pending', () => {
@@ -649,13 +721,3 @@ describe('settings: what an answer leaves pending', () => {
   })
 })
 
-describe('settings: two windows’ pending patches as one', () => {
-  it('the newer edit wins field by field', () => {
-    const older = { patch: { unitSize: 10, lossLimit: 100 }, editedAt: 'E1' }
-    const newer = { patch: { unitSize: 25 }, editedAt: 'E2' }
-    expect(mergeSettingsPending(older, newer)).toEqual({ patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E2' })
-    expect(mergeSettingsPending(newer, older)).toEqual({ patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E2' })
-    expect(mergeSettingsPending(null, newer)).toBe(newer)
-    expect(mergeSettingsPending(older, null)).toBe(older)
-  })
-})

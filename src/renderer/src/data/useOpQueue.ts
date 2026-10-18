@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { drainOutbox, type DrainHooks, type DrainResult } from './drain'
-import { enqueueOp, headAsSent, type PendingOp, type Refused } from './offline'
-import { queueStore, recoverOps, withLock } from './store'
+import { enqueueOp, headAsSent, requeueRefused, type PendingOp, type Refused } from './offline'
+import { queueStore, withLock } from './store'
 
 export interface OpQueueOptions<I> {
   userId: string | null
@@ -40,6 +40,12 @@ export interface OpQueue<I> {
 
 const sameRefused = <I>(a: Refused<I>, b: Refused<I>): boolean => a.at === b.at && a.ops[0]?.opId === b.ops[0]?.opId
 
+/** Takes these entries off the refused list, by identity: replayed later (see store.ts), it takes no others. */
+const without =
+  <I>(entries: readonly Refused<I>[]) =>
+  (list: Refused<I>[]): Refused<I>[] =>
+    list.filter((r) => !entries.some((e) => sameRefused(e, r)))
+
 /**
  * A queue of ops (the bets', or the deposits and withdrawals') kept in
  * storage and shared by every window of the app:
@@ -68,14 +74,12 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
       queue: queueStore<PendingOp<I>[]>({
         lock: `bettracker:queue:${name}:${userId}`,
         load: () => opts.read(userId),
-        save: (q) => opts.save(userId, q),
-        recover: recoverOps
+        save: (q) => opts.save(userId, q)
       }),
       refused: queueStore<Refused<I>[]>({
         lock: `bettracker:refused:${name}:${userId}`,
         load: () => opts.readRefused(userId),
-        save: (list) => opts.saveRefused(userId, list),
-        recover: (stored, mine) => [...mine, ...stored.filter((r) => !mine.some((m) => sameRefused(m, r)))]
+        save: (list) => opts.saveRefused(userId, list)
       })
     }
   }, [userId, name])
@@ -142,13 +146,13 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
       if (!userId || !stores) return null
       return withLock(`bettracker:drain:${name}:${userId}`, () =>
         drainOutbox<I, R>({
-          outbox: () => stores.queue.read(),
+          outbox: () => stores.queue.fresh(),
           update: async (fn) => (await update(fn)).value,
           send: hooks.send,
           applied: hooks.applied,
           rejected: async (ops, err) => {
-            const reason = err instanceof Error ? err.message : String(err)
-            const r = await stores.refused.update((list) => [...list, { ops, reason, at: new Date().toISOString() }])
+            const entry: Refused<I> = { ops, reason: err instanceof Error ? err.message : String(err), at: new Date().toISOString() }
+            const r = await stores.refused.update((list) => [...list, entry])
             setRefusedState(r.value)
             optsRef.current.onRefused(err)
           }
@@ -160,20 +164,21 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
 
   const retryRefused = useCallback(async (): Promise<boolean> => {
     if (!stores) return false
-    let taken: Refused<I>[] = []
-    const r = await stores.refused.update((list) => {
-      taken = list
-      return []
-    })
+    // Queued first, then taken off the list: a window closed in between
+    // leaves them in both (sent twice at worst), never in neither. As new
+    // changes, with ids given once here (the queue change may be replayed,
+    // see store.ts), never over what was queued since (see requeueRefused).
+    const entries = await stores.refused.fresh()
+    const stories = entries.map((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined }) as PendingOp<I>))
+    const saved = stories.length === 0 || (await update((q) => requeueRefused<I>(q, stories))).saved
+    const r = await stores.refused.update(without(entries))
     setRefusedState(r.value)
-    // As new changes: they may be folded into and cancelled again.
-    const ops = taken.flatMap((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined }) as PendingOp<I>))
-    return enqueue(ops)
-  }, [stores, enqueue])
+    return saved
+  }, [stores, update])
 
   const discardRefused = useCallback(async (): Promise<void> => {
     if (!stores) return
-    const r = await stores.refused.update(() => [])
+    const r = await stores.refused.update(without(await stores.refused.fresh()))
     setRefusedState(r.value)
   }, [stores])
 

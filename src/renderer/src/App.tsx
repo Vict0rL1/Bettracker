@@ -97,18 +97,15 @@ export default function App() {
     blocked: settingsBlocked,
     loaded: settingsLoaded,
     unsaved: settingsUnsaved,
+    status: settingsStatus,
     update: updateSettings,
     saveAgain: saveSettingsAgain
   } = useSettings(activeUserId, Boolean(session), showError, showNotice)
   const moves = useMoves(activeUserId, Boolean(session), showError, showNotice)
-  // One badge for the three queues. A settings change or a deposit waiting on
-  // a migration is a queued change too: the badge says so even when no bet is
-  // queued. An empty queue has no say.
-  const badgeStatus = combinedStatus([
-    status,
-    moves.queuedCount > 0 ? moves.status : 'synced',
-    settingsDirty && settingsBlocked ? 'behind' : 'synced'
-  ])
+  // One badge for the three queues. A settings change or a deposit is a
+  // queued change too: the badge says what holds it back (or that it is on
+  // its way) even when no bet is queued. An empty queue has no say.
+  const badgeStatus = combinedStatus([status, moves.queuedCount > 0 ? moves.status : 'synced', settingsDirty ? settingsStatus : 'synced'])
   const badgeQueued = queuedCount + moves.queuedCount
 
   // Signed out on another device: this device's session is gone for good,
@@ -198,9 +195,11 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [modalDate, quickOpen, settingsOpen, pendingOpen, bankrollOpen])
 
+  // With the session ended the queue waits for a sign-in, not the connection.
   const savedNote = useCallback(
-    (action: string, date?: string) => (isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action),
-    [isOffline, t]
+    (action: string, date?: string) =>
+      sessionEnded ? t('toast.signedOut', { action }) : isOffline ? t('toast.offline', { action }) : date ? t('toast.onDate', { action, date: humanDate(date) }) : action,
+    [sessionEnded, isOffline, t]
   )
 
   // Mutations apply instantly (optimistic) and sync in the background. The
@@ -456,7 +455,7 @@ export default function App() {
           status={sessionEnded ? 'signedout' : badgeStatus}
           queuedCount={badgeQueued}
           pendingCount={openList.length}
-          unsynced={badgeQueued + (settingsDirty ? 1 : 0)}
+          unsynced={badgeQueued + (settingsDirty ? 1 : 0) + refusedList.length}
           canExport={shownBets.length > 0}
           theme={theme}
           onExport={handleExport}

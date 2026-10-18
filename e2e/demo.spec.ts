@@ -99,6 +99,16 @@ test.describe('demo', () => {
     await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
   })
 
+  // The toast said "will sync when you're back online", with the connection
+  // fine and the session gone.
+  test('a change made once the session has ended says it waits for a sign-in', async ({ page }) => {
+    await page.goto('/')
+    await page.evaluate(() => (window as unknown as { __supabaseMock: { __endSession(): void } }).__supabaseMock.__endSession())
+    await expect(page.locator('.sync-badge')).toHaveText('Signed out')
+    await addLoss(page, '15')
+    await expect(page.locator('.toast')).toContainText('will sync once you sign in again')
+  })
+
   // A key or URL in .env was written into the demo's bundle (and the demo is
   // served on the local network).
   test('carries nothing of .env in its bundle', async ({ page }) => {

@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
 import { afterFailedRead, combinedStatus, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
 import { describeError, MigrationNeededError, SignedOutError } from './errors'
-import { afterSettingsAnswer, applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, type MoveOp, type PendingOp, type PendingSettings } from './offline'
+import { afterSettingsAnswer, applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, requeueRefused, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
 const add = (id: string): PendingOp => ({ opId: `op-${id}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' })
 const del = (id: string): PendingOp => ({ opId: `op-del-${id}`, kind: 'delete', id })
@@ -179,7 +179,7 @@ describe('drainOutbox', () => {
       throw new TypeError('Failed to fetch')
     }
     expect(await drainOutbox(h.hooks)).toEqual({ stop: 'offline', processed: 0 })
-    const op = h.hooks.outbox()[0]
+    const op = (h.hooks.outbox() as PendingOp[])[0]
     expect(op.kind === 'bulk-add' && op.done).toBe(250)
     expect(op.sent).toBe(true)
   })
@@ -680,17 +680,49 @@ describe('drainOutbox — changes made while a request is out', () => {
     expect(t.queue()).toEqual([])
   })
 
-  it('a refused add leaves a delete and an Undo queued behind it, so the restored bet is kept', async () => {
+  // Storage full: store.ts replays the changes made since on the queue as
+  // stored when it takes them again. The refusal's change computed what to
+  // take out on whatever queue it got, so a replay took out more.
+  it('decides once what a refusal takes out: replayed on a later queue, it takes the same ops', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    const changes: ((q: PendingOp[]) => PendingOp[])[] = []
+    const update = t.hooks.update
+    t.hooks.update = (fn) => {
+      changes.push(fn)
+      return update(fn)
+    }
+    t.fail('add-a-v1', 'refused')
+    await t.drain()
+    expect(t.rejected).toEqual(['add-a-v1'])
+    const stored = [addOp('a', 'v1'), editOp('a', 'v2', 'T2'), addOp('b', 'v1')]
+    expect(changes[changes.length - 1](stored).map((o) => o.opId)).toEqual(['edit-a-v2', 'add-b-v1'])
+  })
+
+  it('a refused add takes the delete queued behind it but not an Undo after that, so the restored bet is kept', async () => {
     const t = setup({}, [addOp('a', 'v1')])
     t.fail('add-a-v1', 'refused')
     const drain = await t.startPausedAt('add-a-v1')
     // Deleted, then restored with Undo, while the add is out.
     t.user(delOp('a'))
     t.user({ opId: 'restore-a', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5, note: 'restored' }, queuedAt: 'T03' })
+    t.user(editOp('a', 'restored and edited', 'T04'))
     await drain.finish()
-    expect(t.rejected).toEqual(['add-a-v1'])
-    expect(t.server.get('a')?.note).toBe('restored')
+    expect(t.rejected).toEqual(['add-a-v1', 'del-a'])
+    expect(t.server.get('a')?.note).toBe('restored and edited')
     expect(t.queue()).toEqual([])
+  })
+
+  // The delete stayed and went out as a no-op, the refused entry held the add
+  // alone, and "Send again" made the bet the user had deleted.
+  it('a refused add takes the delete queued behind it: sent again, the two are nothing', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    t.fail('add-a-v1', 'refused')
+    const drain = await t.startPausedAt('add-a-v1')
+    t.user(delOp('a'))
+    await drain.finish()
+    expect(t.rejected).toEqual(['add-a-v1', 'del-a'])
+    const story = [addOp('a', 'v1'), delOp('a')].map((o) => ({ ...o, opId: `again-${o.opId}` }))
+    expect(requeueRefused([], [story])).toEqual([])
   })
 
   it('an add refused after an earlier attempt that may have landed keeps the edits queued for it', async () => {

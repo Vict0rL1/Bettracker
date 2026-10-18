@@ -138,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 577 tests unitarios (vitest)
+npm test            # 597 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 102 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 113 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -348,6 +348,10 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      `applyOutbox` y `reconcile` muestran la del servidor. El Deshacer de un
      borrado sigue siendo un alta normal (no pasa por aquí).
      `supabase/tests/checks.sql` (9) lo comprueba con RLS en Postgres.
+     Cada lote confirmado pasa a la copia del servidor en ese momento
+     (`landImport`) y la importación solo muestra las filas sin confirmar:
+     una fila que llegó y se borró en otro dispositivo no vuelve. Solo puede
+     volver una del lote que estaba en vuelo cuando se cortó.
   2. *Varias pestañas se pisaban la cola.* Cada una escribía la cola que
      leyó al arrancar. Ahora la cola guardada es la verdad: cada cambio es
      leer-modificar-escribir bajo un candado entre ventanas (Web Locks,
@@ -357,22 +361,55 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      por el evento `storage`. Apuestas, movimientos y ajustes. Mismas
      claves y formato: nada que migrar. Sin Web Locks (http en la red
      local) el candado es solo de la ventana, como antes.
+     El candado solo no basta: localStorage no es coherente entre procesos
+     del navegador (cada ventana lee su copia, y la escritura de otra le
+     llega un momento después), así que quien toma el candado podía leer la
+     cola de antes de la última escritura y devolverla (en Chromium, tres
+     ventanas a toda velocidad perdían una de cada cinco). Cada escritura
+     bajo un candado sube una versión, en localStorage
+     (`<candado>:version`) y en IndexedDB (`bettracker-locks`, que todas
+     leen al día); el siguiente espera a que su copia la tenga antes de
+     leer (como mucho 2 s, por si alguien borró el almacenamiento a mano).
+     Sin IndexedDB lee enseguida, como antes. El drenado lee la cola igual
+     (`fresh()`). Test: `e2e/resilience.spec.ts`, tres ventanas con el
+     `store.ts` real (servidor de desarrollo).
+     Una petición sin respuesta se abandona a los 30 s
+     (`lib/timeoutFetch.ts`, en `global.fetch` del cliente) y cuenta como
+     sin conexión: si no, una ventana colgada se quedaba el candado de
+     vaciado y ninguna otra sincronizaba.
   3. *Un fallo al guardar se daba por guardado.* La caché se puede perder
      (`writeExpendable`); la cola no (`writeDurable`): si no cabe, se tiran
      las cachés y se reintenta, y si aun así falla la cola se queda en la
      ventana (`held`), sigue sincronizando, el aviso lo dice y el toast no
-     dice "añadida". "Reintentar" la guarda cuando hay sitio.
+     dice "añadida". "Reintentar" la guarda cuando hay sitio. Lo retenido
+     es la lista de cambios hechos en la ventana, que se reaplican sobre la
+     cola guardada en cada intento: lo que otras guardaron se queda y lo que
+     esta quitó (una operación enviada, una apuesta borrada) no vuelve. Por
+     eso cada cambio busca por id y decide una sola vez qué quita.
   4. *Errores temporales tiraban la cola.* `describeError` guarda status y
      código (`SyncError`). 5xx, 408, 429 y códigos PGRST000–003, 08…, 40001,
      40P01, 53…, 57P01–03, 57014 → `'retry'` con espera creciente (1 s, 2 s…
      hasta 2 min, ±20 %; un 429 empieza en 5 s); 401, clave o JWT →
      `'paused'`; solo un rechazo definitivo saca el cambio, a la lista de
      rechazadas (`bettracker:refused:<usuario>`, `moves-refused`), visible
-     tras recargar, con "Volver a enviar" y "Descartar". Sesión terminada →
-     insignia "Sesión cerrada" y "Volver a entrar" sin borrar la cola.
+     tras recargar, con "Volver a enviar" y "Descartar". Un alta rechazada
+     en su primer intento se lleva lo que se encoló detrás para su apuesta
+     (ediciones y borrado, hasta un Deshacer que la crea de nuevo), y entra
+     en la lista antes de salir de la cola. "Volver a enviar" encola primero
+     y luego quita de la lista; cada entrada se pliega antes
+     (`requeueRefused`: un alta y su borrado no son nada) y una edición
+     rechazada no pisa una más nueva de la misma apuesta, ni su borrado
+     (`requeueOp`). "Cerrar sesión" cuenta también las rechazadas antes de
+     borrarlas. Cada parada limpia los motivos de la anterior en la
+     insignia, y los ajustes pendientes también salen en ella. Una primera
+     lectura fallida se repite con el temporizador (`retryPlan`), como en
+     movimientos y ajustes. Sesión terminada → insignia "Sesión cerrada",
+     "Volver a entrar" sin borrar la cola, y el aviso de cada cambio dice
+     que se sincronizará al volver a entrar.
   5. *Un rechazo de ajustes borraba un parche más nuevo.* Ahora cualquier
      respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
-     editado mientras tanto sigue pendiente y sale enseguida.
+     editado mientras tanto sigue pendiente y sale enseguida. Un ajuste se
+     ve en pantalla en cuanto se cambia, antes de que acabe de guardarse.
   6. *Un `max-rows` menor truncaba el historial.* `readAll` avanza por las
      filas recibidas y para con el total contado (o, sin total, con una
      página vacía). Apuestas y movimientos.
@@ -560,13 +597,14 @@ src/renderer/src/data/
   errors.ts                               leer un fallo: sin conexión, en pausa, reintentar, falta migración, rechazo
   session.ts                              ninguna petición de las filas de un usuario sin su sesión
   store.ts                                las colas en el almacenamiento, compartidas entre ventanas con candado
+                                          y versión en IndexedDB; lo retenido se reaplica
   useOpQueue.ts                           una cola de operaciones (apuestas o movimientos): candados, rechazadas
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       102 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       113 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, paginación, ajustes en vuelo)
