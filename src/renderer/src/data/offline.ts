@@ -67,17 +67,25 @@ export interface OfflineUser {
 /** Users signed out on this device (see clearUserData), until they sign in again here. */
 const signedOut = new Set<string>()
 export const markSignedIn = (userId: string): void => void signedOut.delete(userId)
-// Signed out in another window, which removed the last user: a sync of theirs
-// still out in this one must not write their copy back either.
+
+/** The user another window has just signed out (it removed the last user, see clearUserData), if this storage event says so. */
+export function signedOutElsewhere(e: Pick<StorageEvent, 'key' | 'newValue' | 'oldValue'>): string | null {
+  if (e.key !== LAST_USER_KEY || e.newValue !== null || !e.oldValue) return null
+  try {
+    const gone = JSON.parse(e.oldValue) as Partial<OfflineUser>
+    return typeof gone.id === 'string' ? gone.id : null
+  } catch {
+    // not a user this app stored
+    return null
+  }
+}
+// Signed out in another window: a sync of theirs still out in this one must
+// not write their copy back either (and the window leaves the account, see
+// AuthProvider).
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
-    if (e.key !== LAST_USER_KEY || e.newValue !== null || !e.oldValue) return
-    try {
-      const gone = JSON.parse(e.oldValue) as Partial<OfflineUser>
-      if (typeof gone.id === 'string') signedOut.add(gone.id)
-    } catch {
-      // not a user this app stored
-    }
+    const gone = signedOutElsewhere(e)
+    if (gone) signedOut.add(gone)
   })
 }
 /** Store something of `userId`'s, unless they have signed out in this window since. */

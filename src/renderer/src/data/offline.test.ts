@@ -25,6 +25,7 @@ import {
   landImport,
   markHeadSent,
   markSignedIn,
+  signedOutElsewhere,
   requeueOp,
   keepRefused,
   requeueRefused,
@@ -194,6 +195,16 @@ describe('cache and outbox persistence', () => {
     markSignedIn('u3')
     saveCache('u3', [bet({})])
     expect(loadCache('u3')).toHaveLength(1)
+  })
+
+  it('reads a sign-out in another window from the storage event that removed the last user', () => {
+    const user = JSON.stringify({ id: 'u2', email: 'a@b.c' })
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: null, oldValue: user })).toBe('u2')
+    // Another user signing in, another key, or something this app did not store: no sign-out.
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: user, oldValue: user })).toBeNull()
+    expect(signedOutElsewhere({ key: 'bettracker:outbox:u2', newValue: null, oldValue: user })).toBeNull()
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: null, oldValue: 'not json' })).toBeNull()
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: null, oldValue: null })).toBeNull()
   })
 })
 

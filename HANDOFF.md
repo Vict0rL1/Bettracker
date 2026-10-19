@@ -138,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 620 tests unitarios (vitest)
+npm test            # 621 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 124 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 128 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -398,7 +398,10 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      intento la quita, el progreso de una importación no retrocede, la
      cabeza que se marca al arrancar se decide una vez (`markHeadSent`) y
      los ajustes se combinan campo a campo por hora (`editSettings`).
-     "Volver a enviar" solo quita de la lista lo que la cola guardó.
+     "Volver a enviar" solo quita de la lista lo que la cola guardó: con
+     la cola solo en la ventana, lo reenviado sale del aviso pero sigue
+     guardado en la lista hasta que la cola se guarda o eso sale de ella
+     (enviado, o rechazado otra vez en su propia entrada).
   4. *Errores temporales tiraban la cola.* `describeError` guarda status y
      código (`SyncError`). 5xx, 408, 429 y códigos PGRST000–003, 08…, 40001,
      40P01, 53…, 57P01–03, 57014 → `'retry'` con espera creciente (1 s, 2 s…
@@ -433,7 +436,10 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      esa sincronización traiga se descarta (los hooks comparan con
      `userRef`), y tras cerrar sesión nada de esa cuenta se vuelve a
      guardar en el dispositivo hasta que entre otra vez (`clearUserData`,
-     `markSignedIn`).
+     `markSignedIn`). Cerrar sesión en una ventana la cierra también en las
+     demás (`signedOutElsewhere`, en `AuthProvider`), aunque Supabase no se
+     lo diga (sin conexión y con el token caducado no lo hace, ni la demo):
+     si no, seguían mostrando la cuenta y lo que cambiaban no se guardaba.
   5. *Un rechazo de ajustes borraba un parche más nuevo.* Ahora cualquier
      respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
      editado mientras tanto sigue pendiente y sale enseguida. Un ajuste se
@@ -636,7 +642,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       124 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       128 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo)

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { AUTH_STORAGE_KEY, supabase } from '../lib/supabase'
-import { clearUserData, loadLastUser, markSignedIn, saveLastUser, type OfflineUser } from '../data/offline'
+import { clearUserData, loadLastUser, markSignedIn, saveLastUser, signedOutElsewhere, type OfflineUser } from '../data/offline'
 import { authFailure } from './authErrors'
 
 interface AuthState {
@@ -22,6 +22,8 @@ const AuthContext = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  // Who signed in on this device last, for offline boots (see saveLastUser).
+  const [lastUser, setLastUser] = useState<OfflineUser | null>(loadLastUser)
 
   useEffect(() => {
     let active = true
@@ -48,8 +50,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Remember who is signed in on this device, for offline boots.
   useEffect(() => {
-    if (session?.user) saveLastUser({ id: session.user.id, email: session.user.email ?? null })
+    if (!session?.user) return
+    const user = { id: session.user.id, email: session.user.email ?? null }
+    saveLastUser(user)
+    setLastUser((was) => (was?.id === user.id && was.email === user.email ? was : user))
   }, [session])
+
+  // Signed out in another window, which cleared this device's copy of the
+  // account (see clearUserData): this window leaves it too. Kept, it would show
+  // data no longer on the device, and what it changed would be stored nowhere.
+  // Supabase tells other windows of a sign-out, but not always: not of one made
+  // offline with an expired token, nor does the demo.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent): void => {
+      const gone = signedOutElsewhere(e)
+      if (!gone) return
+      setSession((s) => (s?.user?.id === gone ? null : s))
+      setLastUser((u) => (u?.id === gone ? null : u))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   // Keep the access token fresh across app open/close cycles. An installed app
   // gets backgrounded a lot; refreshing while it's in the foreground (and
@@ -70,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       email: session?.user?.email ?? null,
       userId: session?.user?.id ?? null,
-      offlineUser: session ? null : loadLastUser(),
+      offlineUser: session ? null : lastUser,
       async signIn(email, password) {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw authFailure(error)
@@ -88,8 +109,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async signOut() {
         // Signing out removes this device's copy of the data (cache + queued
         // changes) — anything already synced stays safe in the cloud.
-        const uid = session?.user?.id ?? loadLastUser()?.id
+        const uid = session?.user?.id ?? lastUser?.id
         if (uid) clearUserData(uid)
+        setLastUser(null)
         try {
           await supabase.auth.signOut()
         } catch {
@@ -103,7 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null)
       }
     }),
-    [session, loading]
+    [session, loading, lastUser]
   )
 
   return <AuthContext value={value}>{children}</AuthContext>

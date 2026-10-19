@@ -48,6 +48,23 @@ const without =
   (list: Refused<I>[]): Refused<I>[] =>
     list.filter((r) => !entries.some((e) => sameRefused(e, r)))
 
+/** Refused entries sent again while the queue was only in this window, and what of theirs is queued: their bets, and their imports by op. */
+interface Resent<I> {
+  entries: Refused<I>[]
+  bets: Set<string>
+  imports: Set<string>
+}
+
+const resentOf = <I>(entries: Refused<I>[], stories: readonly (readonly PendingOp<I>[])[]): Resent<I> => ({
+  entries,
+  bets: new Set(stories.flat().flatMap((op) => (op.kind === 'bulk-add' ? [] : [op.id]))),
+  imports: new Set(stories.flat().flatMap((op) => (op.kind === 'bulk-add' ? [op.opId] : [])))
+})
+
+/** Whether the queue still holds something these entries were sent again as. */
+const stillQueued = <I>(x: Resent<I>, queue: readonly PendingOp<I>[]): boolean =>
+  queue.some((op) => (op.kind === 'bulk-add' ? x.imports.has(op.opId) : x.bets.has(op.id)))
+
 /**
  * A queue of ops (the bets', or the deposits and withdrawals') kept in
  * storage and shared by every window of the app:
@@ -72,6 +89,12 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   // its queue must not show as this user's (see useBetSync).
   const userRef = useRef(userId)
   userRef.current = userId
+  // Refused entries sent again while storage refused the queue: what they were
+  // sent again as is only in this window, so they stay on the stored list (not
+  // shown) until the queue is stored, or until that has left it: sent, or
+  // refused again into entries of its own. A window closed meanwhile loses the
+  // copies, never the entries.
+  const resentRef = useRef<Resent<I>[]>([])
 
   // The callbacks in `o` are module functions: the stores depend on the user alone.
   const stores = useMemo(() => {
@@ -103,7 +126,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   const showRefused = useCallback(
     (list: Refused<I>[]) => {
       if (userRef.current !== userId) return
-      setRefusedState(list)
+      setRefusedState(list.filter((r) => !resentRef.current.some((x) => x.entries.some((e) => sameRefused(e, r)))))
       setRefusedHeld(stores?.refused.held ?? false)
     },
     [userId, stores]
@@ -118,6 +141,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     setHeld(false)
     setRefusedState([])
     setRefusedHeld(false)
+    resentRef.current = []
     if (!userId || !stores) return
     const stored = optsRef.current.read(userId)
     const boot = headAsSent(stored)
@@ -134,20 +158,26 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     const onStorage = (e: StorageEvent): void => {
       if (e.key !== null && e.key !== keys.queue && e.key !== keys.refused) return
       if (!stores.queue.held) mirror(stores.queue.read())
-      if (!stores.refused.held) setRefusedState(stores.refused.read())
+      if (!stores.refused.held) showRefused(stores.refused.read())
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
-  }, [userId, stores, mirror])
+  }, [userId, stores, mirror, showRefused])
 
   const update = useCallback(
     async (fn: (q: PendingOp<I>[]) => PendingOp<I>[]) => {
       if (!stores) return { value: outboxRef.current, saved: false }
       const r = await stores.queue.update(fn)
       mirror(r.value)
+      // Entries sent again from this window alone (see resentRef) leave the list once that is safe.
+      const settled = resentRef.current.filter((x) => r.saved || !stillQueued(x, r.value))
+      if (settled.length > 0) {
+        resentRef.current = resentRef.current.filter((x) => !settled.includes(x))
+        showRefused((await stores.refused.update(without(settled.flatMap((x) => x.entries)))).value)
+      }
       return r
     },
-    [stores, mirror]
+    [stores, mirror, showRefused]
   )
 
   const enqueue = useCallback(
@@ -180,27 +210,40 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     [userId, name, stores, update, showRefused]
   )
 
+  /** The stored refused list, but for the entries this window has sent again (see resentRef). */
+  const shownRefused = useCallback(async (): Promise<Refused<I>[]> => {
+    if (!stores) return []
+    return (await stores.refused.fresh()).filter((r) => !resentRef.current.some((x) => x.entries.some((e) => sameRefused(e, r))))
+  }, [stores])
+
   const retryRefused = useCallback(async (): Promise<boolean> => {
     if (!stores) return false
     // Queued first, then taken off the list: a window closed in between
     // leaves them in both (sent twice at worst), never in neither. As new
     // changes, with ids given once here (the queue change may be replayed,
     // see store.ts), never over what was queued since (see requeueRefused).
-    const entries = await stores.refused.fresh()
+    const entries = await shownRefused()
+    if (entries.length === 0) return true
     const stories = entries.map((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined, sentBy: undefined }) as PendingOp<I>))
-    const saved = stories.length === 0 || (await update((q) => requeueRefused<I>(q, stories))).saved
-    // Queued only in this window (storage full): they stay on the list too, until storage takes them.
-    if (!saved) return false
-    const r = await stores.refused.update(without(entries))
-    showRefused(r.value)
+    const r = await update((q) => requeueRefused<I>(q, stories))
+    const resent = resentOf(entries, stories)
+    if (!r.saved && stillQueued(resent, r.value)) {
+      // Queued only in this window (storage full): off the notice, but kept
+      // on the stored list until that is safe (see resentRef).
+      resentRef.current = [...resentRef.current, resent]
+      showRefused(stores.refused.read())
+      return false
+    }
+    showRefused((await stores.refused.update(without(entries))).value)
     return true
-  }, [stores, update, showRefused])
+  }, [stores, update, showRefused, shownRefused])
 
   const discardRefused = useCallback(async (): Promise<void> => {
     if (!stores) return
-    const r = await stores.refused.update(without(await stores.refused.fresh()))
+    // Only what the notice shows: what was sent again is on its way.
+    const r = await stores.refused.update(without(await shownRefused()))
     showRefused(r.value)
-  }, [stores, showRefused])
+  }, [stores, showRefused, shownRefused])
 
   const saveAgain = useCallback(async (): Promise<boolean> => {
     const saved = (await update((q) => q)).saved

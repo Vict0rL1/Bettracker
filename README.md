@@ -55,7 +55,7 @@ refused ones); anything already synced stays safe in your Supabase project.
 While changes are still queued or refused, **Sign out** asks you to click
 again. A sync still on its way when you sign out writes none of it back, and
 nothing of one account is ever read or sent as another that signs in on the
-same device.
+same device. Signing out in one window signs the app's other windows out too.
 
 Three more things stay on screen until you deal with them, because they are
 about changes that haven't reached the server:
@@ -73,7 +73,8 @@ about changes that haven't reached the server:
 - **Refused** — Supabase refused a change for good (a check it fails, say).
   It leaves the queue so it can't block the rest, and waits here with the
   server's reason: **Send again** (never over a newer edit of the same bet)
-  or **Discard**.
+  or **Discard**. Sent again while the queue can't be stored, it stays
+  stored here, out of sight, until it has gone or the queue is stored.
 
 Several windows of the app (two tabs, or a tab and the installed app) share
 one queue: each change is made to the stored queue under a lock that spans

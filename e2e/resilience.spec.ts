@@ -300,6 +300,41 @@ test.describe('a device whose storage is full', () => {
     await expect(page.locator('.refused-notice')).toBeVisible()
   })
 
+  // "Send again" while storage refused the queue kept the entry on the list
+  // for good: the change was sent from the window and landed, and the notice
+  // still said it was refused, also after a reload.
+  test('a refused change sent again while the queue can’t be stored leaves the list once it has landed', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await page.evaluate(() => localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'violates check constraint', code: '23514', times: 1 })))
+    await logLoss(page, '44')
+    await expect(page.locator('.refused-notice')).toBeVisible()
+    await fillStorage(page)
+    await page.locator('.refused-notice .notice-retry').click()
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+    await expect.poll(async () => (await serverRows(page)).filter((r) => r.stake === 44).length).toBe(1)
+    await expect.poll(() => page.evaluate((uid) => localStorage.getItem(`bettracker:refused:${uid}`), USER.id)).toBeNull()
+    await makeRoom(page)
+    await reload(page)
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+  })
+
+  // Until then it stays stored on the list: what was sent again is only in
+  // this window, and closing it must not lose the change.
+  test('a refused change sent again while the queue can’t be stored stays on the list, stored, until then', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await page.evaluate(() => localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'violates check constraint', code: '23514', times: 1 })))
+    await logLoss(page, '45')
+    await expect(page.locator('.refused-notice')).toBeVisible()
+    await setDown(page, true)
+    await fillStorage(page)
+    await page.locator('.refused-notice .notice-retry').click()
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+    await expect(page.locator('.unsaved-notice')).toBeVisible()
+    // The window closes before the change could go.
+    await reload(page)
+    await expect(page.locator('.refused-notice')).toContainText('Supabase refused 1 change for good')
+  })
+
   test('a change only in this window still syncs while it is open', async ({ page }) => {
     await boot(page, { backend: 'live' })
     await setDown(page, true)
@@ -752,6 +787,30 @@ test.describe('settings changed while a save is out', () => {
     await hold(page, false)
     await expect(page.locator('.toast')).toContainText('A newer edit from another device was kept')
     await expect.poll(async () => (await serverSettings(page))?.default_stake, { timeout: 20_000 }).toBe(25)
+  })
+})
+
+test.describe('signing out in another window', () => {
+  // A sign-out that sends the other window no SIGNED_OUT (supabase-js sends
+  // none signing out offline with an expired token; the fake never does): the
+  // other went on showing the account, took new changes, said they were added,
+  // and stored them nowhere, since the account was no longer on the device.
+  test('signs this window out too, and it works again once signed in', async ({ page, context }) => {
+    await boot(page, { backend: 'live' })
+    const other = await secondWindow(context)
+    await page.locator('.btn-signout').click()
+    await expect(page.locator('.auth-card')).toBeVisible()
+    await expect(other.locator('.auth-card')).toBeVisible()
+    await expect(other.locator('.history-card')).toHaveCount(0)
+
+    const form = other.locator('.auth-card')
+    await form.locator('input[type=email]').fill(USER.email)
+    await form.locator('input[type=password]').fill('hunter22')
+    await form.locator('.auth-submit').click()
+    await other.waitForSelector('.history-card')
+    await logLoss(other, '57')
+    await expect(other.locator('.sync-badge')).toHaveText('Synced')
+    expect((await serverRows(other)).filter((r) => r.stake === 57)).toHaveLength(1)
   })
 })
 

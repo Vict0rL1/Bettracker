@@ -50,6 +50,31 @@ test.describe('demo', () => {
     await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
   })
 
+  // "Start over" in one window left the other showing the demo account, which
+  // it had cleared: a bet added there said "Added" and was stored nowhere.
+  test('Start over in one window signs the other out, and a bet added there once signed in is kept', async ({ page, context }) => {
+    await page.goto('/')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    const other = await context.newPage()
+    await other.goto('/')
+    await expect(other.locator('.sync-badge')).toHaveText('Synced')
+
+    const reset = page.locator('.demo-reset')
+    await reset.click()
+    await reset.click()
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    const form = other.locator('.auth-card')
+    await expect(form).toBeVisible()
+
+    await form.locator('input[type=email]').fill('someone@example.com')
+    await form.locator('input[type=password]').fill('anything')
+    await form.locator('.auth-submit').click()
+    await addLoss(other, '66')
+    await expect(other.locator('.sync-badge')).toHaveText('Synced')
+    await other.reload()
+    await expect(other.locator('.history-card tbody tr', { hasText: '-$66.00' })).toHaveCount(1)
+  })
+
   test('with the connection off, a change waits on the device and syncs when it is back', async ({ page, context }) => {
     await page.goto('/')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
