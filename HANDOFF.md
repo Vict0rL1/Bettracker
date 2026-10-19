@@ -138,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 602 tests unitarios (vitest)
+npm test            # 603 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 116 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 117 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -419,6 +419,10 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
      editado mientras tanto sigue pendiente y sale enseguida. Un ajuste se
      ve en pantalla en cuanto se cambia, antes de que acabe de guardarse.
+     El parche guarda la hora de cada campo (`fieldEditedAt`, opcional: los
+     guardados por versiones anteriores no la tienen), así que un campo
+     vuelto al mismo valor mientras el envío estaba fuera también sigue
+     pendiente si ese envío perdió contra otro dispositivo.
   6. *Un `max-rows` menor truncaba el historial.* `readAll` avanza por las
      filas recibidas y para con el total contado (o, sin total, con una
      página vacía). Apuestas y movimientos.
@@ -613,7 +617,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       116 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       117 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, paginación, ajustes en vuelo)

@@ -284,8 +284,14 @@ export function useSettings(
       const editedAt = new Date().toISOString()
       setStoring((xs) => [...xs, patch])
       try {
-        // Merged into what is pending now, other windows' edits included.
-        const saved = await change((current) => ({ patch: { ...(current?.patch ?? {}), ...patch }, editedAt }))
+        // Merged into what is pending now, other windows' edits included,
+        // with the time of each field's edit (see afterSettingsAnswer).
+        const times = Object.fromEntries(Object.keys(patch).map((k) => [k, editedAt]))
+        const saved = await change((current) => ({
+          patch: { ...(current?.patch ?? {}), ...patch },
+          editedAt,
+          fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...times }
+        }))
         setTimeout(() => void syncNowRef.current(), 0)
         return saved
       } finally {

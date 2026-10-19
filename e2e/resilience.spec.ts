@@ -537,6 +537,33 @@ test.describe('settings changed while a save is out', () => {
     // The refused field stays as the server had it.
     expect((await serverSettings(page))?.odds_format).toBe('american')
   })
+
+  // Set back to the value that went while that save was out, and the save
+  // lost to a newer edit from another device: the newest edit of all was
+  // dropped with it, and the other device's value stayed.
+  test('a field set again to the value that went, while it was out, still wins over the other device', async ({ page }) => {
+    await boot(page, { backend: 'live', settings: { oddsFormat: 'american', defaultStake: 10 } })
+    await hold(page, true)
+    await page.click('.settings-btn')
+    const stake = page.locator('.settings-modal .settings-stake input')
+    await stake.fill('25')
+    await stake.press('Enter')
+    await expect.poll(() => writesStarted(page)).toBe(1)
+    // Another device sets 40 after that save went out; here, 30 and then 25 again.
+    await page.evaluate(() => {
+      const row = JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as Record<string, unknown>
+      localStorage.setItem('e2e:settings', JSON.stringify({ ...row, default_stake: 40, updated_at: new Date().toISOString() }))
+    })
+    await stake.fill('30')
+    await stake.press('Enter')
+    await stake.fill('25')
+    await stake.press('Enter')
+    await page.keyboard.press('Escape')
+
+    await hold(page, false)
+    await expect(page.locator('.toast')).toContainText('A newer edit from another device was kept')
+    await expect.poll(async () => (await serverSettings(page))?.default_stake, { timeout: 20_000 }).toBe(25)
+  })
 })
 
 test.describe('signing out while a change is on its way', () => {

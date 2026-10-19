@@ -745,5 +745,12 @@ describe('settings: what an answer leaves pending', () => {
   it('a field set to null since is an edit too', () => {
     expect(afterSettingsAnswer({ patch: { unitSize: null, lossLimit: 100 }, editedAt: 'E2' }, sent)).toEqual({ patch: { unitSize: null }, editedAt: 'E2' })
   })
+
+  // Set back to the value that went while it was out, and that answer lost
+  // to a newer edit elsewhere: the newest edit of all was dropped.
+  it('a field set again since, even to the value that went, stays', () => {
+    const current = { patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E3', fieldEditedAt: { unitSize: 'E3', lossLimit: 'E1' } }
+    expect(afterSettingsAnswer(current, sent)).toEqual({ patch: { unitSize: 25 }, editedAt: 'E3', fieldEditedAt: { unitSize: 'E3' } })
+  })
 })
 

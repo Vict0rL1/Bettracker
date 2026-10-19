@@ -220,6 +220,8 @@ export const saveSettingsCache = (userId: string, s: Settings): void => forUser(
 export interface PendingSettings {
   patch: SettingsPatch
   editedAt: string
+  /** When each field was last set. A patch stored by an older version has none. */
+  fieldEditedAt?: Partial<Record<keyof SettingsPatch, string>>
 }
 export const loadSettingsOutbox = (userId: string): PendingSettings | null => readJson<PendingSettings>(settingsOutboxKey(userId))
 /** Throws StorageWriteError when the patch can't be stored. */
@@ -230,13 +232,20 @@ export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): v
  * What is left pending once `sent` has had its answer — saved, refused, or
  * beaten by a newer edit from another device: the edits made since it went
  * out. A field still at the value that went has had its answer and goes; a
- * field changed since stays, with the time of the newest edit.
+ * field changed since stays, with the time of the newest edit. So does one
+ * set again after it went, even to the same value: the answer may have gone
+ * against it (a newer edit elsewhere), and this edit is newer still.
  */
 export function afterSettingsAnswer(current: PendingSettings | null, sent: PendingSettings): PendingSettings | null {
   if (!current) return null
   const sentPatch = sent.patch as Record<string, unknown>
-  const left = Object.fromEntries(Object.entries(current.patch).filter(([k, v]) => !(k in sentPatch) || !Object.is(sentPatch[k], v)))
-  return Object.keys(left).length > 0 ? { patch: left as SettingsPatch, editedAt: current.editedAt } : null
+  const times = (current.fieldEditedAt ?? {}) as Record<string, string | undefined>
+  const left = Object.fromEntries(
+    Object.entries(current.patch).filter(([k, v]) => !(k in sentPatch) || !Object.is(sentPatch[k], v) || (times[k] ?? '') > sent.editedAt)
+  )
+  if (Object.keys(left).length === 0) return null
+  const fieldEditedAt = current.fieldEditedAt ? { fieldEditedAt: Object.fromEntries(Object.entries(current.fieldEditedAt).filter(([k]) => k in left)) } : {}
+  return { patch: left as SettingsPatch, editedAt: current.editedAt, ...fieldEditedAt }
 }
 
 export const loadLastUser = (): OfflineUser | null => readJson<OfflineUser>(LAST_USER_KEY)
