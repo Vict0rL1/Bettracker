@@ -115,7 +115,12 @@ export default function App() {
     if (session) setReauth(false)
   }, [session])
   const sessionEnded = !loading && !session && Boolean(offlineUser) && !hasStoredSession()
-  const unsavedCount = (sync.unsaved ? queuedCount : 0) + (moves.unsaved ? moves.queuedCount : 0) + (settingsUnsaved ? 1 : 0)
+  const unsavedCount =
+    (sync.unsaved ? queuedCount : 0) +
+    (moves.unsaved ? moves.queuedCount : 0) +
+    (settingsUnsaved ? 1 : 0) +
+    (sync.refusedUnsaved ? sync.refused.length : 0) +
+    (moves.refusedUnsaved ? moves.refused.length : 0)
   const refusedList = [...sync.refused, ...moves.refused]
 
   // Amounts show in units when the user has a unit size and asked for them.

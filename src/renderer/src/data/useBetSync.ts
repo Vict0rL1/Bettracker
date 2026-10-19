@@ -21,6 +21,8 @@ export interface BetSync {
   unsaved: boolean
   /** Changes the server refused for good, kept to send again or let go. */
   refused: Refused[]
+  /** Storage refused the list of refused changes: they are only in this window. */
+  refusedUnsaved: boolean
   /**
    * Each change resolves once it is queued: true when this device's storage
    * holds it, false when it is only in this window (see `unsaved`).
@@ -454,6 +456,7 @@ export function useBetSync(
     isOffline: status === 'offline',
     unsaved: queue.held && outbox.length > 0,
     refused: queue.refused,
+    refusedUnsaved: queue.refusedHeld && queue.refused.length > 0,
     addBet: add,
     updateBet: update,
     deleteBet: remove,

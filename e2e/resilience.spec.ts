@@ -248,6 +248,32 @@ test.describe('a device whose storage is full', () => {
     await expect(page.locator('.history-card tbody tr', { hasText: '-$13.00' })).toHaveCount(0)
   })
 
+  // A change refused for good while storage was full was kept only in this
+  // window, and nothing said so: closing the window lost it.
+  test('a change refused for good with no room to keep it says so, and is kept once there is room', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await page.evaluate(() => localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'violates check constraint', code: '23514', times: 1 })))
+    // Room for the queue, none for the list of refused changes.
+    await page.evaluate(() => {
+      const real = Storage.prototype.setItem
+      ;(window as unknown as { __realSetItem: typeof real }).__realSetItem = real
+      Storage.prototype.setItem = function (k: string, v: string) {
+        if (/refused/.test(k)) throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+        return real.call(this, k, v)
+      }
+    })
+    await logLoss(page, '44')
+    await expect(page.locator('.refused-notice')).toBeVisible()
+    await expect(page.locator('.unsaved-notice')).toContainText('1 change couldn’t be saved on this device')
+
+    await makeRoom(page)
+    await page.locator('.notice-save-again').click()
+    await expect(page.locator('.unsaved-notice')).toHaveCount(0)
+    expect(await page.evaluate((uid) => localStorage.getItem(`bettracker:refused:${uid}`), USER.id)).not.toBeNull()
+    await reload(page)
+    await expect(page.locator('.refused-notice')).toBeVisible()
+  })
+
   test('a change only in this window still syncs while it is open', async ({ page }) => {
     await boot(page, { backend: 'live' })
     await setDown(page, true)

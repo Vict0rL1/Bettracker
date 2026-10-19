@@ -38,6 +38,8 @@ export interface MoveSync {
   unsaved: boolean
   /** Changes the server refused for good, kept to send again or let go. */
   refused: Refused<MoveInput>[]
+  /** Storage refused the list of refused changes: they are only in this window. */
+  refusedUnsaved: boolean
   /** Each resolves once queued: true when this device's storage holds it (see useBetSync). */
   addMove: (input: MoveInput) => Promise<boolean>
   updateMove: (id: string, input: MoveInput) => Promise<boolean>
@@ -400,6 +402,7 @@ export function useMoves(
     blocked: behind && outbox.length > 0,
     unsaved: queue.held && outbox.length > 0,
     refused: queue.refused,
+    refusedUnsaved: queue.refusedHeld && queue.refused.length > 0,
     addMove: add,
     updateMove: update,
     deleteMove: remove,

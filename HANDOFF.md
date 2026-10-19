@@ -141,7 +141,7 @@ npm ci
 npm test            # 602 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 115 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 116 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -381,7 +381,8 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      (`writeExpendable`); la cola no (`writeDurable`): si no cabe, se tiran
      las cachés y se reintenta, y si aun así falla la cola se queda en la
      ventana (`held`), sigue sincronizando, el aviso lo dice y el toast no
-     dice "añadida". "Reintentar" la guarda cuando hay sitio. Lo retenido
+     dice "añadida". "Reintentar" la guarda cuando hay sitio, y también la
+     lista de rechazadas si tampoco cupo (entonces cuenta en el aviso). Lo retenido
      es la lista de cambios hechos en la ventana, que se reaplican sobre la
      cola guardada en cada intento: lo que otras guardaron se queda y lo que
      esta quitó (una operación enviada, una apuesta borrada) no vuelve. Por
@@ -612,7 +613,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       115 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       116 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, paginación, ajustes en vuelo)

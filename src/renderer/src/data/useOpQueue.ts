@@ -26,6 +26,8 @@ export interface OpQueue<I> {
   held: boolean
   /** Changes the server refused for good, kept to send again or let go. */
   refused: Refused<I>[]
+  /** Storage refused that list: it is only in this window until storage takes it. */
+  refusedHeld: boolean
   /** Queue ops (see enqueueOp). Resolves with whether storage holds them. */
   enqueue: (ops: readonly PendingOp<I>[]) => Promise<boolean>
   /** Send the queue, holding the lock that lets one window at a time do it. Null with no user. */
@@ -34,7 +36,7 @@ export interface OpQueue<I> {
   retryRefused: () => Promise<boolean>
   /** Let the refused changes go. */
   discardRefused: () => Promise<void>
-  /** Try storage again for a held queue (after room was made). */
+  /** Try storage again for a held queue and refused list (after room was made). */
   saveAgain: () => Promise<boolean>
 }
 
@@ -64,6 +66,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   const [outbox, setOutboxState] = useState<PendingOp<I>[]>([])
   const [held, setHeld] = useState(false)
   const [refused, setRefusedState] = useState<Refused<I>[]>([])
+  const [refusedHeld, setRefusedHeld] = useState(false)
   const outboxRef = useRef<PendingOp<I>[]>([])
   // The user this render is for: a drain of an earlier one may still end, and
   // its queue must not show as this user's (see useBetSync).
@@ -99,9 +102,11 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   )
   const showRefused = useCallback(
     (list: Refused<I>[]) => {
-      if (userRef.current === userId) setRefusedState(list)
+      if (userRef.current !== userId) return
+      setRefusedState(list)
+      setRefusedHeld(stores?.refused.held ?? false)
     },
-    [userId]
+    [userId, stores]
   )
 
   // Boot: the stored queue at once, for instant paint. Its head may have gone
@@ -112,6 +117,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     setOutboxState([])
     setHeld(false)
     setRefusedState([])
+    setRefusedHeld(false)
     if (!userId || !stores) return
     const stored = optsRef.current.read(userId)
     const boot = headAsSent(stored)
@@ -193,7 +199,13 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     showRefused(r.value)
   }, [stores, showRefused])
 
-  const saveAgain = useCallback(async (): Promise<boolean> => (await update((q) => q)).saved, [update])
+  const saveAgain = useCallback(async (): Promise<boolean> => {
+    const saved = (await update((q) => q)).saved
+    if (!stores?.refused.held) return saved
+    const r = await stores.refused.update((list) => list)
+    showRefused(r.value)
+    return saved && r.saved
+  }, [update, stores, showRefused])
 
-  return { outbox, outboxRef, held, refused, enqueue, drain, retryRefused, discardRefused, saveAgain }
+  return { outbox, outboxRef, held, refused, refusedHeld, enqueue, drain, retryRefused, discardRefused, saveAgain }
 }

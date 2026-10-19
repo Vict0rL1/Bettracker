@@ -68,7 +68,8 @@ about changes that haven't reached the server:
   when even that isn't enough the change stays in that window only, keeps
   syncing while it is open, and the toast says so instead of "Added".
   **Try again** stores it once there is room, on top of whatever other
-  windows stored meanwhile (what this window sent or deleted stays out).
+  windows stored meanwhile (what this window sent or deleted stays out). A
+  change Supabase refused while there was no room to keep it counts here too.
 - **Refused** — Supabase refused a change for good (a check it fails, say).
   It leaves the queue so it can't block the rest, and waits here with the
   server's reason: **Send again** (never over a newer edit of the same bet)
