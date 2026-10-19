@@ -77,7 +77,13 @@ export function useBetSync(
   // Refs are the source of truth inside the async sync loop; state mirrors
   // them for rendering.
   const serverRef = useRef<Bet[] | null>(null)
-  const syncingRef = useRef(false)
+  // The user whose sync is running, if any.
+  const syncingRef = useRef<string | null>(null)
+  // The user this render is for. A sync started for an earlier one (signed
+  // out, or another account in) may still end: what it brings back is
+  // dropped, never shown or stored as this user's.
+  const userRef = useRef(userId)
+  userRef.current = userId
   const noticeRef = useRef(migrationNotice())
   const pausedNoticeRef = useRef(migrationNotice())
   const retryNoticeRef = useRef(migrationNotice())
@@ -108,6 +114,7 @@ export function useBetSync(
 
   const setServer = useCallback(
     (rows: Bet[]) => {
+      if (userRef.current !== userId) return
       serverRef.current = rows
       setServerState(rows)
       if (userId) saveCache(userId, rows)
@@ -143,10 +150,12 @@ export function useBetSync(
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
-      const rows = await getBets()
+      const rows = await getBets(userId)
+      if (userRef.current !== userId) return
       setServer(rows)
       setOffline(false)
     } catch (err) {
+      if (userRef.current !== userId) return
       // Unreachable: offline. Signed out meanwhile, or a passing server
       // failure: the next read will do. Either way the device copy stays.
       const failure = classifySyncError(err)
@@ -158,25 +167,30 @@ export function useBetSync(
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current || !canSyncRef.current || !userId) return
+    if (syncingRef.current === userId || !canSyncRef.current || !userId) return
     // After a passing server failure the queue waits for its timer.
     if (backoffRef.current.waiting) return
-    syncingRef.current = true
+    syncingRef.current = userId
     let result: DrainResult | null
     try {
       result = await drain<Bet>({
         send: (op, progress) => {
-          if (op.kind !== 'bulk-add') return sendOp(op)
+          if (op.kind !== 'bulk-add') return sendOp(op, undefined, userId)
           // Each chunk the server confirms is the server's from then on (see
           // landImport): into the server copy first, then off the import.
           let from = op.done ?? 0
-          return sendOp(op, async (done) => {
-            setServer(landImport(serverRef.current ?? [], op, from, done))
-            from = done
-            await progress(done)
-          })
+          return sendOp(
+            op,
+            async (done) => {
+              setServer(landImport(serverRef.current ?? [], op, from, done))
+              from = done
+              await progress(done)
+            },
+            userId
+          )
         },
         applied: (op, row, superseded) => {
+          if (userRef.current !== userId) return
           // A refused update lost to a newer edit elsewhere (or the bet is
           // gone). Nothing to retry: the refresh after the drain shows the
           // version that won. Unless a later change of this device for the
@@ -190,9 +204,9 @@ export function useBetSync(
         }
       })
     } finally {
-      syncingRef.current = false
+      if (syncingRef.current === userId) syncingRef.current = null
     }
-    if (!result) return
+    if (!result || userRef.current !== userId) return
     if (result.stop === 'offline') {
       setOffline(true)
       return

@@ -206,4 +206,13 @@ describe('without a session', () => {
     await expect(sendMoveOp({ opId: 'o2', kind: 'delete', id: 'm' })).rejects.toBeInstanceOf(SignedOutError)
     expect(state.calls).toEqual([])
   })
+
+  it('nor as another account signed in since: that is a sign-out for this one', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getMoves('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    await expect(sendMoveOp({ opId: 'o1', kind: 'add', id: 'm', input: { date: '2026-03-01', amount: 50 }, queuedAt: 'Q' }, 'user-1')).rejects.toBeInstanceOf(
+      SignedOutError
+    )
+    expect(state.calls).toEqual([])
+  })
 })

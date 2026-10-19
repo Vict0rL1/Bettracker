@@ -70,7 +70,11 @@ export function useSettings(
   }, [])
   const serverRef = useRef<Settings | null>(null)
   const pendingRef = useRef<PendingSettings | null>(null)
-  const syncingRef = useRef(false)
+  // The user whose push is running, if any.
+  const syncingRef = useRef<string | null>(null)
+  // As useBetSync: what a sync of an earlier user brings back is dropped.
+  const userRef = useRef(userId)
+  userRef.current = userId
   const noticeRef = useRef(migrationNotice())
   const failNoticeRef = useRef(migrationNotice())
   const backoffRef = useRef(backoff())
@@ -96,6 +100,7 @@ export function useSettings(
 
   const setServer = useCallback(
     (s: Settings) => {
+      if (userRef.current !== userId) return
       serverRef.current = s
       setServerState(s)
       if (userId) saveSettingsCache(userId, s)
@@ -104,11 +109,12 @@ export function useSettings(
   )
   const mirror = useCallback(
     (p: PendingSettings | null) => {
+      if (userRef.current !== userId) return
       pendingRef.current = p
       setPendingState(p)
       setHeld(store?.held ?? false)
     },
-    [store]
+    [userId, store]
   )
   const change = useCallback(
     async (fn: (current: PendingSettings | null) => PendingSettings | null) => {
@@ -142,10 +148,12 @@ export function useSettings(
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
-      const row = await getSettings()
+      const row = await getSettings(userId)
+      if (userRef.current !== userId) return
       reached()
       setServer(row ?? { ...DEFAULT_SETTINGS })
     } catch (err) {
+      if (userRef.current !== userId) return
       // A read is retried by the timer anyway: only what it can't fix is said.
       const failure = classifySyncError(err)
       if (failure !== 'retry' && failure !== 'paused') report(err)
@@ -155,21 +163,22 @@ export function useSettings(
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current || !canSyncRef.current || !userId || !store || !pendingRef.current) return
+    if (syncingRef.current === userId || !canSyncRef.current || !userId || !store || !pendingRef.current) return
     if (backoffRef.current.waiting) return
-    syncingRef.current = true
+    syncingRef.current = userId
     let out: SettingsPushResult | null
     try {
       out = await withLock(`bettracker:drain:settings:${userId}`, () =>
         pushSettings({
           pending: () => store.fresh(),
           settle: async (sent) => void (await change((current) => afterSettingsAnswer(current, sent))),
-          save: (p) => saveSettings(p.patch, p.editedAt)
+          save: (p) => saveSettings(p.patch, p.editedAt, userId)
         })
       )
     } finally {
-      syncingRef.current = false
+      if (syncingRef.current === userId) syncingRef.current = null
     }
+    if (userRef.current !== userId) return
     if (out?.stop === 'saved') {
       reached()
       setServer(out.row)

@@ -61,6 +61,27 @@ export interface OfflineUser {
   email: string | null
 }
 
+/** Users signed out on this device (see clearUserData), until they sign in again here. */
+const signedOut = new Set<string>()
+export const markSignedIn = (userId: string): void => void signedOut.delete(userId)
+// Signed out in another window, which removed the last user: a sync of theirs
+// still out in this one must not write their copy back either.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== LAST_USER_KEY || e.newValue !== null || !e.oldValue) return
+    try {
+      const gone = JSON.parse(e.oldValue) as Partial<OfflineUser>
+      if (typeof gone.id === 'string') signedOut.add(gone.id)
+    } catch {
+      // not a user this app stored
+    }
+  })
+}
+/** Store something of `userId`'s, unless they have signed out in this window since. */
+const forUser = (userId: string, write: () => void): void => {
+  if (!signedOut.has(userId)) write()
+}
+
 const cacheKey = (userId: string): string => `bettracker:cache:${userId}`
 const outboxKey = (userId: string): string => `bettracker:outbox:${userId}`
 const settingsKey = (userId: string): string => `bettracker:settings:${userId}`
@@ -126,7 +147,7 @@ export function loadCache(userId: string): Bet[] | null {
   return raw === null ? null : raw.map(hydrateBet)
 }
 
-export const saveCache = (userId: string, bets: readonly Bet[]): void => writeExpendable(cacheKey(userId), bets)
+export const saveCache = (userId: string, bets: readonly Bet[]): void => forUser(userId, () => writeExpendable(cacheKey(userId), bets))
 
 /**
  * The queue as stored. One written by a version from before migration 003
@@ -187,14 +208,14 @@ export function applyLegacyEdit(current: Bet, input: BetInput): Bet {
   }
 }
 /** Throws StorageWriteError when the queue can't be stored. */
-export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => writeDurable(outboxKey(userId), outbox)
+export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => forUser(userId, () => writeDurable(outboxKey(userId), outbox))
 
 /** Settings are one row; the cache holds the last-known row and the outbox at most one pending patch. */
 export const loadSettingsCache = (userId: string): Settings | null => {
   const raw = readJson<Partial<Settings>>(settingsKey(userId))
   return raw === null ? null : { ...DEFAULT_SETTINGS, ...raw }
 }
-export const saveSettingsCache = (userId: string, s: Settings): void => writeExpendable(settingsKey(userId), s)
+export const saveSettingsCache = (userId: string, s: Settings): void => forUser(userId, () => writeExpendable(settingsKey(userId), s))
 
 export interface PendingSettings {
   patch: SettingsPatch
@@ -202,10 +223,8 @@ export interface PendingSettings {
 }
 export const loadSettingsOutbox = (userId: string): PendingSettings | null => readJson<PendingSettings>(settingsOutboxKey(userId))
 /** Throws StorageWriteError when the patch can't be stored. */
-export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): void => {
-  if (p === null) removeDurable(settingsOutboxKey(userId))
-  else writeDurable(settingsOutboxKey(userId), p)
-}
+export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): void =>
+  forUser(userId, () => (p === null ? removeDurable(settingsOutboxKey(userId)) : writeDurable(settingsOutboxKey(userId), p)))
 
 /**
  * What is left pending once `sent` has had its answer — saved, refused, or
@@ -235,13 +254,18 @@ export interface Refused<I = BetInput> {
 }
 export const loadRefused = (userId: string): Refused[] => readJson<Refused[]>(refusedKey(userId)) ?? []
 export const saveRefused = (userId: string, list: readonly Refused[]): void =>
-  list.length === 0 ? removeDurable(refusedKey(userId)) : writeDurable(refusedKey(userId), list)
+  forUser(userId, () => (list.length === 0 ? removeDurable(refusedKey(userId)) : writeDurable(refusedKey(userId), list)))
 export const loadMovesRefused = (userId: string): Refused<MoveInput>[] => readJson<Refused<MoveInput>[]>(movesRefusedKey(userId)) ?? []
 export const saveMovesRefused = (userId: string, list: readonly Refused<MoveInput>[]): void =>
-  list.length === 0 ? removeDurable(movesRefusedKey(userId)) : writeDurable(movesRefusedKey(userId), list)
+  forUser(userId, () => (list.length === 0 ? removeDurable(movesRefusedKey(userId)) : writeDurable(movesRefusedKey(userId), list)))
 
-/** Wipe everything this device knows about a user (used on sign-out). */
+/**
+ * Wipe everything this device knows about a user (used on sign-out). A sync
+ * of theirs still out then would write some of it back when it ends: until
+ * they sign in again (markSignedIn), nothing of theirs is stored.
+ */
 export function clearUserData(userId: string): void {
+  signedOut.add(userId)
   try {
     localStorage.removeItem(cacheKey(userId))
     localStorage.removeItem(outboxKey(userId))
@@ -457,7 +481,7 @@ export function loadMoveCache(userId: string): BankrollMove[] | null {
   return raw.map(hydrateMove).filter((m): m is BankrollMove => m !== null)
 }
 
-export const saveMoveCache = (userId: string, rows: readonly BankrollMove[]): void => writeExpendable(movesKey(userId), rows)
+export const saveMoveCache = (userId: string, rows: readonly BankrollMove[]): void => forUser(userId, () => writeExpendable(movesKey(userId), rows))
 
 /** The moves queue as stored. Its head may have gone out with its answer lost (see headAsSent). */
 export const loadMoveOutbox = (userId: string): MoveOp[] => headAsSent(readMoveOutbox(userId))
@@ -466,7 +490,7 @@ export const loadMoveOutbox = (userId: string): MoveOp[] => headAsSent(readMoveO
 export const readMoveOutbox = (userId: string): MoveOp[] => readJson<MoveOp[]>(movesOutboxKey(userId)) ?? []
 
 /** Throws StorageWriteError when the queue can't be stored. */
-export const saveMoveOutbox = (userId: string, ops: readonly MoveOp[]): void => writeDurable(movesOutboxKey(userId), ops)
+export const saveMoveOutbox = (userId: string, ops: readonly MoveOp[]): void => forUser(userId, () => writeDurable(movesOutboxKey(userId), ops))
 
 export const sortMoves = (rows: readonly BankrollMove[]): BankrollMove[] => [...rows].sort(byDateThenCreated)
 

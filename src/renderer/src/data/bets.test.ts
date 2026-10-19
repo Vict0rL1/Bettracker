@@ -274,6 +274,19 @@ describe('without a session', () => {
     expect(state.calls).toEqual([])
   })
 
+  // A sync started for one account went on after another signed in on the
+  // device: its reads came back with the new account's rows (stored as the
+  // old one's), and its adds went into the new account.
+  it('another account signed in is a sign-out for the one whose queue or screen it is', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getBets('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    for (const op of ops) await expect(sendOp(op, undefined, 'user-1'), op.kind).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
+    // As that account, it goes.
+    state.result = { data: [], error: null, count: 0 }
+    await expect(getBets('user-2')).resolves.toEqual([])
+  })
+
   it('a token that could not be renewed for good (revoked) is a sign-out too', async () => {
     state.session = { data: { session: null }, error: new Error('Invalid Refresh Token: Refresh Token Not Found') }
     await expect(sendOp(ops[0])).rejects.toBeInstanceOf(SignedOutError)
@@ -323,6 +336,18 @@ describe('addBets — an import sent again after an interruption', () => {
     const progress: number[] = []
     await expect(addBets(entries(600), 'Q', 0, async (n) => void progress.push(n))).rejects.toThrow(/Failed to fetch/)
     expect(progress).toEqual([250])
+  })
+
+  it('stops between chunks once another account has signed in, having reported the ones before', async () => {
+    state.result = { data: null, error: null, count: 250 }
+    const done: number[] = []
+    const progress = async (n: number): Promise<void> => {
+      done.push(n)
+      state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    }
+    await expect(addBets(entries(600), 'Q', 0, progress, 'user-1')).rejects.toBeInstanceOf(SignedOutError)
+    expect(done).toEqual([250])
+    expect(upserts()).toHaveLength(1)
   })
 
   it('sends an import with its progress through sendOp', async () => {

@@ -86,7 +86,11 @@ export function useMoves(
   const landedRef = useRef<BankrollMove[]>([])
 
   const serverRef = useRef<BankrollMove[] | null>(null)
-  const syncingRef = useRef(false)
+  // The user whose sync is running, if any.
+  const syncingRef = useRef<string | null>(null)
+  // As useBetSync: what a sync of an earlier user brings back is dropped.
+  const userRef = useRef(userId)
+  userRef.current = userId
   const noticeRef = useRef(migrationNotice())
   const pausedNoticeRef = useRef(migrationNotice())
   const retryNoticeRef = useRef(migrationNotice())
@@ -119,6 +123,7 @@ export function useMoves(
 
   const setServer = useCallback(
     (rows: BankrollMove[]) => {
+      if (userRef.current !== userId) return
       serverRef.current = rows
       setServerState(rows)
       if (userId) saveMoveCache(userId, rows)
@@ -153,13 +158,15 @@ export function useMoves(
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
-      const rows = await getMoves()
+      const rows = await getMoves(userId)
+      if (userRef.current !== userId) return
       setServer(rows)
       setOffline(false)
       tableMissingRef.current = false
       setTableReady(true)
       setBehind(false)
     } catch (err) {
+      if (userRef.current !== userId) return
       const read = afterFailedRead(err, serverRef.current)
       setOffline(read.offline)
       // Only the missing table changes the snapshot: no table, no moves yet.
@@ -172,14 +179,15 @@ export function useMoves(
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current || !canSyncRef.current || !userId) return
+    if (syncingRef.current === userId || !canSyncRef.current || !userId) return
     if (backoffRef.current.waiting) return
-    syncingRef.current = true
+    syncingRef.current = userId
     let result: DrainResult | null
     try {
       result = await drain<BankrollMove>({
-        send: (op) => sendMoveOp(op),
+        send: (op) => sendMoveOp(op, userId),
         applied: (op, row, superseded) => {
+          if (userRef.current !== userId) return
           // A refused edit lost to a newer one elsewhere, unless a later change
           // of this device to the same move is still queued (see useBetSync).
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
@@ -198,9 +206,9 @@ export function useMoves(
         }
       })
     } finally {
-      syncingRef.current = false
+      if (syncingRef.current === userId) syncingRef.current = null
     }
-    if (!result) return
+    if (!result || userRef.current !== userId) return
     if (result.stop === 'offline') {
       setOffline(true)
       return

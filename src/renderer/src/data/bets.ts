@@ -69,9 +69,9 @@ function toRowPayload(clean: CleanBet): Record<string, unknown> {
   }
 }
 
-export async function getBets(): Promise<Bet[]> {
+export async function getBets(asUser?: string): Promise<Bet[]> {
   // Without a session the answer would be no rows, not this user's rows.
-  await signedInUserId()
+  await signedInUserId(asUser)
   const rows = await readAll<Row>((from, to) =>
     supabase
       .from(TABLE)
@@ -94,9 +94,9 @@ export async function getBets(): Promise<Bet[]> {
  * clock, the row could look newer than an edit the user made while the
  * insert was still on its way, and that edit would be refused.
  */
-export async function addBet(input: BetInput, id?: string, queuedAt?: string): Promise<Bet> {
+export async function addBet(input: BetInput, id?: string, queuedAt?: string, asUser?: string): Promise<Bet> {
   const clean = normalizeInput(input)
-  const user_id = await signedInUserId()
+  const user_id = await signedInUserId(asUser)
   const payload = { user_id, ...toRowPayload(clean), ...(id ? { id } : {}), ...(queuedAt ? { updated_at: queuedAt } : {}) }
   const { data, error, status } = await supabase.from(TABLE).insert(payload).select().single()
   if (error) {
@@ -194,15 +194,19 @@ export async function addBets(
   inputs: readonly { id: string; input: BetInput }[],
   queuedAt?: string,
   done = 0,
-  progress?: (done: number) => Promise<void>
+  progress?: (done: number) => Promise<void>,
+  asUser?: string
 ): Promise<number> {
   if (inputs.length <= done) return 0
-  const user_id = await signedInUserId()
+  const user_id = await signedInUserId(asUser)
   const stamp = queuedAt ? { updated_at: queuedAt } : {}
   const rows = inputs.map(({ id, input }) => ({ id, user_id, ...toRowPayload(normalizeInput(input)), ...stamp }))
 
   let written = 0
   for (let i = done; i < rows.length; i += IMPORT_CHUNK) {
+    // Still that user's session: signed out (or another account in) between
+    // chunks, the rest waits for them.
+    if (i > done) await signedInUserId(user_id)
     const chunk = rows.slice(i, i + IMPORT_CHUNK)
     const { error, count, status } = await supabase.from(TABLE).upsert(chunk, { count: 'exact', onConflict: 'id', ignoreDuplicates: true })
     if (error) throw describeError(error, status)
@@ -218,13 +222,14 @@ export async function addBets(
  * way that version sent it. Resolves with the row the server returned, when
  * there is one.
  */
-export async function sendOp(op: PendingOp, progress?: (done: number) => Promise<void>): Promise<Bet | null> {
+export async function sendOp(op: PendingOp, progress?: (done: number) => Promise<void>, asUser?: string): Promise<Bet | null> {
   // An edit or a delete sent without a session would find no row and leave
-  // the queue as if refused: it waits for the next sign-in instead.
-  await signedInUserId()
-  if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op))
+  // the queue as if refused: it waits for the next sign-in instead. One
+  // queued by another account (`asUser`) waits for that account.
+  await signedInUserId(asUser)
+  if (op.kind === 'add') return addBet(op.input, op.id, insertStamp(op), asUser)
   if (op.kind === 'update') return op.legacy ? updateBetLegacy(op.id, op.input, op.editedAt) : updateBet(op.id, op.input, op.editedAt)
-  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op), op.done ?? 0, progress)
+  if (op.kind === 'bulk-add') await addBets(op.entries, insertStamp(op), op.done ?? 0, progress, asUser)
   else await deleteBet(op.id)
   return null
 }

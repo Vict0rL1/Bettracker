@@ -44,10 +44,10 @@ function toRowPatch(patch: SettingsPatch): Record<string, unknown> {
 }
 
 /** This user's row, or null when they have never changed a setting. */
-export async function getSettings(): Promise<Settings | null> {
+export async function getSettings(asUser?: string): Promise<Settings | null> {
   // Without a session no row would come back, and the defaults would replace
   // this user's settings on the device.
-  await signedInUserId()
+  await signedInUserId(asUser)
   const { data, error, status } = await supabase.from(TABLE).select('*').maybeSingle()
   if (error) throw describeError(error, status)
   return data ? toSettings(data as Row) : null
@@ -60,8 +60,8 @@ export async function getSettings(): Promise<Settings | null> {
  * from another device already landed (the caller drops the patch and
  * refreshes).
  */
-export async function saveSettings(patch: SettingsPatch, editedAt: string): Promise<Settings | null> {
-  const user_id = await signedInUserId()
+export async function saveSettings(patch: SettingsPatch, editedAt: string, asUser?: string): Promise<Settings | null> {
+  const user_id = await signedInUserId(asUser)
   const fields = { ...toRowPatch(patch), updated_at: editedAt }
 
   const updated = await supabase.from(TABLE).update(fields).eq('user_id', user_id).lte('updated_at', editedAt).select().maybeSingle()

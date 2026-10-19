@@ -123,4 +123,12 @@ describe('without a session', () => {
     await expect(saveSettings({ unitSize: 25 }, 'E')).rejects.toBeInstanceOf(SignedOutError)
     expect(state.calls).toEqual([])
   })
+
+  // Read as the next account to sign in, its row was stored as this user's.
+  it('nor as another account signed in since: that is a sign-out for this one', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getSettings('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    await expect(saveSettings({ unitSize: 25 }, 'E', 'user-1')).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
+  })
 })

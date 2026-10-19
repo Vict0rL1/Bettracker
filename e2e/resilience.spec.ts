@@ -513,6 +513,45 @@ test.describe('settings changed while a save is out', () => {
   })
 })
 
+test.describe('signing out while a change is on its way', () => {
+  // The sync went on after the sign-out and, once its answer came, wrote this
+  // account's cache and queue back on the device sign-out had just cleared.
+  test('leaves nothing of the account on the device once the change is answered', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await hold(page, true)
+    await logLoss(page, '31')
+    await expect.poll(() => writesStarted(page)).toBe(1)
+    await page.locator('.btn-signout').click()
+    await page.locator('.btn-signout').click()
+    await expect(page.locator('.auth-card')).toBeVisible()
+    const kept = () => page.evaluate((uid) => Object.keys(localStorage).filter((k) => k.startsWith('bettracker:') && k.endsWith(uid)), USER.id)
+    expect(await kept()).toEqual([])
+
+    await hold(page, false)
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('e2e:writes'))).toBe('1')
+    // The sync that was out has ended (it holds this lock while it runs).
+    await page.evaluate((uid) => navigator.locks.request(`bettracker:drain:bets:${uid}`, () => undefined), USER.id)
+    expect(await kept()).toEqual([])
+  })
+
+  test('in one window, while another window’s change is on its way, leaves nothing either', async ({ page, context }) => {
+    await boot(page, { backend: 'live' })
+    const other = await secondWindow(context)
+    await hold(page, true)
+    await logLoss(other, '32')
+    await expect.poll(() => writesStarted(page)).toBe(1)
+    await page.locator('.btn-signout').click()
+    await page.locator('.btn-signout').click()
+    await expect(page.locator('.auth-card')).toBeVisible()
+
+    await hold(page, false)
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('e2e:writes'))).toBe('1')
+    await other.evaluate((uid) => navigator.locks.request(`bettracker:drain:bets:${uid}`, () => undefined), USER.id)
+    const kept = await page.evaluate((uid) => Object.keys(localStorage).filter((k) => k.startsWith('bettracker:') && k.endsWith(uid)), USER.id)
+    expect(kept).toEqual([])
+  })
+})
+
 test.describe('a first read that fails', () => {
   // With no copy of the bets on the device, one 503 on the first read left the
   // app on its splash: nothing read them again until an online or visibility

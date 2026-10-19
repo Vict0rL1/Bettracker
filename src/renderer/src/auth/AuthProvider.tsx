@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { AUTH_STORAGE_KEY, supabase } from '../lib/supabase'
-import { clearUserData, loadLastUser, saveLastUser, type OfflineUser } from '../data/offline'
+import { clearUserData, loadLastUser, markSignedIn, saveLastUser, type OfflineUser } from '../data/offline'
 import { authFailure } from './authErrors'
 
 interface AuthState {
@@ -25,20 +25,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true
+    // Signed in (again): this user's data is stored once more, before
+    // anything renders for them (see clearUserData).
+    const take = (next: Session | null): void => {
+      if (next?.user) markSignedIn(next.user.id)
+      setSession(next)
+      setLoading(false)
+    }
     supabase.auth
       .getSession()
       .then(({ data }) => {
-        if (active) {
-          setSession(data.session)
-          setLoading(false)
-        }
+        if (active) take(data.session)
       })
       .catch(() => active && setLoading(false))
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next)
-      setLoading(false)
-    })
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => take(next))
     return () => {
       active = false
       sub.subscription.unsubscribe()

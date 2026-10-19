@@ -22,6 +22,7 @@ import {
   reconcile,
   reconcileMove,
   landImport,
+  markSignedIn,
   requeueOp,
   requeueRefused,
   saveCache,
@@ -64,7 +65,11 @@ const bulk = (ids: string[]): PendingOp => ({
 /** An import whose first `done` rows the server has confirmed. */
 const imported = (ids: string[], done: number) => ({ ...(bulk(ids) as Extract<PendingOp, { kind: 'bulk-add' }>), done })
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  // A test that signs a user out leaves them so for the module (see clearUserData).
+  for (const uid of ['u1', 'u2', 'u3']) markSignedIn(uid)
+})
 
 describe('hydrateBet', () => {
   it('fills in fields a cache from an older version never stored', () => {
@@ -165,6 +170,27 @@ describe('cache and outbox persistence', () => {
     clearUserData('u1')
     expect(loadCache('u1')).toBeNull()
     expect(loadOutbox('u1')).toEqual([])
+  })
+
+  // A sync still out when the user signed out wrote their copy back once it
+  // ended: the data sign-out had just removed from the device.
+  it('stores nothing more of a user who signed out, until they sign in again', () => {
+    clearUserData('u3')
+    saveCache('u3', [bet({})])
+    saveOutbox('u3', [add('a')])
+    saveSettingsCache('u3', DEFAULT_SETTINGS)
+    saveSettingsOutbox('u3', { patch: { defaultStake: 10 }, editedAt: 'E' })
+    saveMoveCache('u3', [])
+    saveMoveOutbox('u3', [{ opId: 'm', kind: 'delete', id: 'x' }])
+    expect(loadCache('u3')).toBeNull()
+    expect(loadOutbox('u3')).toEqual([])
+    expect(loadSettingsCache('u3')).toBeNull()
+    expect(loadSettingsOutbox('u3')).toBeNull()
+    expect(loadMoveCache('u3')).toBeNull()
+    expect(loadMoveOutbox('u3')).toEqual([])
+    markSignedIn('u3')
+    saveCache('u3', [bet({})])
+    expect(loadCache('u3')).toHaveLength(1)
   })
 })
 

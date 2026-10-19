@@ -32,9 +32,9 @@ function toMove(row: Row): BankrollMove {
   }
 }
 
-export async function getMoves(): Promise<BankrollMove[]> {
+export async function getMoves(asUser?: string): Promise<BankrollMove[]> {
   // Without a session the answer would be no rows, not this user's rows.
-  await signedInUserId()
+  await signedInUserId(asUser)
   const rows = await readAll<Row>((from, to) =>
     supabase
       .from(TABLE)
@@ -53,9 +53,9 @@ export async function getMoves(): Promise<BankrollMove[]> {
  * device time of its content (insertStamp), written as `updated_at` for the
  * same reason as addBet's.
  */
-export async function addMove(input: MoveInput, id: string, stamp: string): Promise<BankrollMove> {
+export async function addMove(input: MoveInput, id: string, stamp: string, asUser?: string): Promise<BankrollMove> {
   const clean = normalizeMove(input)
-  const user_id = await signedInUserId()
+  const user_id = await signedInUserId(asUser)
   const { data, error, status } = await supabase
     .from(TABLE)
     .insert({ id, user_id, date: clean.date, amount: clean.amount, note: clean.note, updated_at: stamp })
@@ -104,10 +104,10 @@ export async function deleteMove(id: string): Promise<boolean> {
  * there is one. Moves are never imported, so a 'bulk-add' can only be a
  * corrupt queue: it is refused, and the drain drops it.
  */
-export async function sendMoveOp(op: MoveOp): Promise<BankrollMove | null> {
-  // As sendOp: without a session it waits for the next sign-in.
-  await signedInUserId()
-  if (op.kind === 'add') return addMove(op.input, op.id, insertStamp(op))
+export async function sendMoveOp(op: MoveOp, asUser?: string): Promise<BankrollMove | null> {
+  // As sendOp: without a session (or `asUser`'s) it waits for the next sign-in.
+  await signedInUserId(asUser)
+  if (op.kind === 'add') return addMove(op.input, op.id, insertStamp(op), asUser)
   if (op.kind === 'update') return updateMove(op.id, op.input, op.editedAt)
   if (op.kind === 'delete') {
     await deleteMove(op.id)

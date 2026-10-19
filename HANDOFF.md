@@ -138,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 597 tests unitarios (vitest)
+npm test            # 602 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 113 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 115 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -406,6 +406,14 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      movimientos y ajustes. Sesión terminada → insignia "Sesión cerrada",
      "Volver a entrar" sin borrar la cola, y el aviso de cada cambio dice
      que se sincronizará al volver a entrar.
+     Cada lectura y cada envío dicen para qué cuenta son
+     (`signedInUserId(asUser)`): con la sesión de otra cuenta cuenta como
+     sin sesión, así que una sincronización de A que sigue en marcha cuando
+     entra B no lee las filas de B ni manda los cambios de A como B. Lo que
+     esa sincronización traiga se descarta (los hooks comparan con
+     `userRef`), y tras cerrar sesión nada de esa cuenta se vuelve a
+     guardar en el dispositivo hasta que entre otra vez (`clearUserData`,
+     `markSignedIn`).
   5. *Un rechazo de ajustes borraba un parche más nuevo.* Ahora cualquier
      respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
      editado mientras tanto sigue pendiente y sale enseguida. Un ajuste se
@@ -604,7 +612,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       113 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       115 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, paginación, ajustes en vuelo)

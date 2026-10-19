@@ -65,6 +65,10 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   const [held, setHeld] = useState(false)
   const [refused, setRefusedState] = useState<Refused<I>[]>([])
   const outboxRef = useRef<PendingOp<I>[]>([])
+  // The user this render is for: a drain of an earlier one may still end, and
+  // its queue must not show as this user's (see useBetSync).
+  const userRef = useRef(userId)
+  userRef.current = userId
 
   // The callbacks in `o` are module functions: the stores depend on the user alone.
   const stores = useMemo(() => {
@@ -86,11 +90,18 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
 
   const mirror = useCallback(
     (q: PendingOp<I>[]) => {
+      if (userRef.current !== userId) return
       outboxRef.current = q
       setOutboxState(q)
       setHeld(stores?.queue.held ?? false)
     },
-    [stores]
+    [userId, stores]
+  )
+  const showRefused = useCallback(
+    (list: Refused<I>[]) => {
+      if (userRef.current === userId) setRefusedState(list)
+    },
+    [userId]
   )
 
   // Boot: the stored queue at once, for instant paint. Its head may have gone
@@ -153,13 +164,13 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
           rejected: async (ops, err) => {
             const entry: Refused<I> = { ops, reason: err instanceof Error ? err.message : String(err), at: new Date().toISOString() }
             const r = await stores.refused.update((list) => [...list, entry])
-            setRefusedState(r.value)
-            optsRef.current.onRefused(err)
+            showRefused(r.value)
+            if (userRef.current === userId) optsRef.current.onRefused(err)
           }
         })
       )
     },
-    [userId, name, stores, update]
+    [userId, name, stores, update, showRefused]
   )
 
   const retryRefused = useCallback(async (): Promise<boolean> => {
@@ -172,15 +183,15 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     const stories = entries.map((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined }) as PendingOp<I>))
     const saved = stories.length === 0 || (await update((q) => requeueRefused<I>(q, stories))).saved
     const r = await stores.refused.update(without(entries))
-    setRefusedState(r.value)
+    showRefused(r.value)
     return saved
-  }, [stores, update])
+  }, [stores, update, showRefused])
 
   const discardRefused = useCallback(async (): Promise<void> => {
     if (!stores) return
     const r = await stores.refused.update(without(await stores.refused.fresh()))
-    setRefusedState(r.value)
-  }, [stores])
+    showRefused(r.value)
+  }, [stores, showRefused])
 
   const saveAgain = useCallback(async (): Promise<boolean> => (await update((q) => q)).saved, [update])
 

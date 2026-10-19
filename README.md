@@ -53,7 +53,9 @@ connection had dropped, and tried again later.
 Signing out removes that device's local copy (cache, queued changes and
 refused ones); anything already synced stays safe in your Supabase project.
 While changes are still queued or refused, **Sign out** asks you to click
-again.
+again. A sync still on its way when you sign out writes none of it back, and
+nothing of one account is ever read or sent as another that signs in on the
+same device.
 
 Three more things stay on screen until you deal with them, because they are
 about changes that haven't reached the server:
