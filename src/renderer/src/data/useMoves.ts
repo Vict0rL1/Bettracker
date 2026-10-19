@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, MoveInput } from '../../../shared/types'
+import { newId } from '../lib/uuid'
 import { normalizeMove } from '../lib/validate'
-import { afterFailedRead, drainOutbox, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { SignedOutError } from './errors'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
   applyMoveOutbox,
-  enqueueOp,
   loadMoveCache,
-  loadMoveOutbox,
+  loadMovesRefused,
+  queueKeys,
+  readMoveOutbox,
   reconcileMove,
   saveMoveCache,
   saveMoveOutbox,
-  type MoveOp
+  saveMovesRefused,
+  type MoveOp,
+  type Refused
 } from './offline'
+import { useOpQueue } from './useOpQueue'
 
 export interface MoveSync {
   /**
@@ -28,11 +34,21 @@ export interface MoveSync {
   queuedCount: number
   /** A change waits for migration 005 (a write was refused for the missing table). */
   blocked: boolean
-  addMove: (input: MoveInput) => void
-  updateMove: (id: string, input: MoveInput) => void
-  deleteMove: (id: string) => void
+  /** Storage refused the queue: these changes are only in this window until they sync. */
+  unsaved: boolean
+  /** Changes the server refused for good, kept to send again or let go. */
+  refused: Refused<MoveInput>[]
+  /** Storage refused the list of refused changes: they are only in this window. */
+  refusedUnsaved: boolean
+  /** Each resolves once queued: true when this device's storage holds it (see useBetSync). */
+  addMove: (input: MoveInput) => Promise<boolean>
+  updateMove: (id: string, input: MoveInput) => Promise<boolean>
+  deleteMove: (id: string) => Promise<boolean>
   /** Undo of a delete: an add with the same id and a fresh queuedAt. */
-  restoreMove: (m: BankrollMove) => void
+  restoreMove: (m: BankrollMove) => Promise<boolean>
+  retryRefused: () => Promise<boolean>
+  discardRefused: () => Promise<void>
+  saveAgain: () => Promise<boolean>
 }
 
 const RETRY_INTERVAL_MS = 20_000
@@ -40,9 +56,9 @@ const REALTIME_DEBOUNCE_MS = 400
 
 /**
  * Deposits and withdrawals, offline-first exactly like the bets (useBetSync):
- * a device cache for instant paint, an outbox replayed in order by the same
- * queue rules, and a full read as the anchor after a drain and on realtime
- * events.
+ * a device cache for instant paint, an outbox shared by every window and
+ * replayed in order by the same queue rules, and a full read as the anchor
+ * after a drain and on realtime events.
  *
  * What differs is that the table comes with migration 005, which the app can
  * run ahead of. A read that finds it missing is not an error: there are no
@@ -58,9 +74,10 @@ export function useMoves(
   onNotice?: (code: 'conflict') => void
 ): MoveSync {
   const [server, setServerState] = useState<BankrollMove[] | null>(null)
-  const [outbox, setOutboxState] = useState<MoveOp[]>([])
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
   const [behind, setBehindState] = useState(false)
+  const [paused, setPausedState] = useState(false)
+  const [retrying, setRetryingState] = useState(false)
   // A read went through, so the table exists: only then is there anything to
   // subscribe to.
   const [tableReady, setTableReady] = useState(false)
@@ -71,9 +88,18 @@ export function useMoves(
   const landedRef = useRef<BankrollMove[]>([])
 
   const serverRef = useRef<BankrollMove[] | null>(null)
-  const outboxRef = useRef<MoveOp[]>([])
-  const syncingRef = useRef(false)
+  // As useBetSync: what a read out while a change was confirmed lays over what it got.
+  const confirmedRef = useRef(confirmedLog<BankrollMove>())
+  // The user whose sync is running, if any.
+  const syncingRef = useRef<string | null>(null)
+  // As useBetSync: what a sync of an earlier user brings back is dropped.
+  const userRef = useRef(userId)
+  userRef.current = userId
   const noticeRef = useRef(migrationNotice())
+  const pausedNoticeRef = useRef(migrationNotice())
+  const retryNoticeRef = useRef(migrationNotice())
+  const backoffRef = useRef(backoff())
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // The last read found the table missing: keep reading until it is there.
   const tableMissingRef = useRef(false)
   const canSyncRef = useRef(canSync)
@@ -83,20 +109,28 @@ export function useMoves(
   const onNoticeRef = useRef(onNotice)
   onNoticeRef.current = onNotice
 
+  const queue = useOpQueue<MoveInput>({
+    userId,
+    name: 'moves',
+    keys: (uid) => ({ queue: queueKeys(uid).moves, refused: queueKeys(uid).movesRefused }),
+    read: readMoveOutbox,
+    save: saveMoveOutbox,
+    readRefused: loadMovesRefused,
+    saveRefused: saveMovesRefused,
+    onRefused: (err) => onErrorRef.current(err),
+    newId
+  })
+  // Each of these keeps its identity from render to render (the queue object itself does not).
+  const { outbox, outboxRef, enqueue, drain, discardRefused } = queue
+  const retryQueued = queue.retryRefused
+  const saveQueued = queue.saveAgain
+
   const setServer = useCallback(
     (rows: BankrollMove[]) => {
+      if (userRef.current !== userId) return
       serverRef.current = rows
       setServerState(rows)
       if (userId) saveMoveCache(userId, rows)
-    },
-    [userId]
-  )
-
-  const setOutbox = useCallback(
-    (next: MoveOp[]) => {
-      outboxRef.current = next
-      setOutboxState(next)
-      if (userId) saveMoveOutbox(userId, next)
     },
     [userId]
   )
@@ -110,43 +144,65 @@ export function useMoves(
     setBehindState(next)
   }, [])
 
+  // As useBetSync: said once per episode; a lost session has its own notice.
+  const setPaused = useCallback((next: boolean, err?: unknown) => {
+    if (next && !(err instanceof SignedOutError) && pausedNoticeRef.current.found()) onErrorRef.current(err)
+    if (!next) pausedNoticeRef.current.clear()
+    setPausedState(next)
+  }, [])
+  const setRetrying = useCallback((next: boolean, err?: unknown) => {
+    if (next && retryNoticeRef.current.found()) onErrorRef.current(err)
+    if (!next) {
+      retryNoticeRef.current.clear()
+      backoffRef.current.reset()
+    }
+    setRetryingState(next)
+  }, [])
+
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
+    const read = confirmedRef.current.read()
     try {
-      const rows = await getMoves()
+      const rows = read.over(await getMoves(userId))
+      if (userRef.current !== userId) return
       setServer(rows)
       setOffline(false)
       tableMissingRef.current = false
       setTableReady(true)
       setBehind(false)
     } catch (err) {
-      const read = afterFailedRead(err, serverRef.current)
-      setOffline(read.offline)
+      if (userRef.current !== userId) return
+      const failed = afterFailedRead(err, serverRef.current)
+      setOffline(failed.offline)
       // Only the missing table changes the snapshot: no table, no moves yet.
-      if (read.server !== null && read.server !== serverRef.current) setServer(read.server)
-      if (read.tableMissing) tableMissingRef.current = true
-      if (read.report) onErrorRef.current(err)
+      if (failed.server !== null && failed.server !== serverRef.current) setServer(failed.server)
+      if (failed.tableMissing) tableMissingRef.current = true
+      if (failed.report) onErrorRef.current(err)
+    } finally {
+      read.end()
     }
   }, [userId, setServer, setBehind])
 
+  const syncNowRef = useRef<() => Promise<void>>(async () => {})
+
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current || !canSyncRef.current || !userId) return
-    syncingRef.current = true
-    let result: DrainResult
+    if (syncingRef.current === userId || !canSyncRef.current || !userId) return
+    if (backoffRef.current.waiting) return
+    syncingRef.current = userId
+    let result: DrainResult | null
     try {
-      result = await drainOutbox<MoveInput, BankrollMove>({
-        outbox: () => outboxRef.current,
-        setOutbox,
-        setSent: (op, sent) =>
-          setOutbox(outboxRef.current.map((o) => (o.opId === op.opId ? { ...o, sent: sent ? true : undefined } : o))),
-        send: sendMoveOp,
+      result = await drain<BankrollMove>({
+        send: (op) => sendMoveOp(op, userId),
         applied: (op, row, superseded) => {
+          if (userRef.current !== userId) return
           // A refused edit lost to a newer one elsewhere, unless a later change
           // of this device to the same move is still queued (see useBetSync).
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
           // Folded only into a snapshot this device has (see foldApplied).
           // The refresh after the drain brings the whole list.
-          const next = foldApplied(serverRef.current, landedRef.current, (rows) => reconcileMove(rows, op, row))
+          const change = (rows: readonly BankrollMove[]): BankrollMove[] => reconcileMove(rows, op, row)
+          confirmedRef.current.confirmed(change)
+          const next = foldApplied(serverRef.current, landedRef.current, change)
           if (next.server !== null) setServer(next.server)
           else {
             landedRef.current = next.landed
@@ -154,47 +210,95 @@ export function useMoves(
           }
           setOffline(false)
           setBehind(false)
-        },
-        rejected: (_op, err) => onErrorRef.current(err)
+          setPaused(false)
+          setRetrying(false)
+        }
       })
     } finally {
-      syncingRef.current = false
+      if (syncingRef.current === userId) syncingRef.current = null
     }
+    if (!result || userRef.current !== userId) return
     if (result.stop === 'offline') {
       setOffline(true)
       return
     }
+    // The server answered, so the connection is back whatever said otherwise.
+    setOffline(false)
+    // Each stop says what holds the queue back now: a reason from an earlier
+    // stop would otherwise outrank it on the badge (see syncStatus).
+    // Only their state: their notices and the wait end with an op that goes
+    // through, or a queue that empties.
+    if (result.stop === 'paused') {
+      setRetryingState(false)
+      setBehindState(false)
+      setPaused(true, result.error)
+      return
+    }
+    if (result.stop === 'retry') {
+      setPausedState(false)
+      setBehindState(false)
+      const wait = backoffRef.current.failed(result.error)
+      setRetrying(true, result.error)
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = setTimeout(() => void syncNowRef.current(), wait)
+      return
+    }
     if (result.stop === 'behind') {
-      // The server answered, so the connection is back whatever said otherwise.
-      setOffline(false)
+      setPausedState(false)
+      setRetryingState(false)
       setBehind(true, result.error)
       return
     }
     setBehind(false)
+    setPaused(false)
+    setRetrying(false)
     // True-up after a drain so the bankroll can never drift from the server.
     if (result.processed > 0 && outboxRef.current.length === 0) await refresh()
-  }, [userId, setServer, setOutbox, setBehind, refresh])
+  }, [userId, drain, outboxRef, setServer, setBehind, setPaused, setRetrying, refresh])
+  syncNowRef.current = syncNow
 
-  // Boot: hydrate this user's cache + outbox synchronously for instant paint.
+  // Boot: hydrate this user's cache synchronously for instant paint (the
+  // queue is useOpQueue's).
   useEffect(() => {
     serverRef.current = null
-    outboxRef.current = []
     tableMissingRef.current = false
     setServerState(null)
-    setOutboxState([])
     setOffline(false)
     noticeRef.current.clear()
+    pausedNoticeRef.current.clear()
+    retryNoticeRef.current.clear()
+    backoffRef.current.reset()
     setBehindState(false)
+    setPausedState(false)
+    setRetryingState(false)
     setTableReady(false)
     landedRef.current = []
     setLanded([])
+    confirmedRef.current = confirmedLog<BankrollMove>()
     if (!userId) return
     const cached = loadMoveCache(userId)
-    const pending = loadMoveOutbox(userId)
     serverRef.current = cached
-    outboxRef.current = pending
     if (cached) setServerState(cached)
-    setOutboxState(pending)
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
+  }, [userId])
+
+  // Another window refreshed the cache: show what it got.
+  useEffect(() => {
+    if (!userId) return
+    const key = queueKeys(userId).movesCache
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key !== key) return
+      const rows = loadMoveCache(userId)
+      if (rows) {
+        serverRef.current = rows
+        setServerState(rows)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   }, [userId])
 
   // Whenever we (re)gain a live session: push pending work, then pull fresh.
@@ -245,52 +349,60 @@ export function useMoves(
       window.removeEventListener('offline', onOffline)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [userId, syncNow, refresh])
+  }, [userId, outboxRef, syncNow, refresh])
 
   const mutate = useCallback(
-    (op: MoveOp) => {
-      setOutbox(enqueueOp<MoveInput>(outboxRef.current, op))
-      setTimeout(() => void syncNow(), 0)
+    async (op: MoveOp): Promise<boolean> => {
+      const saved = await enqueue([op])
+      setTimeout(() => void syncNowRef.current(), 0)
+      return saved
     },
-    [setOutbox, syncNow]
+    [enqueue]
   )
 
   const add = useCallback(
-    (input: MoveInput) => {
+    async (input: MoveInput): Promise<boolean> => {
       const clean = normalizeMove(input) // throws on bad input, before anything is queued
-      mutate({ opId: crypto.randomUUID(), kind: 'add', id: crypto.randomUUID(), input: clean, queuedAt: new Date().toISOString() })
+      return mutate({ opId: newId(), kind: 'add', id: newId(), input: clean, queuedAt: new Date().toISOString() })
     },
     [mutate]
   )
 
   const update = useCallback(
-    (id: string, input: MoveInput) => {
+    async (id: string, input: MoveInput): Promise<boolean> => {
       const clean = normalizeMove(input)
-      mutate({ opId: crypto.randomUUID(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
+      return mutate({ opId: newId(), kind: 'update', id, input: clean, editedAt: new Date().toISOString() })
     },
     [mutate]
   )
 
-  const remove = useCallback(
-    (id: string) => {
-      mutate({ opId: crypto.randomUUID(), kind: 'delete', id })
-    },
-    [mutate]
-  )
+  const remove = useCallback((id: string): Promise<boolean> => mutate({ opId: newId(), kind: 'delete', id }), [mutate])
 
   const restore = useCallback(
-    (m: BankrollMove) => {
+    async (m: BankrollMove): Promise<boolean> => {
       const clean = normalizeMove({ date: m.date, amount: m.amount, note: m.note })
-      mutate({ opId: crypto.randomUUID(), kind: 'add', id: m.id, input: clean, queuedAt: new Date().toISOString() })
+      return mutate({ opId: newId(), kind: 'add', id: m.id, input: clean, queuedAt: new Date().toISOString() })
     },
     [mutate]
   )
+
+  const retryRefused = useCallback(async (): Promise<boolean> => {
+    const saved = await retryQueued()
+    setTimeout(() => void syncNowRef.current(), 0)
+    return saved
+  }, [retryQueued])
+
+  const saveAgain = useCallback(async (): Promise<boolean> => {
+    const saved = await saveQueued()
+    if (saved) setTimeout(() => void syncNowRef.current(), 0)
+    return saved
+  }, [saveQueued])
 
   // Queued changes show even before the first snapshot: a deposit made on a
   // device that has never loaded the list is still the user's deposit.
   const moves = useMemo(() => applyMoveOutbox(server ?? landed, outbox), [server, landed, outbox])
 
-  const status = syncStatus({ canSync, offline, queued: outbox.length, behind })
+  const status = syncStatus({ canSync, offline, queued: outbox.length, behind, paused, retrying })
 
   return {
     moves,
@@ -298,9 +410,15 @@ export function useMoves(
     status,
     queuedCount: outbox.length,
     blocked: behind && outbox.length > 0,
+    unsaved: queue.held && outbox.length > 0,
+    refused: queue.refused,
+    refusedUnsaved: queue.refusedHeld && queue.refused.length > 0,
     addMove: add,
     updateMove: update,
     deleteMove: remove,
-    restoreMove: restore
+    restoreMove: restore,
+    retryRefused,
+    discardRefused,
+    saveAgain
   }
 }

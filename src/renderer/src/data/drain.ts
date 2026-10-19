@@ -1,5 +1,5 @@
 import type { Bet, BetInput, Settings } from '../../../shared/types'
-import { classifySyncError } from './errors'
+import { classifySyncError, retryDelay } from './errors'
 import type { PendingOp, PendingSettings } from './offline'
 
 /**
@@ -15,75 +15,155 @@ import type { PendingOp, PendingSettings } from './offline'
  * How a drain ended:
  *  - 'done':    the queue is empty;
  *  - 'offline': the server was unreachable, the rest waits for the connection;
+ *  - 'paused':  Supabase refused who was asking (no session, a key it doesn't
+ *               take), the rest waits for a sign-in or the right key;
+ *  - 'retry':   the server failed for now (a 5xx, a rate limit), the rest
+ *               waits for the next try, after a growing wait;
  *  - 'behind':  the database is missing a migration, the rest waits for it.
  * `processed` counts the ops that reached the server.
  */
 export type DrainResult =
   | { stop: 'done'; processed: number }
   | { stop: 'offline'; processed: number }
-  | { stop: 'behind'; processed: number; error: unknown }
+  | { stop: 'paused' | 'retry' | 'behind'; processed: number; error: unknown }
 
 export interface DrainHooks<I = BetInput, R = Bet> {
-  /** The queue as it is now. Read before every op: the user can add to it while a request is out. */
-  outbox: () => readonly PendingOp<I>[]
-  setOutbox: (next: PendingOp<I>[]) => void
+  /** The queue as it is now, other windows' changes included. Read before every op: it can grow while a request is out. */
+  outbox: () => readonly PendingOp<I>[] | Promise<readonly PendingOp<I>[]>
   /**
-   * Mark an op `sent` just before its first request goes out (from then on
-   * it may reach the server whatever the answer, so enqueueOp must never
-   * rewrite or cancel it), or unmark it when that first request was refused
-   * before it could apply. The mark is saved with the queue.
+   * Change the queue: `fn` gets it as stored now, and nothing else changes it
+   * until it is stored again (see store.ts). Resolves with the new queue.
    */
-  setSent: (op: PendingOp<I>, sent: boolean) => void
-  /** Send one op; resolves with the row the server returned, if any. */
-  send: (op: PendingOp<I>) => Promise<R | null>
+  update: (fn: (queue: PendingOp<I>[]) => PendingOp<I>[]) => readonly PendingOp<I>[] | Promise<readonly PendingOp<I>[]>
+  /**
+   * Send one op; resolves with the row the server returned, if any. An import
+   * reports each chunk the server confirmed through `progress`, so a retry
+   * after an interruption starts after it.
+   */
+  send: (op: PendingOp<I>, progress: (done: number) => Promise<void>) => Promise<R | null>
   /**
    * The op reached the server. `superseded`: another op for the same bet is
    * still queued behind it, so a refused update is not the last word on
    * that bet (no "newer edit elsewhere" notice for it).
    */
   applied: (op: PendingOp<I>, result: R | null, superseded: boolean) => void
-  /** The server refused the op for good; it has already left the queue. */
-  rejected: (op: PendingOp<I>, err: unknown) => void
+  /**
+   * The server refused these for good: the op, with what was queued after
+   * it for a bet it never made. Keep them where the user can send them
+   * again; they leave the queue once this resolves. Called once more with
+   * `revised` when they changed before they left (an edit folded in): the
+   * entry of the same refused op (the first) is written again with them.
+   */
+  rejected: (ops: PendingOp<I>[], err: unknown, revised?: boolean) => void | Promise<void>
+}
+
+/** What was queued for an add's bet after it, up to the next add of that bet (an Undo, which starts it anew). */
+function queuedAfter<I>(queue: readonly PendingOp<I>[], add: PendingOp<I>): PendingOp<I>[] {
+  const at = queue.findIndex((o) => o.opId === add.opId)
+  if (add.kind === 'bulk-add' || at < 0) return []
+  const after: PendingOp<I>[] = []
+  for (const o of queue.slice(at + 1)) {
+    if (o.kind === 'bulk-add' || o.id !== add.id) continue
+    if (o.kind === 'add') break
+    after.push(o)
+  }
+  return after
 }
 
 /**
- * Send the queued bet ops in order until the queue is empty or one can't go
+ * Mark `opId` as gone out by `attempt`, or take that mark back. A mark that
+ * is already there stays, and only the attempt that made a mark takes it
+ * back: replayed later on a queue another window has changed (see store.ts),
+ * this never unmarks an op that window sent.
+ */
+const markSent = <I>(queue: PendingOp<I>[], opId: string, attempt: string, sent: boolean): PendingOp<I>[] =>
+  queue.map((o) => {
+    if (o.opId !== opId) return o
+    if (sent) return o.sent ? o : { ...o, sent: true as const, sentBy: attempt }
+    return o.sentBy === attempt ? { ...o, sent: undefined, sentBy: undefined } : o
+  })
+
+let attempts = 0
+/** Names one attempt at sending one op (see markSent). */
+const newAttempt = (): string => `${Date.now().toString(36)}-${(attempts++).toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+
+/**
+ * Send the queued ops in order until the queue is empty or one can't go
  * through. A sent op leaves the queue by its opId, never by position: while
- * it was out the user may have queued more, so whatever is first by then may
- * be a different op.
+ * it was out the user, or another window, may have queued more, so whatever
+ * is first by then may be a different op.
+ *
+ * An op is marked `sent` in storage before its first request leaves, and the
+ * op that goes is the one stored at that moment: another window may have
+ * folded an edit into it, or cancelled it, just before. From then on no
+ * window rewrites or cancels it (see enqueueOp).
  */
 export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): Promise<DrainResult> {
   let processed = 0
-  const without = (op: PendingOp<I>): PendingOp<I>[] => h.outbox().filter((o) => o.opId !== op.opId)
   const forBet = (o: PendingOp<I>, op: PendingOp<I>): boolean => o.kind !== 'bulk-add' && op.kind !== 'bulk-add' && o.id === op.id
-  for (let op = h.outbox()[0]; op !== undefined; op = h.outbox()[0]) {
+  for (let head = (await h.outbox())[0]; head !== undefined; head = (await h.outbox())[0]) {
+    let op: PendingOp<I> = head
     const firstTry = !op.sent
-    if (firstTry) h.setSent(op, true)
+    const attempt = newAttempt()
+    if (firstTry) {
+      const stored = (await h.update((q) => markSent(q, head.opId, attempt, true))).find((o) => o.opId === head.opId)
+      // Cancelled by another window before it went: nothing to send.
+      if (!stored) continue
+      op = stored
+    }
+    // Never back: another window may have got further with this import.
+    const progress = async (done: number): Promise<void> => {
+      await h.update((q) => q.map((o) => (o.opId === op.opId && o.kind === 'bulk-add' ? { ...o, done: Math.max(o.done ?? 0, done) } : o)))
+    }
     try {
-      const result = await h.send(op)
-      h.applied(op, result, h.outbox().some((o) => o.opId !== op.opId && forBet(o, op)))
-      h.setOutbox(without(op))
+      const result = await h.send(op, progress)
+      h.applied(op, result, (await h.outbox()).some((o) => o.opId !== op.opId && forBet(o, op)))
+      await h.update((q) => q.filter((o) => o.opId !== op.opId))
       processed++
     } catch (err) {
       const failure = classifySyncError(err)
-      // Unreachable, or the database is missing a migration: keep the op, and
-      // everything queued after it, in order, for the next attempt.
-      if (failure === 'offline') return { stop: 'offline', processed }
-      if (failure === 'behind') {
-        // Refused before it could apply: a first attempt never landed.
-        if (firstTry) h.setSent(op, false)
-        return { stop: 'behind', processed, error: err }
+      // Unreachable, or the answer may be lost: keep the op, and everything
+      // queued after it, in order, for the next attempt.
+      if (failure === 'offline' || failure === 'retry') {
+        return failure === 'offline' ? { stop: 'offline', processed } : { stop: 'retry', processed, error: err }
       }
-      // The server rejected this op (validation, RLS, row gone). Drop it so it
-      // can't block the queue, surface the error, and keep going. An add
-      // refused on its first attempt (not as a duplicate) never made its bet,
-      // so the edits queued for it go too: sent, they would come back refused,
-      // as a false "newer edit" notice. Not after an earlier attempt (it may
-      // have landed), and not for an import (earlier chunks may have landed);
-      // deletes stay either way, as a delete of a missing row is harmless.
-      const neverMade = op.kind === 'add' && firstTry && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
-      h.setOutbox(without(op).filter((o) => !(neverMade && o.kind === 'update' && forBet(o, op))))
-      h.rejected(op, err)
+      // No session, a key refused, or the database behind: refused before it
+      // could apply, so a first attempt never landed and can still be folded
+      // into or cancelled. Keep it and the rest for later.
+      if (failure === 'paused' || failure === 'behind') {
+        if (firstTry) await h.update((q) => markSent(q, op.opId, attempt, false))
+        return { stop: failure, processed, error: err }
+      }
+      // The server refused this op for good (validation, RLS, row gone). It
+      // leaves the queue so it can't block it. An add refused for good (not
+      // as a duplicate) never made the bet, whatever its earlier attempts: one
+      // that landed answers a retry as a duplicate (and addBet reads the row
+      // back). So what was queued for that bet after it goes with it, up to an
+      // Undo that adds the bet again: its edits would only come back refused,
+      // as false "newer edit" notices, and with its delete kept beside it,
+      // sending them again does what the user did (an add then a delete is
+      // nothing). Not for an import: earlier chunks may have landed.
+      const neverMade = op.kind === 'add' && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
+      const read = await h.outbox()
+      const kept = [read.find((o) => o.opId === op.opId) ?? op, ...(neverMade ? queuedAfter(read, op) : [])]
+      // Kept apart before it leaves the queue: a window closed in between
+      // leaves it in both (sent twice at worst), never in neither.
+      await h.rejected(kept, err)
+      // Then out of the queue, as the ops are now: an edit folded into one
+      // since, or queued for the bet since, goes too, and the entry is
+      // written again with them. Decided once, so a replay takes the same.
+      const taken: { ops: PendingOp<I>[] | null } = { ops: null }
+      await h.update((q) => {
+        if (taken.ops === null) {
+          const ids = new Set([...kept.map((o) => o.opId), ...(neverMade ? queuedAfter(q, op).map((o) => o.opId) : [])])
+          taken.ops = q.filter((o) => ids.has(o.opId))
+        }
+        const gone = taken.ops
+        return q.filter((o) => !gone.some((g) => g.opId === o.opId))
+      })
+      const gone = taken.ops ?? []
+      const same = gone.length === kept.length && gone.every((o, i) => JSON.stringify(o) === JSON.stringify(kept[i]))
+      if (gone[0]?.opId === op.opId && !same) await h.rejected(gone, err, true)
     }
   }
   return { stop: 'done', processed }
@@ -91,39 +171,43 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
 
 /**
  * How a settings push ended. 'conflict' means a newer edit from another
- * device already landed, so this one was dropped.
+ * device already landed, so this one lost.
  */
 export type SettingsPushResult =
   | { stop: 'saved'; row: Settings }
   | { stop: 'conflict' }
   | { stop: 'offline' }
-  | { stop: 'behind'; error: unknown }
-  | { stop: 'rejected'; error: unknown }
+  | { stop: 'paused' | 'retry' | 'behind' | 'rejected'; error: unknown }
 
 export interface SettingsPushHooks {
-  pending: () => PendingSettings | null
-  setPending: (next: PendingSettings | null) => void
+  /** The patch pending now, other windows' edits included. */
+  pending: () => PendingSettings | null | Promise<PendingSettings | null>
+  /**
+   * `sent` has had its answer: take it out of what is pending (see
+   * afterSettingsAnswer), keeping whatever was edited since it went.
+   */
+  settle: (sent: PendingSettings) => void | Promise<void>
   /** Resolves with the saved row, or null when a newer edit already landed. */
   save: (p: PendingSettings) => Promise<Settings | null>
 }
 
 /**
  * Push the one queued settings patch, with the same keep-or-drop rule as the
- * bets. Returns null when nothing was queued.
+ * bets. Returns null when nothing was queued. Whatever the answer, it only
+ * settles the patch that went: an edit made while it was out stays pending.
  */
 export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushResult | null> {
-  const p = h.pending()
+  const p = await h.pending()
   if (!p) return null
   try {
     const saved = await h.save(p)
-    // Only clear the queue if nothing was added while the request was out.
-    if (h.pending() === p) h.setPending(null)
+    await h.settle(p)
     return saved ? { stop: 'saved', row: saved } : { stop: 'conflict' }
   } catch (err) {
     const failure = classifySyncError(err)
     if (failure === 'offline') return { stop: 'offline' }
-    if (failure === 'behind') return { stop: 'behind', error: err }
-    h.setPending(null)
+    if (failure !== 'rejected') return { stop: failure, error: err }
+    await h.settle(p)
     return { stop: 'rejected', error: err }
   }
 }
@@ -136,6 +220,8 @@ export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushRe
  *    the truth (a device copy from before is kept). `tableMissing` lets the
  *    hook keep looking for the migration. Nothing is reported: reads happen on
  *    every boot and resume, and the hint is for a change that waits on it;
+ *  - signed out meanwhile, or a passing server failure: the device copy stays,
+ *    and the next read tries again;
  *  - refused for any other reason: the device copy stays and it is reported.
  * `server` is the snapshot to show from now on; `tableMissing` false says
  * nothing about the table either way.
@@ -151,33 +237,74 @@ export function afterFailedRead<T>(err: unknown, cached: T[] | null): FailedRead
   const failure = classifySyncError(err)
   if (failure === 'offline') return { offline: true, server: cached, tableMissing: false, report: false }
   if (failure === 'behind') return { offline: false, server: cached ?? [], tableMissing: true, report: false }
+  // Signed out meanwhile, or a passing server failure: the next read will do.
+  if (failure === 'paused' || failure === 'retry') return { offline: false, server: cached, tableMissing: false, report: false }
   return { offline: false, server: cached, tableMissing: false, report: true }
 }
 
-/** What the header badge shows. 'behind': changes wait on a missing migration. */
-export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'behind'
+/**
+ * What the header badge shows. 'behind': changes wait on a missing migration;
+ * 'paused': on a sign-in or a key Supabase takes; 'retrying': on the next try
+ * after a server failure.
+ */
+export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'paused' | 'retrying' | 'behind'
 
 /**
  * The badge, from the queue and the last attempt. No session or no connection
- * comes first; then an empty queue is synced; then a queue held back by a
- * missing migration is 'behind'; anything else queued is on its way.
+ * comes first; then an empty queue is synced; then a queue held back says
+ * why (paused, retrying, behind); anything else queued is on its way.
  * `queued` counts the waiting changes that the badge stands for.
  */
-export function syncStatus(s: { canSync: boolean; offline: boolean; queued: number; behind: boolean }): SyncStatus {
+export function syncStatus(s: { canSync: boolean; offline: boolean; queued: number; behind: boolean; paused?: boolean; retrying?: boolean }): SyncStatus {
   if (!s.canSync || s.offline) return 'offline'
   if (s.queued === 0) return 'synced'
+  if (s.paused) return 'paused'
+  if (s.retrying) return 'retrying'
   return s.behind ? 'behind' : 'syncing'
 }
 
 /**
  * One badge for several queues (the bets, the settings patch …): the first of
- * offline, syncing, behind that any of them is in, else synced. A queue held
- * back by a missing migration does not hide another that is on its way.
- * Callers pass 'synced' for a queue with nothing in it.
+ * offline, paused, retrying, syncing, behind that any of them is in, else
+ * synced. A queue held back by a missing migration does not hide another
+ * that is on its way. Callers pass 'synced' for a queue with nothing in it.
  */
 export function combinedStatus(parts: readonly SyncStatus[]): SyncStatus {
-  for (const s of ['offline', 'syncing', 'behind'] as const) if (parts.includes(s)) return s
+  for (const s of ['offline', 'paused', 'retrying', 'syncing', 'behind'] as const) if (parts.includes(s)) return s
   return 'synced'
+}
+
+/**
+ * When to try a queue again after a passing server failure (a 5xx, a rate
+ * limit): `failed` starts the wait, doubling each time (see retryDelay), and
+ * a request that goes through ends it. Meanwhile `waiting` is true and the
+ * queue is left alone, whatever else asks for a sync.
+ */
+export interface Backoff {
+  readonly waiting: boolean
+  /** The wait before the next try, in ms. */
+  failed: (err: unknown) => number
+  reset: () => void
+}
+
+export function backoff(now: () => number = Date.now): Backoff {
+  let attempt = 0
+  let until = 0
+  return {
+    get waiting() {
+      return now() < until
+    },
+    failed(err) {
+      attempt++
+      const wait = retryDelay(attempt, err)
+      until = now() + wait
+      return wait
+    },
+    reset() {
+      attempt = 0
+      until = 0
+    }
+  }
 }
 
 /**
@@ -221,6 +348,43 @@ export function foldApplied<T>(
   fold: (rows: readonly T[]) => T[]
 ): { server: T[] | null; landed: T[] } {
   return server === null ? { server: null, landed: fold(landed) } : { server: fold(server), landed: [...landed] }
+}
+
+/**
+ * The changes the server confirmed while reads were out. Reads do not wait
+ * for the sync, and a long list is read page by page: a read can be answered
+ * before a change lands and come back after it was folded into the copy.
+ * Installed as it is, it would hide that change until the next read (a
+ * deleted bet back, an import's rows gone). Each read lays the changes
+ * confirmed after it went out over what it read; once no read is out, none
+ * is kept.
+ */
+export function confirmedLog<T>(): {
+  confirmed: (change: (rows: readonly T[]) => T[]) => void
+  read: () => { over: (rows: T[]) => T[]; end: () => void }
+} {
+  let seq = 0
+  let out = 0
+  let log: { seq: number; change: (rows: readonly T[]) => T[] }[] = []
+  return {
+    confirmed(change) {
+      seq++
+      if (out > 0) log.push({ seq, change })
+    },
+    read() {
+      const since = seq
+      out++
+      let open = true
+      return {
+        over: (rows) => log.filter((l) => l.seq > since).reduce<T[]>((acc, l) => l.change(acc), rows),
+        end() {
+          if (!open) return
+          open = false
+          if (--out === 0) log = []
+        }
+      }
+    }
+  }
 }
 
 /**

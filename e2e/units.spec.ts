@@ -53,9 +53,10 @@ test.describe('units', () => {
     await size.fill('')
     await size.press('Enter')
     await expect(page.locator('.stat-card').nth(1).locator('.life-value')).toHaveText('+$180.00')
-    const queued = await page.evaluate((uid) => localStorage.getItem(`bettracker:settings-outbox:${uid}`), USER.id)
-    expect(queued).toContain('"unitSize":null')
-    expect(queued).toContain('"showUnits":false')
+    // On screen at once; in storage a moment later.
+    const queued = () => page.evaluate((uid) => localStorage.getItem(`bettracker:settings-outbox:${uid}`) ?? '', USER.id)
+    await expect.poll(queued).toContain('"unitSize":null')
+    expect(await queued()).toContain('"showUnits":false')
   })
 
   test('closing Settings sends back no box nobody typed in, even after the settings changed elsewhere', async ({ page }) => {

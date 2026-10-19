@@ -62,7 +62,16 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    poner el directorio raíz en `/`. Así se conservan el dominio y las
    variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
    al viejo, con lo guardado sin conexión allí, y obligaría a cambiar las URL
-   de redirección en Supabase Auth. El instalador de escritorio se construye
+   de redirección en Supabase Auth. En Supabase, Authentication → URL
+   Configuration: **Site URL** = la dirección de la app publicada, y en
+   **Redirect URLs** las demás desde las que te registres
+   (`http://localhost:5173`); si no, el correo de confirmación lleva a
+   `http://localhost:3000` (la cuenta queda confirmada igual). Si está en
+   Netlify subida a mano (Netlify Drop): `npm run build` con el `.env` bueno
+   y arrastrar `dist/` a
+   la página **Deploys** del sitio que ya existe; soltarlo en la lista de
+   sitios crea otro, con otra dirección. El build comprueba antes la URL y
+   la clave (ver "Decisiones"). El instalador de escritorio se construye
    con `npm run build:desktop`.
 3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
    conexión (una recarga basta); el escritorio hay que reinstalarlo.
@@ -120,12 +129,19 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 
 ## Cómo probar
 
+Para verla sin Supabase ni `.env`: `npm run demo` (http://localhost:5172).
+Entra ya con sesión y sin datos, contra un backend falso que guarda todo en
+el navegador; funciona igual que contra Supabase, sin conexión incluido.
+Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic).
+Tras cerrar sesión, cualquier email y una contraseña de 6 caracteres o más
+vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
+
 ```bash
 npm ci
-npm test            # 429 tests unitarios (vitest)
+npm test            # 621 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 57 comprobaciones Playwright, sin backend
+npm run test:e2e    # 128 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -158,7 +174,10 @@ mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
 app. Con `backend: 'live'`, `'behind'` o `'behind-005'` el mock es un
 pequeño servidor en memoria (apuestas, ajustes e ingresos/retiradas; altas,
 ediciones con la regla de conflicto, borrados, upserts; latencia y caída de
-conexión opcionales) para probar la sincronización de verdad. `'behind'` es
+conexión opcionales) para probar la sincronización de verdad. Es el mismo
+que usa `npm run demo` (`src/renderer/src/demo/fakeSupabase.ts`), con su
+estado bajo `e2e:` en vez de `demo:`; `e2e/demo.spec.ts` prueba la demo tal
+cual se construye (`npm run demo:serve`, en el puerto 4182). `'behind'` es
 una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
 (`e2e:migrated-005` la "ejecuta"). La opción `moves` siembra la caché de
 ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
@@ -212,7 +231,8 @@ Playwright llegara a `localhost`; en CI no.
   tipografía y espaciado, breakpoints 1120/640, Recharts cargado en diferido.
 - Toda la interfaz en `lib/strings.ts` (en/es) con `t()`/`tn()` y botón de
   idioma; el idioma sigue al navegador y se recuerda. Mensajes de validación
-  y de red quedan en inglés (decisión acordada); el dinero se formatea en USD.
+  y de red quedan en inglés (decisión acordada; los de inicio de sesión y los
+  del `.env` sí se traducen, ver "Decisiones"); el dinero se formatea en USD.
 
 ### Fase 5 · features (orden del plan)
 1. **Registro rápido** (`QuickAdd.tsx`): botón flotante y tecla `T`; stake,
@@ -294,6 +314,179 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   parche y reintentar solo lo no tocado.
 
 ## Decisiones tomadas y por qué
+
+- **El `.env` se comprueba antes de usarlo** (`src/shared/supabaseEnv.ts`):
+  - `npm run build` (y el de escritorio) se para si la URL o la clave no
+    pueden funcionar o publicarían un secreto, y dice qué poner. `npm run
+    dev` y `preview` solo avisan, y la app enseña lo mismo en la pantalla de
+    configuración, en vez de quedarse en blanco (una URL sin `https://` hacía
+    que supabase-js lanzara un error al cargar). La demo no se comprueba;
+  - detecta: URL sin `https://`, la del panel, la cadena de conexión de
+    Postgres (lleva la contraseña), una ruta de la API detrás, los ejemplos
+    sin cambiar, la clave secreta o `service_role`, una clave cortada o con
+    comillas o espacios, algo que no es una clave (el JWT secret) y una clave
+    anon de otro proyecto que el de la URL (lo que Supabase llama "Invalid
+    API key"). Una clave publishable no lleva su proyecto: ese caso sale al
+    iniciar sesión, con el mensaje que dice qué clave poner;
+  - la clave recomendada es la publishable (`sb_publishable_…`). La anon
+    antigua funciona, pero Supabase retira las claves antiguas a finales de
+    2026: el build lo avisa. La variable sigue llamándose
+    `VITE_SUPABASE_ANON_KEY`, para no romper los `.env` que ya existen;
+  - el idioma de lo que imprime el build es el de la terminal (`LANG`).
+- **Los errores de inicio de sesión salen en palabras** (`auth/authErrors.ts`):
+  clave rechazada, sin conexión, contraseña mal, correo sin confirmar, cuenta
+  ya existente, demasiados intentos, registro desactivado y correo no
+  aceptado, en en y es. Se guardan tal cual y se traducen al mostrarlos; lo
+  que no se reconoce sale con las palabras de Supabase, como antes.
+- **Auditoría de sincronización (seis defectos, todos con test que los
+  reproduce con el código anterior):**
+  1. *Reintentar una importación pisaba ediciones nuevas.* El upsert de
+     `addBets` sobrescribía las filas que ya habían llegado (y bajaba su
+     `updated_at`). Ahora la operación guarda `done` (filas confirmadas,
+     por lotes de 250), el reintento empieza después y usa `ON CONFLICT DO
+     NOTHING`: una fila que ya está se queda como la tiene el servidor.
+     `applyOutbox` y `reconcile` muestran la del servidor. El Deshacer de un
+     borrado sigue siendo un alta normal (no pasa por aquí).
+     `supabase/tests/checks.sql` (9) lo comprueba con RLS en Postgres.
+     Cada lote confirmado pasa a la copia del servidor en ese momento
+     (`landImport`) y la importación solo muestra las filas sin confirmar:
+     una fila que llegó y se borró en otro dispositivo no vuelve. Solo puede
+     volver una del lote que estaba en vuelo cuando se cortó. Las lecturas no
+     esperan al envío (y una lista larga se lee por páginas): una que salió
+     antes de que llegara un lote, una alta, una edición o un borrado vuelve
+     con eso puesto encima (`confirmedLog`), en apuestas y en movimientos.
+     Si no, las filas del lote desaparecían y una apuesta borrada volvía
+     hasta la siguiente lectura.
+  2. *Varias pestañas se pisaban la cola.* Cada una escribía la cola que
+     leyó al arrancar. Ahora la cola guardada es la verdad: cada cambio es
+     leer-modificar-escribir bajo un candado entre ventanas (Web Locks,
+     `bettracker:queue:<cola>:<usuario>`), y solo una ventana la vacía a la
+     vez (`bettracker:drain:…`), leyéndola antes de cada operación y
+     enviando la versión guardada al marcarla `sent`. Las demás se enteran
+     por el evento `storage`. Apuestas, movimientos y ajustes. Mismas
+     claves y formato: nada que migrar. Sin Web Locks (http en la red
+     local) el candado es solo de la ventana, como antes.
+     El candado solo no basta: localStorage no es coherente entre procesos
+     del navegador (cada ventana lee su copia, y la escritura de otra le
+     llega un momento después), así que quien toma el candado podía leer la
+     cola de antes de la última escritura y devolverla (en Chromium, tres
+     ventanas a toda velocidad perdían una de cada cinco). Cada escritura
+     bajo un candado sube una versión, en localStorage
+     (`<candado>:version`) y en IndexedDB (`bettracker-locks`, que todas
+     leen al día); el siguiente espera a que su copia la tenga antes de
+     leer (como mucho 2 s, por si alguien borró el almacenamiento a mano).
+     Sin IndexedDB lee enseguida, como antes. El drenado lee la cola igual
+     (`fresh()`). Test: `e2e/resilience.spec.ts`, tres ventanas con el
+     `store.ts` real (servidor de desarrollo).
+     Una petición sin respuesta completa (cuerpo incluido) se abandona a los
+     30 s (`lib/timeoutFetch.ts`, en `global.fetch` del cliente) y cuenta
+     como sin conexión: si no, una ventana colgada se quedaba el candado de
+     vaciado y ninguna otra sincronizaba. Si IndexedDB tarda más de 3 s en
+     abrirse, la ventana sigue sin versiones mientras tanto y las usa desde
+     que abre.
+  3. *Un fallo al guardar se daba por guardado.* La caché se puede perder
+     (`writeExpendable`); la cola no (`writeDurable`): si no cabe, se tiran
+     las cachés y se reintenta, y si aun así falla la cola se queda en la
+     ventana (`held`), sigue sincronizando, el aviso lo dice y el toast no
+     dice "añadida". "Reintentar" la guarda cuando hay sitio, y también la
+     lista de rechazadas si tampoco cupo (entonces cuenta en el aviso). Lo retenido
+     es la lista de cambios hechos en la ventana, que se reaplican sobre la
+     cola guardada en cada intento: lo que otras guardaron se queda y lo que
+     esta quitó (una operación enviada, una apuesta borrada) no vuelve. Por
+     eso cada cambio busca por id y decide una sola vez qué quita: la marca
+     `sent` lleva el intento que la puso (`sentBy`, opcional) y solo ese
+     intento la quita, el progreso de una importación no retrocede, la
+     cabeza que se marca al arrancar se decide una vez (`markHeadSent`) y
+     los ajustes se combinan campo a campo por hora (`editSettings`).
+     "Volver a enviar" solo quita de la lista lo que la cola guardó: con
+     la cola solo en la ventana, lo reenviado sale del aviso pero sigue
+     guardado en la lista hasta que la cola se guarda o eso sale de ella
+     (enviado, o rechazado otra vez en su propia entrada).
+  4. *Errores temporales tiraban la cola.* `describeError` guarda status y
+     código (`SyncError`). 5xx, 408, 429 y códigos PGRST000–003, 08…, 40001,
+     40P01, 53…, 57P01–03, 57014 → `'retry'` con espera creciente (1 s, 2 s…
+     hasta 2 min, ±20 %; un 429 empieza en 5 s); 401, clave o JWT →
+     `'paused'`; solo un rechazo definitivo saca el cambio, a la lista de
+     rechazadas (`bettracker:refused:<usuario>`, `moves-refused`), visible
+     tras recargar, con "Volver a enviar" y "Descartar". Un alta rechazada
+     (no como duplicada: una que llegó responde así y se lee de vuelta), en
+     el intento que sea, se lleva lo que se encoló detrás para su apuesta
+     (ediciones y borrado, hasta un Deshacer que la crea de nuevo), y entra
+     en la lista antes de salir de la cola; lo que se pliega en ellas o se
+     encola para la apuesta mientras tanto sale con ellas, y la entrada se
+     reescribe. "Volver a enviar" encola primero
+     y luego quita de la lista; cada entrada se pliega antes
+     (`requeueRefused`: un alta y su borrado no son nada) y una edición
+     rechazada no pisa una más nueva de la misma apuesta, ni su borrado
+     (`requeueOp`). "Cerrar sesión" cuenta también las rechazadas antes de
+     borrarlas. Cada parada limpia los motivos de la anterior en la
+     insignia (solo el estado: cada aviso se dice una vez por episodio), y
+     los ajustes pendientes también salen en ella; una lectura que funciona
+     no da por enviado un ajuste que sigue fallando. Una primera
+     lectura fallida se repite con el temporizador (`retryPlan`), como en
+     movimientos y ajustes; lo confirmado antes de esa primera lectura se
+     muestra aparte (`foldApplied`), sin contar como leído ni guardarse en
+     caché como la lista entera. Sesión terminada → insignia "Sesión cerrada",
+     "Volver a entrar" sin borrar la cola, y el aviso de cada cambio dice
+     que se sincronizará al volver a entrar.
+     Cada lectura y cada envío dicen para qué cuenta son
+     (`signedInUserId(asUser)`): con la sesión de otra cuenta cuenta como
+     sin sesión, así que una sincronización de A que sigue en marcha cuando
+     entra B no lee las filas de B ni manda los cambios de A como B. Lo que
+     esa sincronización traiga se descarta (los hooks comparan con
+     `userRef`), y tras cerrar sesión nada de esa cuenta se vuelve a
+     guardar en el dispositivo hasta que entre otra vez (`clearUserData`,
+     `markSignedIn`). Cerrar sesión en una ventana la cierra también en las
+     demás (`signedOutElsewhere`, en `AuthProvider`), aunque Supabase no se
+     lo diga (sin conexión y con el token caducado no lo hace, ni la demo):
+     si no, seguían mostrando la cuenta y lo que cambiaban no se guardaba.
+  5. *Un rechazo de ajustes borraba un parche más nuevo.* Ahora cualquier
+     respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
+     editado mientras tanto sigue pendiente y sale enseguida. Un ajuste se
+     ve en pantalla en cuanto se cambia, antes de que acabe de guardarse.
+     El parche guarda la hora de cada campo (`fieldEditedAt`, opcional: los
+     guardados por versiones anteriores no la tienen), así que un campo
+     vuelto al mismo valor mientras el envío estaba fuera también sigue
+     pendiente si ese envío perdió contra otro dispositivo.
+  6. *Un `max-rows` menor truncaba el historial.* `readAll` avanza por las
+     filas recibidas y para con el total contado (o, sin total, con una
+     página vacía). Apuestas y movimientos.
+- **Puertos de la suite e2e**: 4183 (build), 4182 (demo), 4181 (dev), en
+  `e2e/urls.ts`; ninguna spec lleva una URL fija.
+- **El correo de confirmación vuelve a la app**: `signUp` pide
+  `emailRedirectTo` = la dirección actual (solo http/https; Supabase la usa si
+  está en Redirect URLs, si no, su Site URL). Un enlace caducado o ya abierto
+  (los escáneres de correo los abren antes) deja el error en la dirección;
+  la pantalla de entrada lo dice en en y es y lo quita de la dirección.
+- **Sin sesión, la cola espera** (`data/session.ts`, `SignedOutError`):
+  cerrar sesión en un dispositivo cierra la de todos (`signOut` es global), y
+  cuando la sesión de otro caduca y no se puede renovar, supabase-js manda
+  las peticiones como nadie. Antes, eso tiraba lo que hubiera en cola: un
+  alta fallaba ("You are signed out") y se descartaba, una edición o un
+  borrado no encontraban la fila y salían de la cola, y una lectura volvía
+  vacía y borraba la copia del dispositivo. Ahora cada lectura y cada envío
+  piden antes la sesión; sin ella, o con una clave que Supabase no acepta o
+  un JWT caducado (`isAuthError`), el cambio se queda en cola, en pausa
+  (`'paused'`), y sale tras el siguiente inicio de sesión. Un rechazo de RLS sigue
+  siendo un rechazo: con la sesión pedida antes, ya no viene de esto.
+- **En el móvil** (revisado con capturas a 320, 360, 390 y 430 px, en los dos
+  temas y los dos idiomas):
+  - nada puede ensanchar la página: el calendario y la rejilla usan
+    `minmax(0, 1fr)`, y la tarjeta de inicio de sesión se encoge;
+  - en el calendario, los días con solo apuestas abiertas llevan un punto
+    ámbar en vez de la palabra;
+  - los campos van a 16 px para que iOS no haga zoom;
+  - los botones táctiles miden al menos 32–36 px;
+  - el + deja libre el final de la página;
+  - se respetan las zonas seguras (notch, barra de inicio);
+  - el historial deja fijas a la derecha las acciones de cada fila, y la barra
+    de selección flota abajo en vez de empujar las filas;
+  - las cuotas americanas y fraccionarias abren el teclado completo (el
+    numérico del iPhone no tiene signo menos ni barra);
+  - en pantallas táctiles, el diálogo del día no pone el cursor en el stake al
+    abrirse;
+  - `e2e/mobile.spec.ts` vigila todo esto.
+
 
 - Tabla `entries` conservada; "bet" en código e interfaz.
 - Push y void fuera del denominador del ROI (devuelven el stake).
@@ -411,6 +604,8 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
 
 ```
 src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput
+src/shared/supabaseEnv.ts           comprueba VITE_SUPABASE_URL y _ANON_KEY (el build y la app)
+src/renderer/src/auth/authErrors.ts los rechazos de Supabase Auth, en palabras (en y es)
 src/renderer/src/lib/
   stats.ts      resumen, ROI, CLV, breakdown por tag/banda/día/mes
   bands.ts      bandas de cuota (único lugar)
@@ -424,21 +619,34 @@ src/renderer/src/lib/
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
   quick.ts      valores por defecto del registro rápido
+  uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
+src/renderer/src/demo/
+  fakeSupabase.ts   el Supabase falso de la demo y de la suite e2e
+  start.ts          entrada de `npm run demo` (va delante de main.tsx)
+  demo.ts           usuario de la demo y "Empezar de cero"
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
   moves.ts, useMoves.ts                   ingresos y retiradas: servidor y sincronización
   readAll.ts                              leer todas las filas, por páginas
   drain.ts                                vaciar la cola: qué sale y qué se queda
-  errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
+  errors.ts                               leer un fallo: sin conexión, en pausa, reintentar, falta migración, rechazo
+  session.ts                              ninguna petición de las filas de un usuario sin su sesión
+  store.ts                                las colas en el almacenamiento, compartidas entre ventanas con candado
+                                          y versión en IndexedDB; lo retenido se reaplica
+  useOpQueue.ts                           una cola de operaciones (apuestas o movimientos): candados, rechazadas
 src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
-  BankrollDialog, StakeNote, BalanceChart (vista Bankroll)
-e2e/*.spec.ts                       57 comprobaciones
+  BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
+e2e/*.spec.ts                       128 comprobaciones (mobile.spec.ts: el móvil;
+                                    setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
+                                    resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
+                                    importación cortada, lecturas tardías, paginación, ajustes en vuelo)
+e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

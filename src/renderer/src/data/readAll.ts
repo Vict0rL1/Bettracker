@@ -12,22 +12,24 @@ interface Page {
   data: unknown
   error: { message: string; code?: string } | null
   count?: number | null
+  status?: number
 }
 
 /**
  * Read every row: ask for one page at a time (`page(from, to)` must be a
- * query ordered on something unique, so pages neither skip nor repeat a row)
- * until the total the server counted is reached, or a page comes back short
- * when it gave no count.
+ * query ordered on something unique, so pages neither skip nor repeat a row).
+ * A project can set `max-rows` below PAGE_SIZE, and then a page comes back
+ * shorter than asked without being the last: so the next page starts after
+ * the rows that came, and the read goes on until the total the server counted
+ * is in, or, when it gave no count, until a page comes back empty.
  */
 export async function readAll<R>(page: (from: number, to: number) => PromiseLike<Page>): Promise<R[]> {
   const rows: R[] = []
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error, count } = await page(from, from + PAGE_SIZE - 1)
-    if (error) throw describeError(error)
+  for (;;) {
+    const { data, error, count, status } = await page(rows.length, rows.length + PAGE_SIZE - 1)
+    if (error) throw describeError(error, status)
     const got = (data ?? []) as R[]
     rows.push(...got)
-    const done = got.length === 0 || (typeof count === 'number' ? rows.length >= count : got.length < PAGE_SIZE)
-    if (done) return rows
+    if (got.length === 0 || (typeof count === 'number' && rows.length >= count)) return rows
   }
 }

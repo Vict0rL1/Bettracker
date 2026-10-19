@@ -28,6 +28,7 @@
 
   --grid: rgba(255, 255, 255, 0.05);
   --grid-strong: rgba(255, 255, 255, 0.16);
+  --today-ring: rgba(232, 238, 244, 0.4);
 
   /* Neutral overlays layered on the background — the light theme flips these
      from white-on-dark to ink-on-light so every raised surface still reads. */
@@ -80,18 +81,18 @@
   --text-2: #475569;
   --text-3: #626f81;
 
-  --green: #007f47;
-  --green-dim: rgba(0, 127, 71, 0.1);
-  --green-dim-2: rgba(0, 127, 71, 0.2);
-  --green-glow: rgba(0, 127, 71, 0.14);
+  --green: #00733f;
+  --green-dim: rgba(0, 115, 63, 0.1);
+  --green-dim-2: rgba(0, 115, 63, 0.2);
+  --green-glow: rgba(0, 115, 63, 0.14);
   --red: #d02043;
   --red-dim: rgba(208, 32, 67, 0.09);
   --red-dim-2: rgba(208, 32, 67, 0.18);
   --red-glow: rgba(208, 32, 67, 0.12);
   --push: #606f85;
   --push-dim: rgba(96, 111, 133, 0.1);
-  --amber: #926616;
-  --amber-dim: rgba(146, 102, 22, 0.12);
+  --amber: #805a12;
+  --amber-dim: rgba(128, 90, 18, 0.12);
 
   --grid: rgba(15, 23, 42, 0.07);
   --grid-strong: rgba(15, 23, 42, 0.2);
@@ -104,8 +105,9 @@
   --backdrop: rgba(15, 23, 42, 0.38);
   --red-text: #b3183a;
   --tip-bg: rgba(255, 255, 255, 0.97);
-  --focus: rgba(0, 127, 71, 0.6);
-  --focus-ring: rgba(0, 127, 71, 0.16);
+  --focus: rgba(0, 115, 63, 0.6);
+  --focus-ring: rgba(0, 115, 63, 0.16);
+  --today-ring: rgba(15, 23, 42, 0.5);
 
   --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
   --shadow-pop: rgba(15, 23, 42, 0.18);
@@ -119,7 +121,7 @@
 html,
 body {
   margin: 0;
-  padding: 0;
+  padding: env(safe-area-inset-top) 0 0;
 }
 
 body {
@@ -183,10 +185,31 @@ h2 {
 .app {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 20px 28px 44px;
+  padding: 20px max(28px, env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* The demo's line across the top (`npm run demo` only). */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 16px;
+  background: var(--amber-dim);
+  border-bottom: 1px solid var(--border);
+  color: var(--amber);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.demo-banner .btn {
+  flex: none; /* not stretched like the toolbar's buttons on a phone */
+  padding: 3px 10px;
+  font-size: var(--fs-sm);
 }
 
 .boot {
@@ -205,8 +228,10 @@ h2 {
 /* ---------- top bar ---------- */
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 4px 2px;
 }
 
@@ -285,12 +310,26 @@ h2 {
 }
 
 /* Waiting on a migration: amber like syncing, but still — nothing is moving. */
-.sync-badge.behind {
+.sync-badge.behind,
+.sync-badge.retrying {
   background: var(--amber-dim);
   color: var(--amber);
 }
 
 .sync-badge.behind .sync-dot {
+  box-shadow: none;
+  animation: none;
+}
+
+/* Waiting on a sign-in or a key: nothing moves until the user acts. */
+.sync-badge.paused,
+.sync-badge.signedout {
+  background: var(--red-dim);
+  color: var(--red-text);
+}
+
+.sync-badge.paused .sync-dot,
+.sync-badge.signedout .sync-dot {
   box-shadow: none;
   animation: none;
 }
@@ -307,8 +346,11 @@ h2 {
 
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
+  margin-left: auto;
 }
 
 .account {
@@ -336,7 +378,9 @@ h2 {
 /* ---------- auth / setup screens ---------- */
 .auth-screen {
   min-height: 100vh;
+  min-height: 100svh;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 24px;
 }
@@ -440,6 +484,31 @@ h2 {
   font-size: var(--fs-md);
 }
 
+/* What is wrong with .env: each line names the variable and the value to use. */
+.setup-problems p {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.setup-problems ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.45;
+}
+
+.setup-problems code {
+  background: var(--tint-2);
+  border-radius: 5px;
+  padding: 0 5px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  /* A URL is one long word: let it break rather than widen the card. */
+  overflow-wrap: anywhere;
+}
+
 /* ---------- buttons ---------- */
 .btn {
   display: inline-flex;
@@ -470,6 +539,11 @@ h2 {
 .btn-primary {
   background: var(--green);
   color: #04150c;
+}
+
+:root[data-theme='light'] .btn-primary,
+:root[data-theme='light'] .fab {
+  color: #fff;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -750,14 +824,21 @@ h2 {
   }
 
   .grid-mid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Wrapped onto its own row, the account needs no divider before it. */
+  .account {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
   }
 }
 
 /* ---------- calendar ---------- */
 .cal-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -827,7 +908,7 @@ h2 {
 }
 
 .cal-cell.is-today {
-  box-shadow: inset 0 0 0 1.5px rgba(232, 238, 244, 0.4);
+  box-shadow: inset 0 0 0 1.5px var(--today-ring);
 }
 
 .cal-cell.is-future {
@@ -1098,21 +1179,28 @@ tbody tr:hover {
   inset: 0;
   z-index: 50;
   display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   background: var(--backdrop);
   backdrop-filter: blur(3px);
 }
 
 .modal {
   width: 400px;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 48px);
+  max-width: 100%;
+  max-height: 100%;
   overflow-y: auto;
   padding: 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   animation: modal-in 0.16s ease;
+}
+
+/* The day dialog takes focus itself on a touch screen; no ring for that. */
+.modal:focus {
+  outline: none;
 }
 
 @keyframes modal-in {
@@ -1165,7 +1253,7 @@ tbody tr:hover {
 
 .seg {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1373,7 +1461,7 @@ tbody tr:hover {
 /* ---------- phone layout ---------- */
 @media (max-width: 640px) {
   .app {
-    padding: 12px 16px 32px;
+    padding: 12px max(16px, env(safe-area-inset-right)) calc(88px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
     gap: 12px;
   }
 
@@ -1392,18 +1480,15 @@ tbody tr:hover {
     justify-content: center;
   }
 
+  /* "Sign out" sits next to "Log today" rather than alone on a divided row. */
   .account {
-    width: 100%;
-    margin-left: 0;
+    margin-left: auto;
     padding-left: 0;
     border-left: none;
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
-    justify-content: flex-end;
   }
 
   .account .btn {
-    flex: 0;
+    flex: none;
   }
 
   .hero {
@@ -1500,8 +1585,8 @@ tbody tr:hover {
 /* ---------- toast ---------- */
 .toast {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  right: calc(24px + env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
   z-index: 60;
   max-width: 460px;
   padding: 12px 16px;
@@ -2010,8 +2095,14 @@ tr.is-pending td {
 
 .stat-chips {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   align-items: center;
+}
+
+.stat-chips .chip {
+  white-space: nowrap;
 }
 
 .chip-warn {
@@ -2026,6 +2117,7 @@ tr.is-pending td {
 
 /* Language toggle, next to the theme switch: the name of the other language. */
 .lang-btn {
+  width: auto; /* .btn-icon is a 28px square; the name needs its own width */
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -2039,8 +2131,8 @@ tr.is-pending td {
 /* ---------- quick add ---------- */
 .fab {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  right: calc(24px + env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
   z-index: 55;
   width: 56px;
   height: 56px;
@@ -2218,6 +2310,32 @@ tr.is-pending td {
 
 .loss-change {
   white-space: nowrap;
+}
+
+/* ---- what needs the user for changes to sync: a sign-in, room, a refusal ---- */
+
+.sync-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--red);
+  background: var(--red-dim);
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.sync-notice-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-notice-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* ---- history: selection + bulk bar ---- */
@@ -2460,14 +2578,14 @@ tbody tr.is-selected {
 
 @media (max-width: 640px) {
   .fab {
-    right: 16px;
-    bottom: 16px;
+    right: calc(16px + env(safe-area-inset-right));
+    bottom: calc(16px + env(safe-area-inset-bottom));
   }
 
   .toast {
-    right: 16px;
-    left: 16px;
-    bottom: 88px;
+    right: calc(16px + env(safe-area-inset-right));
+    left: calc(16px + env(safe-area-inset-left));
+    bottom: calc(88px + env(safe-area-inset-bottom));
     max-width: none;
   }
 
@@ -2786,5 +2904,320 @@ tbody tr.is-selected {
   .bank-form .bet-submit .move-save {
     width: 100%;
     justify-content: center;
+  }
+}
+
+/* ---------- phone: touch sizes, iOS zoom, compact calendar ----------
+   Last in the file on purpose: these must beat the base rules above, which
+   come after the earlier phone blocks. */
+@media (max-width: 640px) {
+  /* iOS Safari zooms the page into any field under 16px when it gets focus. */
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  select:not([multiple]),
+  textarea:not([rows='0']) {
+    font-size: 16px;
+  }
+
+  /* Header: a long sync badge ("Offline · 3 queued") drops under the title. */
+  .brand {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    min-width: 0;
+  }
+
+  .sync-badge {
+    margin-left: 0;
+  }
+
+  /* Toggles and small buttons big enough to tap. */
+  .scope-btn {
+    min-height: 32px;
+  }
+
+  .range-toggle,
+  .scope-toggle.bd-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    border-radius: var(--radius-sm);
+  }
+
+  .range-toggle .scope-btn,
+  .bd-tabs .scope-btn {
+    min-height: 36px;
+    padding: 6px 4px;
+    border-radius: 9px;
+  }
+
+  .range-custom input[type='date'] {
+    height: 36px;
+  }
+
+  .nav-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .month-nav .chip,
+  .bulk-bar .chip {
+    min-height: 32px;
+  }
+
+  .bulk-bar .btn {
+    min-height: 36px;
+  }
+
+  .demo-banner .btn,
+  .toast-action {
+    min-height: 32px;
+  }
+
+  .toast-action {
+    padding: 6px 12px;
+  }
+
+  .auth-card .auth-toggle {
+    padding: 10px;
+  }
+
+  .settle {
+    gap: 8px;
+  }
+
+  .settle-btn {
+    min-height: 32px;
+    padding: 6px 12px;
+  }
+
+  .mini-sub {
+    white-space: normal;
+  }
+
+  /* Calendar: cells are 35-50px wide here. */
+  .cal-grid {
+    gap: 3px;
+  }
+
+  .cal-cell,
+  .cal-blank {
+    padding: 4px 2px;
+  }
+
+  .cal-cell .cal-amt {
+    font-size: 10px;
+    letter-spacing: -0.03em;
+  }
+
+  /* A day with only open bets: the amber dot instead of the word. */
+  .cal-cell.pending .cal-amt {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--amber);
+    font-size: 0;
+  }
+
+  /* History: edit and delete stay in view at the right of the scroll box
+     (flush with its edge: no bleed padding for the rows to show through). */
+  .table-wrap {
+    margin: 0;
+    padding: 0;
+  }
+
+  .td-tags {
+    white-space: nowrap;
+  }
+
+  .td-note {
+    min-width: 180px;
+    white-space: normal;
+  }
+
+  .td-note-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .history-card thead th:last-child,
+  .history-card .td-actions {
+    position: sticky;
+    right: 0;
+  }
+
+  .history-card thead th:last-child {
+    z-index: 2;
+    background: var(--card-solid);
+  }
+
+  .history-card .td-actions {
+    z-index: 1;
+    background: var(--card-solid);
+    box-shadow:
+      inset 0 -1px var(--border),
+      -6px 0 6px -6px rgba(0, 0, 0, 0.35);
+  }
+
+  .history-card tr.is-pending .td-actions {
+    background: linear-gradient(var(--amber-dim), var(--amber-dim)), var(--card-solid);
+  }
+
+  .history-card tr.is-selected .td-actions {
+    background: linear-gradient(var(--green-dim), var(--green-dim)), var(--card-solid);
+  }
+
+  .td-sel input {
+    width: 22px;
+    height: 22px;
+  }
+
+  .th-sort {
+    padding: 8px 0;
+    margin: -8px 0;
+  }
+
+  .td-actions .btn-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .td-actions .btn-icon + .btn-icon {
+    margin-left: 8px;
+  }
+
+  /* The bulk bar goes under the table and floats above the + button, so
+     ticking a row doesn't push the rows down under the finger. */
+  .history-card {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .history-card .bulk-bar {
+    order: 1;
+    position: sticky;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    z-index: 3;
+    margin: 12px 0 0;
+    background: var(--card-solid);
+    box-shadow: var(--shadow);
+  }
+
+  .bulk-group:not(.settle) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .bulk-group:not(.settle) input {
+    width: 100%;
+    text-overflow: ellipsis;
+  }
+
+  /* Breakdown rows: the record and ROI on their own lines, not squeezed. */
+  .bd-meta {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 2px 12px;
+  }
+
+  .bd-meta > span {
+    white-space: nowrap;
+  }
+
+  .bd-meta > span:first-child {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+
+  .bd-record {
+    white-space: nowrap;
+  }
+
+  /* Dialogs. */
+  .modal-backdrop {
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+
+  .modal-head .btn-icon {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+  }
+
+  .bet-form .bet-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bet-form .bet-submit {
+    align-items: stretch;
+  }
+
+  .day-modal .bet-item,
+  .bank-modal .bet-item {
+    flex-wrap: wrap;
+  }
+
+  .day-modal .bet-item > .bet-body,
+  .bank-modal .bet-item > .bet-body {
+    order: 1;
+    flex-basis: 100%;
+  }
+
+  .day-modal .bet-item > .bet-actions,
+  .bank-modal .bet-item > .bet-actions {
+    margin-left: auto;
+  }
+
+  .bet-stake {
+    white-space: normal;
+  }
+
+  .bet-actions {
+    gap: 8px;
+  }
+
+  .bet-actions .btn-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .bet-form-head .auth-toggle,
+  .quick-profit .auth-toggle {
+    min-height: 32px;
+    padding: 6px 8px;
+  }
+
+  /* A list that scrolls inside a dialog that scrolls traps the swipe. */
+  .day-modal .bet-list,
+  .bank-modal .bet-list {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .quick-tags {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quick-tags input:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .settings-seg .seg-btn,
+  .bet-form .seg-btn {
+    padding-inline: 4px;
+    letter-spacing: 0.02em;
+  }
+
+  .bank-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 360px) {
+  .calendar-card {
+    padding-left: 10px;
+    padding-right: 10px;
   }
 }

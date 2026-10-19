@@ -1,19 +1,37 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from './AuthProvider'
 import { SparkIcon } from '../components/icons'
 import { useLang } from '../lib/i18n'
+import { authErrorKey, linkError, type AuthFailure } from './authErrors'
 
 type Mode = 'in' | 'up'
 
-export default function Login() {
+/**
+ * `onCancel`: shown again after a session ended, over this device's data;
+ * leaving goes back to it, changes still queued.
+ */
+export default function Login({ onCancel }: { onCancel?: () => void } = {}) {
   const { t } = useLang()
   const { signIn, signUp } = useAuth()
   const [mode, setMode] = useState<Mode>('in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Kept as Supabase gave it and put into words when shown, so it follows a
+  // change of language.
+  // An email link that didn't work opens the app with the reason in the address.
+  const [error, setError] = useState<AuthFailure | null>(() => linkError(window.location.hash))
   const [notice, setNotice] = useState<string | null>(null)
+
+  // Said once: a reload shouldn't say it again.
+  useEffect(() => {
+    if (linkError(window.location.hash)) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+  }, [])
+
+  const errorText = (e: AuthFailure): string => {
+    const key = authErrorKey(e)
+    return key ? t(key) : e.message || t('common.error')
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -31,7 +49,7 @@ export default function Login() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.error'))
+      setError(err instanceof Error ? (err as Error & AuthFailure) : { message: '' })
     } finally {
       setBusy(false)
     }
@@ -68,7 +86,7 @@ export default function Login() {
           />
         </label>
 
-        {error && <div className="auth-error">{error}</div>}
+        {error && <div className="auth-error">{errorText(error)}</div>}
         {notice && <div className="auth-notice">{notice}</div>}
 
         <button type="submit" className="btn btn-primary auth-submit" disabled={busy}>
@@ -86,6 +104,11 @@ export default function Login() {
         >
           {mode === 'in' ? t('login.needAccount') : t('login.haveAccount')}
         </button>
+        {onCancel && (
+          <button type="button" className="auth-toggle login-back" onClick={onCancel}>
+            {t('login.back')}
+          </button>
+        )}
       </form>
     </div>
   )

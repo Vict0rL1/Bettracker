@@ -1,4 +1,5 @@
 import { useLang } from '../lib/i18n'
+import { envMessage, type EnvProblem } from '../../../shared/supabaseEnv'
 import { SparkIcon } from './icons'
 
 /** Renders "{name}" placeholders in a translated line as <code> elements. */
@@ -16,8 +17,12 @@ function Line({ text, parts }: { text: string; parts: Record<string, string> }) 
   return <>{out}</>
 }
 
-/** Shown when the app has no Supabase credentials yet — guides first-time setup. */
-export default function SetupNeeded() {
+/**
+ * Shown when the app has no Supabase credentials yet — guides first-time
+ * setup — or when the ones it was built with can't work: then it says what is
+ * wrong with them first.
+ */
+export default function SetupNeeded({ problems = [] }: { problems?: readonly EnvProblem[] }) {
   const { t } = useLang()
   return (
     <div className="auth-screen">
@@ -30,7 +35,23 @@ export default function SetupNeeded() {
             Bet<span>Tracker</span>
           </h1>
         </div>
-        <p className="auth-tag">{t('setup.tag')}</p>
+        {problems.length > 0 ? (
+          <div className="auth-error setup-problems" role="alert">
+            <p>{t('setup.fixEnv')}</p>
+            <ul>
+              {problems.map((p) => {
+                const { key, vars } = envMessage(p)
+                return (
+                  <li key={p.code}>
+                    <Line text={t(key)} parts={vars} />
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ) : (
+          <p className="auth-tag">{t('setup.tag')}</p>
+        )}
 
         <ol className="setup-steps">
           <li>
@@ -43,7 +64,7 @@ export default function SetupNeeded() {
             <Line text={t('setup.step3')} parts={{ example: '.env.example', env: '.env' }} />
           </li>
           <li>
-            <Line text={t('setup.step4')} parts={{ cmd: 'npm run dev' }} />
+            <Line text={t('setup.step4')} parts={{ cmd: 'npm run dev', build: 'npm run build', dist: 'dist/' }} />
           </li>
         </ol>
 

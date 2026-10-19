@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BankrollMove, Bet, MoveInput, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { afterFailedRead, combinedStatus, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
-import { describeError, MigrationNeededError } from './errors'
-import { applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, type MoveOp, type PendingOp, type PendingSettings } from './offline'
+import { afterFailedRead, combinedStatus, confirmedLog, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
+import { describeError, MigrationNeededError, SignedOutError } from './errors'
+import { afterSettingsAnswer, applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, requeueRefused, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
 const add = (id: string): PendingOp => ({ opId: `op-${id}`, kind: 'add', id, input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' })
 const del = (id: string): PendingOp => ({ opId: `op-del-${id}`, kind: 'delete', id })
@@ -20,16 +20,13 @@ function harness(initial: PendingOp[], send: (op: PendingOp) => Promise<Bet | nu
   const rejected: string[] = []
   const hooks: DrainHooks = {
     outbox: () => queue,
-    setOutbox: (next) => {
-      queue = next
-    },
-    setSent: () => {},
+    update: (fn) => (queue = fn(queue)),
     send: (op) => {
       sent.push(op.opId)
       return send(op)
     },
     applied: (op) => void applied.push(op.opId),
-    rejected: (op) => void rejected.push(op.opId)
+    rejected: (ops) => void rejected.push(...ops.map((o) => o.opId))
   }
   return { hooks, sent, applied, rejected, queue: () => queue.map((o) => o.opId) }
 }
@@ -83,7 +80,7 @@ describe('drainOutbox', () => {
   it('sends an op queued while a request is out, after it', async () => {
     let h: ReturnType<typeof harness>
     h = harness([add('a')], async (op) => {
-      if (op.opId === 'op-a') h.hooks.setOutbox([...h.hooks.outbox(), add('d')])
+      if (op.opId === 'op-a') h.hooks.update((q) => [...q, add('d')])
       return bet()
     })
     expect(await drainOutbox(h.hooks)).toEqual({ stop: 'done', processed: 2 })
@@ -94,11 +91,97 @@ describe('drainOutbox', () => {
   it('keeps an op queued while a request is out when that request finds the database behind', async () => {
     let h: ReturnType<typeof harness>
     h = harness([add('a')], async () => {
-      h.hooks.setOutbox([...h.hooks.outbox(), add('d')])
+      h.hooks.update((q) => [...q, add('d')])
       throw new MigrationNeededError()
     })
     expect((await drainOutbox(h.hooks)).stop).toBe('behind')
     expect(h.queue()).toEqual(['op-a', 'op-d'])
+  })
+
+  it('keeps the op and everything after it when the session ends partway (signed out on another device)', async () => {
+    const h = harness([add('a'), add('b'), del('c')], async (op) => {
+      if (op.opId !== 'op-a') throw new SignedOutError()
+      return bet()
+    })
+    const out = await drainOutbox(h.hooks)
+    expect(out).toMatchObject({ stop: 'paused', processed: 1 })
+    expect(h.queue()).toEqual(['op-b', 'op-del-c'])
+    expect(h.rejected).toEqual([])
+  })
+
+  // Used to be dropped as a refusal: a 503 or a rate limit lost the change.
+  it('keeps the op and everything after it when the server fails for now (5xx, 429), to try again later', async () => {
+    for (const status of [500, 502, 503, 504, 429]) {
+      const h = harness([add('a'), add('b')], async (op) => {
+        if (op.opId === 'op-b') throw describeError({ message: 'try later' }, status)
+        return bet()
+      })
+      const out = await drainOutbox(h.hooks)
+      expect(out, String(status)).toMatchObject({ stop: 'retry', processed: 1 })
+      expect(h.queue(), String(status)).toEqual(['op-b'])
+      expect(h.rejected, String(status)).toEqual([])
+    }
+  })
+
+  it('sends an op as it is stored when it goes: an edit folded into it by another window just before goes too', async () => {
+    let queue: PendingOp[] = [add('a')]
+    const sentInputs: unknown[] = []
+    let first = true
+    const hooks: DrainHooks = {
+      outbox: () => queue,
+      update: (fn) => {
+        // Another window folds an edit into the add while this one waits for the lock.
+        if (first) queue = queue.map((o) => (o.kind === 'add' ? { ...o, input: { date: '2026-03-01', amount: 9 } } : o))
+        first = false
+        return (queue = fn(queue))
+      },
+      send: async (op) => {
+        sentInputs.push(op.kind === 'add' ? op.input.amount : null)
+        return bet()
+      },
+      applied: () => {},
+      rejected: () => {}
+    }
+    expect(await drainOutbox(hooks)).toEqual({ stop: 'done', processed: 1 })
+    expect(sentInputs).toEqual([9])
+  })
+
+  it('skips an op another window cancelled before it went', async () => {
+    let queue: PendingOp[] = [add('a'), add('b')]
+    const sent: string[] = []
+    let first = true
+    const hooks: DrainHooks = {
+      outbox: () => queue,
+      update: (fn) => {
+        // Deleted in another window (an add that never went is cancelled outright).
+        if (first) queue = queue.filter((o) => o.opId !== 'op-a')
+        first = false
+        return (queue = fn(queue))
+      },
+      send: async (op) => {
+        sent.push(op.opId)
+        return bet()
+      },
+      applied: () => {},
+      rejected: () => {}
+    }
+    expect(await drainOutbox(hooks)).toEqual({ stop: 'done', processed: 1 })
+    expect(sent).toEqual(['op-b'])
+  })
+
+  it('keeps what an interrupted import confirmed, so the next try starts after it', async () => {
+    const entries = Array.from({ length: 600 }, (_, i) => ({ id: `r${i}`, input: { date: '2026-03-01', amount: 1 } }))
+    const h = harness([{ opId: 'op-import', kind: 'bulk-add', entries, queuedAt: 'Q' }], async (_op) => {
+      throw new TypeError('Failed to fetch')
+    })
+    h.hooks.send = async (_op, progress) => {
+      await progress(250)
+      throw new TypeError('Failed to fetch')
+    }
+    expect(await drainOutbox(h.hooks)).toEqual({ stop: 'offline', processed: 0 })
+    const op = (h.hooks.outbox() as PendingOp[])[0]
+    expect(op.kind === 'bulk-add' && op.done).toBe(250)
+    expect(op.sent).toBe(true)
   })
 
   it('drops an op the server refuses for good, and carries on', async () => {
@@ -121,8 +204,8 @@ describe('pushSettings', () => {
     return {
       hooks: {
         pending: () => pending,
-        setPending: (next: PendingSettings | null) => {
-          pending = next
+        settle: (sent: PendingSettings) => {
+          pending = afterSettingsAnswer(pending, sent)
         },
         save
       },
@@ -159,7 +242,50 @@ describe('pushSettings', () => {
       return ROW
     })
     await pushSettings(h.hooks)
-    expect(h.pending()).toBe(merged)
+    // What went is saved; the edit made meanwhile is still to go.
+    expect(h.pending()).toEqual({ patch: { lossLimit: 500 }, editedAt: 'F' })
+  })
+
+  // Used to clear the queue whatever was in it: the edit made while the
+  // refused one was out was lost.
+  it('a refusal settles only the patch that went: an edit made while it was out stays', async () => {
+    const h = settingsHarness(patch, async () => {
+      h.set({ patch: { defaultStake: 25, oddsFormat: 'decimal' }, editedAt: 'F' })
+      throw refused()
+    })
+    expect((await pushSettings(h.hooks))?.stop).toBe('rejected')
+    expect(h.pending()).toEqual({ patch: { oddsFormat: 'decimal' }, editedAt: 'F' })
+  })
+
+  it('a field changed again while the patch was out stays at its new value, whatever the answer', async () => {
+    for (const answer of ['saved', 'conflict', 'refused'] as const) {
+      const h = settingsHarness(patch, async () => {
+        h.set({ patch: { defaultStake: 30 }, editedAt: 'F' })
+        if (answer === 'refused') throw refused()
+        return answer === 'saved' ? ROW : null
+      })
+      await pushSettings(h.hooks)
+      expect(h.pending(), answer).toEqual({ patch: { defaultStake: 30 }, editedAt: 'F' })
+    }
+  })
+
+  // A newer edit from another device beat the one that went: sending that
+  // field again with the later edit's time would undo theirs.
+  it('a conflict drops the fields that lost, and keeps the ones edited since', async () => {
+    const h = settingsHarness(patch, async () => {
+      h.set({ patch: { defaultStake: 25, lossLimit: 500 }, editedAt: 'F' })
+      return null
+    })
+    expect(await pushSettings(h.hooks)).toEqual({ stop: 'conflict' })
+    expect(h.pending()).toEqual({ patch: { lossLimit: 500 }, editedAt: 'F' })
+  })
+
+  it('a server failure that passes keeps the patch for the next try', async () => {
+    const h = settingsHarness(patch, async () => {
+      throw describeError({ message: 'Service Unavailable' }, 503)
+    })
+    expect(await pushSettings(h.hooks)).toMatchObject({ stop: 'retry' })
+    expect(h.pending()).toBe(patch)
   })
 
   it('keeps the patch when the server is unreachable', async () => {
@@ -167,6 +293,14 @@ describe('pushSettings', () => {
       throw offline()
     })
     expect(await pushSettings(h.hooks)).toEqual({ stop: 'offline' })
+    expect(h.pending()).toBe(patch)
+  })
+
+  it('keeps the patch when the session has ended', async () => {
+    const h = settingsHarness(patch, async () => {
+      throw new SignedOutError()
+    })
+    expect(await pushSettings(h.hooks)).toMatchObject({ stop: 'paused' })
     expect(h.pending()).toBe(patch)
   })
 
@@ -271,10 +405,7 @@ describe('the queue rules on deposits and withdrawals', () => {
     let server: BankrollMove[] = []
     const hooks: DrainHooks<MoveInput, BankrollMove> = {
       outbox: () => queue,
-      setOutbox: (next) => {
-        queue = next
-      },
-      setSent: () => {},
+      update: (fn) => (queue = fn(queue)),
       send: async (op) => (op.kind === 'add' ? row(op) : null),
       applied: (op, result) => {
         server = reconcileMove(server, op, result)
@@ -290,12 +421,7 @@ describe('the queue rules on deposits and withdrawals', () => {
     let queue: MoveOp[] = [addMv('a', 500), editMv('a', 400, 'E')]
     const hooks: DrainHooks<MoveInput, BankrollMove> = {
       outbox: () => queue,
-      setOutbox: (next) => {
-        queue = next
-      },
-      setSent: (op, sent) => {
-        queue = queue.map((o) => (o.opId === op.opId ? { ...o, sent: sent ? true : undefined } : o))
-      },
+      update: (fn) => (queue = fn(queue)),
       send: async () => {
         throw describeError({ message: "Could not find the table 'public.bankroll_moves' in the schema cache" })
       },
@@ -376,12 +502,7 @@ describe('drainOutbox — changes made while a request is out', () => {
 
     const hooks: DrainHooks = {
       outbox: () => queue,
-      setOutbox: (next) => {
-        queue = next
-      },
-      setSent: (op, sent) => {
-        queue = queue.map((o) => (o.opId === op.opId ? { ...o, sent: sent ? true : undefined } : o))
-      },
+      update: (fn) => (queue = fn(queue)),
       send: async (op) => {
         if (op.opId === pauseNext) {
           pauseNext = null
@@ -402,7 +523,7 @@ describe('drainOutbox — changes made while a request is out', () => {
       applied: (op, result, superseded) => {
         if (op.kind === 'update' && result === null && !superseded) notices.push(op.opId)
       },
-      rejected: (op) => void rejected.push(op.opId)
+      rejected: (ops) => void rejected.push(...ops.map((o) => o.opId))
     }
 
     return {
@@ -546,42 +667,147 @@ describe('drainOutbox — changes made while a request is out', () => {
     expect(t.conflicts).toEqual([])
   })
 
+  // Replayed by a window whose storage was full (see store.ts), taking the
+  // mark back un-marked an add another window had sent since, answer lost:
+  // a delete then cancelled it instead of following it.
+  it('takes back only its own mark: replayed on a queue another window marked since, the mark stays', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    const changes: ((q: PendingOp[]) => PendingOp[])[] = []
+    const update = t.hooks.update
+    t.hooks.update = (fn) => {
+      changes.push(fn)
+      return update(fn)
+    }
+    t.fail('add-a-v1', 'behind')
+    expect((await t.drain()).stop).toBe('behind')
+    const [mark, unmark] = changes
+    expect(t.queue()[0].sent).toBeUndefined()
+    // Another window sent it since: the queue as stored carries its mark.
+    const theirs: PendingOp[] = [{ ...addOp('a', 'v1'), sent: true, sentBy: 'their-attempt' }]
+    expect(unmark(mark(theirs))[0]).toMatchObject({ sent: true, sentBy: 'their-attempt' })
+  })
+
+  it('never takes an import’s confirmed rows back, replayed on a queue that got further', async () => {
+    const entries = [{ id: 'x', input: { date: '2026-03-01', amount: 5 } }]
+    const t = setup({}, [{ opId: 'imp', kind: 'bulk-add', entries, queuedAt: 'T1' }])
+    const changes: ((q: PendingOp[]) => PendingOp[])[] = []
+    const update = t.hooks.update
+    t.hooks.update = (fn) => {
+      changes.push(fn)
+      return update(fn)
+    }
+    t.hooks.send = async (_op, progress) => {
+      await progress(250)
+      throw new TypeError('Failed to fetch')
+    }
+    await t.drain()
+    const progressed = changes[1]
+    const further: PendingOp[] = [{ opId: 'imp', kind: 'bulk-add', entries, queuedAt: 'T1', done: 500, sent: true }]
+    expect(progressed(further)[0]).toMatchObject({ done: 500 })
+  })
+
+  // The entry was written with the ops as they were read; an edit folded
+  // into one of them before they left the queue left with it, and was lost.
+  it('a refusal writes the entry again when an edit was folded in, or queued, before the ops left', async () => {
+    const t = setup({}, [addOp('a', 'v1'), editOp('a', 'v2', 'T2')])
+    t.fail('add-a-v1', 'refused')
+    const entries: { ops: string[]; revised?: boolean }[] = []
+    t.hooks.rejected = async (ops, _err, revised) => {
+      entries.push({ ops: ops.map((o) => (o.kind === 'update' ? `${o.opId}:${(o.input as { note?: string }).note}` : o.opId)), revised })
+      // The user edits the bet again while the entry is being written.
+      if (!revised) t.user(editOp('a', 'v3', 'T3'))
+    }
+    await t.drain()
+    expect(entries).toEqual([
+      { ops: ['add-a-v1', 'edit-a-v2:v2'], revised: undefined },
+      { ops: ['add-a-v1', 'edit-a-v2:v3'], revised: true }
+    ])
+    expect(t.queue()).toEqual([])
+  })
+
   it('a refused add takes the edits queued for its bet with it, with no false conflict', async () => {
     const t = setup({}, [addOp('a', 'v1'), addOp('b', 'v1')])
     t.fail('add-a-v1', 'refused')
     const drain = await t.startPausedAt('add-a-v1')
     t.user(editOp('a', 'v2', 'T2'))
     expect((await drain.finish()).stop).toBe('done')
-    expect(t.rejected).toEqual(['add-a-v1'])
+    // Both leave the queue together, and are kept together to be sent again.
+    expect(t.rejected).toEqual(['add-a-v1', 'edit-a-v2'])
     expect(t.conflicts).toEqual([])
     expect([...t.server.keys()]).toEqual(['b'])
     expect(t.queue()).toEqual([])
   })
 
-  it('a refused add leaves a delete and an Undo queued behind it, so the restored bet is kept', async () => {
+  // Storage full: store.ts replays the changes made since on the queue as
+  // stored when it takes them again. The refusal's change computed what to
+  // take out on whatever queue it got, so a replay took out more.
+  it('decides once what a refusal takes out: replayed on a later queue, it takes the same ops', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    const changes: ((q: PendingOp[]) => PendingOp[])[] = []
+    const update = t.hooks.update
+    t.hooks.update = (fn) => {
+      changes.push(fn)
+      return update(fn)
+    }
+    t.fail('add-a-v1', 'refused')
+    await t.drain()
+    expect(t.rejected).toEqual(['add-a-v1'])
+    const stored = [addOp('a', 'v1'), editOp('a', 'v2', 'T2'), addOp('b', 'v1')]
+    expect(changes[changes.length - 1](stored).map((o) => o.opId)).toEqual(['edit-a-v2', 'add-b-v1'])
+  })
+
+  it('a refused add takes the delete queued behind it but not an Undo after that, so the restored bet is kept', async () => {
     const t = setup({}, [addOp('a', 'v1')])
     t.fail('add-a-v1', 'refused')
     const drain = await t.startPausedAt('add-a-v1')
     // Deleted, then restored with Undo, while the add is out.
     t.user(delOp('a'))
     t.user({ opId: 'restore-a', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5, note: 'restored' }, queuedAt: 'T03' })
+    t.user(editOp('a', 'restored and edited', 'T04'))
     await drain.finish()
-    expect(t.rejected).toEqual(['add-a-v1'])
-    expect(t.server.get('a')?.note).toBe('restored')
+    expect(t.rejected).toEqual(['add-a-v1', 'del-a'])
+    expect(t.server.get('a')?.note).toBe('restored and edited')
     expect(t.queue()).toEqual([])
   })
 
-  it('an add refused after an earlier attempt that may have landed keeps the edits queued for it', async () => {
+  // The delete stayed and went out as a no-op, the refused entry held the add
+  // alone, and "Send again" made the bet the user had deleted.
+  it('a refused add takes the delete queued behind it: sent again, the two are nothing', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    t.fail('add-a-v1', 'refused')
+    const drain = await t.startPausedAt('add-a-v1')
+    t.user(delOp('a'))
+    await drain.finish()
+    expect(t.rejected).toEqual(['add-a-v1', 'del-a'])
+    const story = [addOp('a', 'v1'), delOp('a')].map((o) => ({ ...o, opId: `again-${o.opId}` }))
+    expect(requeueRefused([], [story])).toEqual([])
+  })
+
+  // Logged offline, an add has been tried once (marked sent) before it is
+  // refused for good. Only a first try took the edits and the delete with
+  // it: these stayed, the edit came back as a false "newer edit elsewhere"
+  // and "Send again" made the bet with the text from before it.
+  it('an add refused for good after an earlier attempt takes the edits queued for it too: one that landed answers as a duplicate', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    t.fail('add-a-v1', 'offline')
+    expect((await t.drain()).stop).toBe('offline')
+    t.user(editOp('a', 'v2', 'T2'))
+    t.fail('add-a-v1', 'refused')
+    await t.drain()
+    expect(t.rejected).toEqual(['add-a-v1', 'edit-a-v2'])
+    expect(t.notices).toEqual([])
+    expect([...t.server.keys()]).toEqual([])
+    expect(t.queue()).toEqual([])
+  })
+
+  it('an add that landed and is retried answers as the row already there, and its edit follows', async () => {
     const t = setup({}, [addOp('a', 'v1')])
     t.fail('add-a-v1', 'landed-then-offline')
     expect((await t.drain()).stop).toBe('offline')
     t.user(editOp('a', 'v2', 'T2'))
-    // The retry is refused (an expired session, say), but the first attempt made the bet.
-    t.fail('add-a-v1', 'refused')
     await t.drain()
-    expect(t.rejected).toEqual(['add-a-v1'])
+    expect(t.rejected).toEqual([])
     expect(t.server.get('a')?.note).toBe('v2')
-    expect(t.notices).toEqual([])
   })
 
   it('a refused import keeps the edits queued for its rows: an earlier chunk may have landed', async () => {
@@ -665,7 +891,7 @@ describe('drainOutbox — changes made while a request is out', () => {
     const t = setup({}, [addOp('a', 'v1')])
     const drain = await t.startPausedAt('add-a-v1')
     // Something puts another op at the head while the request is out.
-    t.hooks.setOutbox([addOp('z', 'v1'), ...t.queue()])
+    t.hooks.update((q) => [addOp('z', 'v1'), ...q])
     await drain.finish()
     expect(t.reached.filter((id) => id === 'add-a-v1')).toHaveLength(1)
     expect([...t.server.keys()].sort()).toEqual(['a', 'z'])
@@ -679,6 +905,47 @@ describe('drainOutbox — changes made while a request is out', () => {
     await drain.finish()
     expect(t.reached).toContain('add-b-v1')
     expect([...t.server.keys()].sort()).toEqual(['b', 'c'])
+  })
+})
+
+describe('confirmedLog — a read that comes back after a change was confirmed', () => {
+  const add = (x: string) => (rows: readonly string[]) => (rows.includes(x) ? [...rows] : [...rows, x])
+  const remove = (x: string) => (rows: readonly string[]) => rows.filter((r) => r !== x)
+
+  it('lays over what a read got the changes confirmed after it went out, not those from before', () => {
+    const log = confirmedLog<string>()
+    log.confirmed(add('before'))
+    const read = log.read()
+    log.confirmed(add('new'))
+    log.confirmed(remove('gone'))
+    // Answered before both: the delete is not in it, nor the add.
+    expect(read.over(['before', 'gone'])).toEqual(['before', 'new'])
+    read.end()
+  })
+
+  it('keeps a change for every read out when it was confirmed, whichever ends first', () => {
+    const log = confirmedLog<string>()
+    const older = log.read()
+    log.confirmed(add('a'))
+    const newer = log.read()
+    log.confirmed(add('b'))
+    expect(newer.over([])).toEqual(['b'])
+    newer.end()
+    // The newer read ended first: the older one still gets both.
+    expect(older.over([])).toEqual(['a', 'b'])
+    older.end()
+  })
+
+  it('keeps nothing once no read is out, and nothing confirmed while none is', () => {
+    const log = confirmedLog<string>()
+    log.confirmed(add('a'))
+    const first = log.read()
+    log.confirmed(add('b'))
+    first.end()
+    first.end()
+    const next = log.read()
+    expect(next.over([])).toEqual([])
+    next.end()
   })
 })
 

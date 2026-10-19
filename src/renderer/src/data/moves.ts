@@ -3,6 +3,7 @@ import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { supabase } from '../lib/supabase'
 import { normalizeMove } from '../lib/validate'
 import { describeError } from './errors'
+import { signedInUserId } from './session'
 import { readAll } from './readAll'
 import { insertStamp, type MoveOp } from './offline'
 
@@ -31,15 +32,9 @@ function toMove(row: Row): BankrollMove {
   }
 }
 
-async function currentUserId(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession()
-  if (error) throw error
-  const id = data.session?.user?.id
-  if (!id) throw new Error('You are signed out — sign in to sync your deposits and withdrawals')
-  return id
-}
-
-export async function getMoves(): Promise<BankrollMove[]> {
+export async function getMoves(asUser?: string): Promise<BankrollMove[]> {
+  // Without a session the answer would be no rows, not this user's rows.
+  await signedInUserId(asUser)
   const rows = await readAll<Row>((from, to) =>
     supabase
       .from(TABLE)
@@ -58,10 +53,10 @@ export async function getMoves(): Promise<BankrollMove[]> {
  * device time of its content (insertStamp), written as `updated_at` for the
  * same reason as addBet's.
  */
-export async function addMove(input: MoveInput, id: string, stamp: string): Promise<BankrollMove> {
+export async function addMove(input: MoveInput, id: string, stamp: string, asUser?: string): Promise<BankrollMove> {
   const clean = normalizeMove(input)
-  const user_id = await currentUserId()
-  const { data, error } = await supabase
+  const user_id = await signedInUserId(asUser)
+  const { data, error, status } = await supabase
     .from(TABLE)
     .insert({ id, user_id, date: clean.date, amount: clean.amount, note: clean.note, updated_at: stamp })
     .select()
@@ -70,10 +65,12 @@ export async function addMove(input: MoveInput, id: string, stamp: string): Prom
     if (error.code === '23505') {
       // Already inserted by an earlier attempt whose response we never saw.
       // Never an upsert: that could overwrite a newer edit made elsewhere.
-      const { data: existing } = await supabase.from(TABLE).select('*').eq('id', id).single()
-      if (existing) return toMove(existing as Row)
+      const back = await supabase.from(TABLE).select('*').eq('id', id).maybeSingle()
+      // Couldn't tell: the same failure, tried again later.
+      if (back.error) throw describeError(back.error, back.status)
+      if (back.data) return toMove(back.data as Row)
     }
-    throw describeError(error)
+    throw describeError(error, status)
   }
   return toMove(data as Row)
 }
@@ -85,20 +82,20 @@ export async function addMove(input: MoveInput, id: string, stamp: string): Prom
  */
 export async function updateMove(id: string, input: MoveInput, editedAt: string): Promise<BankrollMove | null> {
   const clean = normalizeMove(input)
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from(TABLE)
     .update({ date: clean.date, amount: clean.amount, note: clean.note, updated_at: editedAt })
     .eq('id', id)
     .lte('updated_at', editedAt)
     .select()
     .maybeSingle()
-  if (error) throw describeError(error)
+  if (error) throw describeError(error, status)
   return data ? toMove(data as Row) : null
 }
 
 export async function deleteMove(id: string): Promise<boolean> {
-  const { error, count } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
-  if (error) throw describeError(error)
+  const { error, count, status } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
+  if (error) throw describeError(error, status)
   return (count ?? 0) > 0
 }
 
@@ -107,8 +104,10 @@ export async function deleteMove(id: string): Promise<boolean> {
  * there is one. Moves are never imported, so a 'bulk-add' can only be a
  * corrupt queue: it is refused, and the drain drops it.
  */
-export async function sendMoveOp(op: MoveOp): Promise<BankrollMove | null> {
-  if (op.kind === 'add') return addMove(op.input, op.id, insertStamp(op))
+export async function sendMoveOp(op: MoveOp, asUser?: string): Promise<BankrollMove | null> {
+  // As sendOp: without a session (or `asUser`'s) it waits for the next sign-in.
+  await signedInUserId(asUser)
+  if (op.kind === 'add') return addMove(op.input, op.id, insertStamp(op), asUser)
   if (op.kind === 'update') return updateMove(op.id, op.input, op.editedAt)
   if (op.kind === 'delete') {
     await deleteMove(op.id)

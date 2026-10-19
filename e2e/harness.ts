@@ -1,4 +1,5 @@
 import type { Page, BrowserContext } from '@playwright/test'
+import { installFakeSupabase } from '../src/renderer/src/demo/fakeSupabase'
 
 /**
  * Boots the app without a backend.
@@ -81,160 +82,6 @@ window.__supabaseMock = {
 }
 `
 
-/**
- * A signed-in session against a small in-memory server: the bets, the
- * settings row and the deposits and withdrawals, and the PostgREST behaviour
- * the app relies on — inserts (a duplicate id is 23505), updates guarded by
- * `updated_at <= editedAt` (the conflict rule), deletes and upserts. Its state
- * lives in localStorage so it survives reloads, like a real database:
- *  - `e2e:rows`      the bets;
- *  - `e2e:settings`  the user_settings row, if any;
- *  - `e2e:moves`     the bankroll_moves rows;
- *  - `e2e:migrated`  unset = the database is missing migration 004: reads
- *                    work, every add or edit (they all name closing_odds) is
- *                    refused (PGRST204), deletes go through, and the settings
- *                    table is missing (PGRST205). Setting it stands for
- *                    running the migration;
- *  - `e2e:migrated-005`  unset = the database is missing migration 005: the
- *                    bankroll_moves table is missing, so every request for
- *                    it, reads and deletes too, is refused (PGRST205);
- *  - `e2e:latency`   milliseconds before each answer, to leave a request on
- *                    the wire while the test keeps using the app;
- *  - `e2e:writes`    how many write requests have been answered, so a test
- *                    can wait for a retry to have happened;
- *  - `e2e:down`      set: the connection is down, and every request fails
- *                    the way supabase-js reports a failed fetch.
- * A row written without `updated_at` gets the time it was answered, as the
- * server's now() would.
- */
-const MOCK_SERVER = `
-(() => {
-  const session = { access_token: 'e2e', user: ${JSON.stringify(USER)} }
-  const migrated = () => localStorage.getItem('e2e:migrated') === '1'
-  const latency = () => Number(localStorage.getItem('e2e:latency') || 0)
-  const rows = () => JSON.parse(localStorage.getItem('e2e:rows') || '[]')
-  const saveRows = (r) => localStorage.setItem('e2e:rows', JSON.stringify(r))
-  const NO_COLUMN = { message: "Could not find the 'closing_odds' column of 'entries' in the schema cache", code: 'PGRST204' }
-  const NO_TABLE = { message: "Could not find the table 'public.user_settings' in the schema cache", code: 'PGRST205' }
-  const NO_MOVES_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
-  const stamp = (row) => ({ created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...row })
-  const settingsRow = () => JSON.parse(localStorage.getItem('e2e:settings') || 'null')
-  const saveSettingsRow = (r) => localStorage.setItem('e2e:settings', JSON.stringify(r))
-  function settings(q) {
-    if (!migrated()) return { data: null, error: NO_TABLE }
-    const row = settingsRow()
-    if (q.action === 'select') return { data: row, error: null }
-    if (q.action === 'update') {
-      if (!row || (q.lte !== undefined && row.updated_at > q.lte)) return { data: null, error: null }
-      const next = { ...row, ...q.payload }
-      saveSettingsRow(next)
-      return { data: next, error: null }
-    }
-    if (q.action === 'insert') {
-      if (row) return { data: null, error: { message: 'duplicate key value violates unique constraint "user_settings_pkey"', code: '23505' } }
-      const next = { odds_format: 'american', unit_size: null, show_units: false, starting_bankroll: null, default_stake: null, loss_limit: null, ...q.payload }
-      saveSettingsRow(next)
-      return { data: next, error: null }
-    }
-    return { data: null, error: { message: 'e2e harness: settings ' + q.action + ' is not modelled', code: 'E2E' } }
-  }
-  const moveRows = () => JSON.parse(localStorage.getItem('e2e:moves') || '[]')
-  const saveMoveRows = (r) => localStorage.setItem('e2e:moves', JSON.stringify(r))
-  function moves(q) {
-    if (localStorage.getItem('e2e:migrated-005') !== '1') return { data: null, error: NO_MOVES_TABLE }
-    const all = moveRows()
-    if (q.action === 'select') {
-      if (q.eq.id === undefined) return { data: all, error: null }
-      return { data: all.find((r) => r.id === q.eq.id) || null, error: null }
-    }
-    if (q.action === 'insert') {
-      if (all.some((r) => r.id === q.payload.id)) return { data: null, error: { message: 'duplicate key value violates unique constraint "bankroll_moves_pkey"', code: '23505' } }
-      const row = stamp(q.payload)
-      saveMoveRows([...all, row])
-      return { data: row, error: null }
-    }
-    if (q.action === 'update') {
-      const i = all.findIndex((r) => r.id === q.eq.id && (q.lte === undefined || r.updated_at <= q.lte))
-      if (i < 0) return { data: null, error: null }
-      all[i] = { ...all[i], ...q.payload }
-      saveMoveRows(all)
-      return { data: all[i], error: null }
-    }
-    if (q.action === 'delete') {
-      saveMoveRows(all.filter((r) => r.id !== q.eq.id))
-      return { data: null, error: null, count: all.length - moveRows().length }
-    }
-    return { data: null, error: { message: 'e2e harness: moves ' + q.action + ' is not modelled', code: 'E2E' } }
-  }
-  function answer(q) {
-    // Postgres refuses a conflict check against something that is no time (an edit with no editedAt).
-    if (q.lteSet && (typeof q.lte !== 'string' || isNaN(Date.parse(q.lte)))) {
-      return { data: null, error: { message: 'invalid input syntax for type timestamp with time zone: "' + q.lte + '"', code: '22007' } }
-    }
-    if (localStorage.getItem('e2e:down') === '1') return { data: null, error: { message: 'TypeError: Failed to fetch', code: '' } }
-    if (q.action !== 'select') localStorage.setItem('e2e:writes', String(Number(localStorage.getItem('e2e:writes') || 0) + 1))
-    if (q.table === 'user_settings') return settings(q)
-    if (q.table === 'bankroll_moves') return moves(q)
-    const all = rows()
-    if (q.action === 'select') {
-      if (q.eq.id === undefined) return { data: all, error: null }
-      return { data: all.find((r) => r.id === q.eq.id) || null, error: null }
-    }
-    if (q.action === 'delete') {
-      saveRows(all.filter((r) => r.id !== q.eq.id))
-      return { data: null, error: null, count: all.length - rows().length }
-    }
-    if (!migrated()) return { data: null, error: NO_COLUMN }
-    if (q.action === 'insert') {
-      if (all.some((r) => r.id === q.payload.id)) return { data: null, error: { message: 'duplicate key value violates unique constraint "entries_pkey"', code: '23505' } }
-      const row = stamp(q.payload)
-      saveRows([...all, row])
-      return { data: row, error: null }
-    }
-    if (q.action === 'update') {
-      const i = all.findIndex((r) => r.id === q.eq.id && (q.lte === undefined || r.updated_at <= q.lte))
-      if (i < 0) return { data: null, error: null }
-      all[i] = { ...all[i], ...q.payload }
-      saveRows(all)
-      return { data: all[i], error: null }
-    }
-    if (q.action === 'upsert') {
-      const byId = new Map(all.map((r) => [r.id, r]))
-      for (const r of q.payload) byId.set(r.id, { ...(byId.get(r.id) || {}), ...stamp(r) })
-      saveRows([...byId.values()])
-      return { data: null, error: null, count: q.payload.length }
-    }
-    return { data: null, error: { message: 'e2e harness: ' + q.action + ' is not modelled', code: 'E2E' } }
-  }
-  function from(table) {
-    const q = { table, action: 'select', payload: null, eq: {}, lte: undefined }
-    const chain = {
-      select() { return chain }, order() { return chain }, range() { return chain }, single() { return chain }, maybeSingle() { return chain },
-      eq(c, v) { q.eq[c] = v; return chain },
-      lte(c, v) { q.lte = v; q.lteSet = true; return chain },
-      insert(p) { q.action = 'insert'; q.payload = p; return chain },
-      update(p) { q.action = 'update'; q.payload = p; return chain },
-      upsert(p) { q.action = 'upsert'; q.payload = p; return chain },
-      delete() { q.action = 'delete'; return chain },
-      then(resolve, reject) {
-        return new Promise((r) => setTimeout(r, latency())).then(() => answer(q)).then(resolve, reject)
-      }
-    }
-    return chain
-  }
-  window.__supabaseMock = {
-    auth: {
-      getSession: () => Promise.resolve({ data: { session }, error: null }),
-      onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
-      startAutoRefresh: () => {}, stopAutoRefresh: () => {}, signOut: () => Promise.resolve({})
-    },
-    from,
-    channel: () => ({ on() { return this }, subscribe() { return this } }),
-    removeChannel: () => {}
-  }
-})()
-`
-
 /** A seed bet as the database row it would be (snake_case; with no status the app derives it). */
 const toRow = (e: SeedEntry) => ({
   id: e.id,
@@ -267,9 +114,9 @@ export interface BootOptions {
   moves?: SeedMove[]
   /**
    * 'none' (default): no session, so the app runs on its device copy alone.
-   * 'behind': signed in, against a database missing migrations 004 and 005 (MOCK_SERVER).
+   * 'behind': signed in, against a database missing migrations 004 and 005 (the fake server).
    * 'behind-005': signed in, against a database that has 004 but is missing 005.
-   * 'live': signed in, against an up-to-date database (MOCK_SERVER).
+   * 'live': signed in, against an up-to-date database (the fake server).
    */
   backend?: 'none' | 'behind' | 'behind-005' | 'live'
   /** With a backend: milliseconds before each answer. */
@@ -317,10 +164,13 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
           settingsRow: has004 && opts.settings ? toSettingsRow(opts.settings) : null,
           moveRows: (opts.moves ?? []).map(toMoveRow)
         }
+  // With a backend, the same fake server `npm run demo` uses (its state under `e2e:`, see
+  // demo/fakeSupabase.ts); without one, a client that is signed out and has no network.
+  if (server) await context.addInitScript(installFakeSupabase, { prefix: 'e2e:', user: USER, demo: false })
   await context.addInitScript(
     ({ mock, user, entries, server, theme, settings, moves, outbox }) => {
       // eslint-disable-next-line no-eval
-      eval(mock)
+      if (mock) eval(mock)
       if (localStorage.getItem('e2e:seeded')) return
       localStorage.setItem('e2e:seeded', '1')
       localStorage.setItem('bettracker:last-user', JSON.stringify(user))
@@ -337,9 +187,13 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
         if (server.settingsRow) localStorage.setItem('e2e:settings', JSON.stringify(server.settingsRow))
       }
       if (outbox) localStorage.setItem(`bettracker:outbox:${user.id}`, JSON.stringify(outbox))
+      // No backend: a device whose session ran out and can't be renewed
+      // offline. Supabase keeps it stored, so the app does not take it for a
+      // session that ended for good (signed out on another device).
+      if (!server) localStorage.setItem('bettracker-auth', JSON.stringify({ e2e: 'a session this device cannot renew offline' }))
     },
     {
-      mock: server ? MOCK_SERVER : MOCK,
+      mock: server ? null : MOCK,
       user: USER,
       entries,
       server,

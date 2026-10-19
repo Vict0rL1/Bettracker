@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * row (update, then select, then insert) and each needs its own answer.
  */
 const state = vi.hoisted(() => ({
+  /** What auth.getSession() answers: signed in unless a test says otherwise. */
+  session: { data: { session: { user: { id: 'user-1' } } as unknown }, error: null as Error | null },
   replies: [] as { data: unknown; error: { message: string; code?: string } | null }[],
   calls: [] as { method: string; args: unknown[] }[]
 }))
@@ -22,18 +24,20 @@ vi.mock('../lib/supabase', () => {
   return {
     supabase: {
       ...chain,
-      auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } }, error: null }) }
+      auth: { getSession: async () => state.session }
     }
   }
 })
 
 import { getSettings, saveSettings } from './settings'
+import { SignedOutError } from './errors'
 
 const calls = (method: string) => state.calls.filter((c) => c.method === method)
 
 const ROW = { user_id: 'user-1', odds_format: 'decimal', unit_size: '25', show_units: true, starting_bankroll: null, default_stake: '10', loss_limit: null, updated_at: 'E' }
 
 beforeEach(() => {
+  state.session = { data: { session: { user: { id: 'user-1' } } }, error: null }
   state.calls = []
   state.replies = []
 })
@@ -107,5 +111,24 @@ describe('saveSettings — last write wins by edit time', () => {
     state.replies = [{ data: ROW, error: null }]
     await saveSettings({ unitSize: null, showUnits: false }, 'E')
     expect(calls('update')[0]?.args[0]).toEqual({ unit_size: null, show_units: false, updated_at: 'E' })
+  })
+})
+
+describe('without a session', () => {
+  // As nobody, no row would come back, and the defaults would replace this
+  // user's settings on the device; a save would be refused and dropped.
+  it('reads and saves nothing, and says signed out', async () => {
+    state.session = { data: { session: null }, error: null }
+    await expect(getSettings()).rejects.toBeInstanceOf(SignedOutError)
+    await expect(saveSettings({ unitSize: 25 }, 'E')).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
+  })
+
+  // Read as the next account to sign in, its row was stored as this user's.
+  it('nor as another account signed in since: that is a sign-out for this one', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getSettings('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    await expect(saveSettings({ unitSize: 25 }, 'E', 'user-1')).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
   })
 })

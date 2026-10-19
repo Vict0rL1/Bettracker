@@ -41,12 +41,50 @@ moment you're back online. The header badge tells you where you stand:
 | 🟢 **Synced** | Everything is saved to the cloud and shared with your other devices |
 | 🟡 **Syncing n…** | Queued changes are being pushed right now |
 | ⚪ **Offline · n queued** | No connection — changes are safe on this device and will sync automatically |
+| 🟠 **Retrying · n queued** | Supabase failed for now (a 5xx, a rate limit) — changes are safe on this device and are tried again after a growing wait (1 s, 2 s, 4 s … up to 2 minutes) |
+| 🔴 **Not syncing · n queued** | Supabase refused this app's key or session — changes are safe on this device and sync once that is sorted out |
+| 🔴 **Signed out · n queued** | Your session ended (signing out on another device ends it everywhere) — changes are safe on this device; **Sign in again** sends them |
 | 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
-The count covers every queued change: bets, deposits and withdrawals.
-Signing out removes that device's local copy (cache and queued changes);
-anything already synced stays safe in your Supabase project. While changes
-are still queued, **Sign out** asks you to click again.
+The count covers every queued change: bets, deposits and withdrawals. A
+settings change waiting to sync shows on the badge too (without a count).
+A request the server never answers is given up after 30 seconds, as if the
+connection had dropped, and tried again later.
+Signing out removes that device's local copy (cache, queued changes and
+refused ones); anything already synced stays safe in your Supabase project.
+While changes are still queued or refused, **Sign out** asks you to click
+again. A sync still on its way when you sign out writes none of it back, and
+nothing of one account is ever read or sent as another that signs in on the
+same device. Signing out in one window signs the app's other windows out too.
+
+Three more things stay on screen until you deal with them, because they are
+about changes that haven't reached the server:
+
+- **Signed out** — your session ended while changes waited here. **Sign in
+  again** opens the sign-in form over this device's data, queue included;
+  nothing is cleared.
+- **Not saved on this device** — the browser's storage refused the queue
+  (full, or turned off). Cached server data is dropped first to make room;
+  when even that isn't enough the change stays in that window only, keeps
+  syncing while it is open, and the toast says so instead of "Added".
+  **Try again** stores it once there is room, on top of whatever other
+  windows stored meanwhile (what this window sent or deleted stays out). A
+  change Supabase refused while there was no room to keep it counts here too.
+- **Refused** — Supabase refused a change for good (a check it fails, say).
+  It leaves the queue so it can't block the rest, and waits here with the
+  server's reason: **Send again** (never over a newer edit of the same bet)
+  or **Discard**. Sent again while the queue can't be stored, it stays
+  stored here, out of sight, until it has gone or the queue is stored.
+
+Several windows of the app (two tabs, or a tab and the installed app) share
+one queue: each change is made to the stored queue under a lock that spans
+windows (the Web Locks API), only one window sends it at a time, and a change
+made in one window shows in the others. The lock alone isn't enough, because
+each window reads its own copy of the browser's storage, which another
+window's write reaches a moment later; so every change also counts up a
+version kept in IndexedDB, and the next window waits until its copy has it
+before reading. Over plain http on your local network (`npm run dev` on the
+phone) the browser has no such lock, and windows there don't coordinate.
 
 Small things that add up: a **light theme** (☀️ in the header — it follows your
 OS until you pick one, then stays put), **search and filters** over your history
@@ -101,8 +139,22 @@ close a dialog.
      figure and the settled bets until then, plus whatever deposits and
      withdrawals that device has queued. Don't sign out on that device until
      then — signing out clears its queue.
-3. Go to **Project Settings → API** and copy your **Project URL** and the
-   **anon public** key.
+3. Copy your **Project URL** (it looks like `https://<ref>.supabase.co`) and
+   your **publishable key** (`sb_publishable_…`, under **Project Settings →
+   API Keys**). The older **anon** key (`eyJ…`) works too, until Supabase
+   retires the legacy keys at the end of 2026. Never the **secret** key
+   (`sb_secret_…`) or **service_role**: they skip row-level security, and the
+   build refuses them.
+4. Open **Authentication → URL Configuration**. Set **Site URL** to the
+   address where you'll use the app (your Netlify address, say), and list the
+   others you sign up from under **Redirect URLs** (`http://localhost:5173`
+   for dev). The confirmation email links back to the address you signed up
+   from when it's listed there, and otherwise to the Site URL — on a new
+   project, `http://localhost:3000`, which shows an error page (the account is
+   confirmed all the same: go back to the app and sign in). For an app only you
+   use, you can turn **Confirm email** off instead, in the **Email** provider's
+   settings (**Authentication → Sign In / Providers**). A link that has expired,
+   or was already opened, brings you to the sign-in screen, which says so.
 
 ### 2. Point the app at your project
 
@@ -110,7 +162,7 @@ close a dialog.
 git clone https://github.com/Vict0rL1/Bettracker.git
 cd Bettracker
 cp .env.example .env
-# edit .env and paste in your URL + anon key
+# edit .env and paste in your URL + publishable key
 npm install
 ```
 
@@ -118,11 +170,24 @@ npm install
 
 ```
 VITE_SUPABASE_URL=https://YOUR-PROJECT-ref.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-public-key
+VITE_SUPABASE_ANON_KEY=your-publishable-key
 ```
 
-(The anon key is safe to ship in a client app — it can only do what your
-row-level security policies allow.)
+(The variable keeps its old name; a publishable key goes in it. It is safe to
+ship in a client app — it can only do what your row-level security policies
+allow.)
+
+`npm run dev` and `npm run build` check these two values first. The build
+stops when they can't work, or would put a secret in the app, and says what to
+put instead; dev says it in the terminal and on the app's setup screen.
+It catches a URL without `https://`, the dashboard's address, the database
+connection string (it holds the database password), an API path after the
+address, the examples left in, a secret or `service_role` key, a key cut short
+or with quotes or spaces in it, something that isn't a key at all (the JWT
+secret, say), and an anon key from another project than the URL's, which is
+what Supabase calls **Invalid API key**. A publishable key carries no project
+to compare, so that last one shows at sign-in instead, where BetTracker says
+which key to use. A build with the old anon key also says when to switch it.
 
 ## Run it in dev
 
@@ -143,6 +208,25 @@ npm run dev:desktop     # Electron, hot-reloaded
 The first time you launch, create an account (Sign up), then sign in with the
 same email/password on your phone — both devices now share the same data.
 
+## Try it without Supabase (demo)
+
+```bash
+npm install
+npm run demo
+```
+
+It opens on `http://localhost:5172` already signed in, with nothing in it,
+and needs no Supabase project and no `.env`: a fake backend keeps everything
+in that browser's storage (the same fake the e2e suite runs against, in
+`src/renderer/src/demo/`). The app behaves as it does against Supabase,
+offline included — turn the Wi-Fi off and changes wait on the device, then
+sync when it's back. A bar across the top says it's the demo, and **Start
+over** (two clicks) empties it. Signing out leads to the sign-in screen; any
+email and a password of 6 or more characters sign you back in. The
+**Network** URL works on your phone too; each browser has its own demo. None
+of the demo's code goes into `npm run build` (only its three strings and the
+banner's CSS do).
+
 ## Put it on your phone (deploy the PWA)
 
 The web app is fully static (just HTML/JS/CSS talking to Supabase), so any
@@ -152,12 +236,16 @@ static host works. Build it, then deploy the `dist/` folder:
 npm run build          # type-checks, bundles, and generates the PWA -> dist/
 ```
 
-Easiest hosts (all have free tiers) — set the two `VITE_SUPABASE_*` values as
-build-time environment variables in the host's dashboard:
+The two `VITE_SUPABASE_*` values are written into the bundle when it is built:
+a `dist/` you build yourself takes them from your `.env`, and a host that
+builds from the repo needs them as build-time environment variables in its
+dashboard. Change them, and the app has to be built and uploaded again.
+Easiest hosts (all have free tiers):
 
 - **Vercel** — `vercel` (or connect the repo); framework preset "Vite".
-- **Netlify** — `netlify deploy --prod --dir dist`, or drag `dist/` onto the
-  dashboard.
+- **Netlify** — `netlify deploy --prod --dir dist`, or drag `dist/` onto your
+  site's **Deploys** page (dropping it on the sites list makes a new site,
+  at a new address).
 - **Cloudflare Pages / GitHub Pages** — serve `dist/` as static files.
 
 Then on your phone open the deployed URL and **Add to Home Screen**
@@ -185,6 +273,7 @@ given OS's installer must be built on that OS.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Web app dev server (open on phone + computer) |
+| `npm run demo` | The app against a fake backend in the browser, no Supabase needed — see [Try it without Supabase](#try-it-without-supabase-demo) |
 | `npm run build` | Type-check + build the web/PWA bundle → `dist/` (deploy this) |
 | `npm test` | Run the unit tests (stats, offline outbox and sync, CSV, validation, …) |
 | `npm run test:watch` | Same, in watch mode |
@@ -193,7 +282,7 @@ given OS's installer must be built on that OS.
 | `npm run build:desktop` | Package a native desktop installer → `release/` |
 | `npm run build:desktop:dir` | The desktop app unpacked, without an installer → `release/` |
 | `npm run typecheck` | Type-check the web + desktop code and the e2e suite |
-| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed). The first time, run `npx playwright install chromium` |
+| `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed), on ports 4183, 4182 and 4181 (`E2E_PORT`, `E2E_DEMO_PORT`, `E2E_DEV_PORT` move them). The first time, run `npx playwright install chromium` |
 | `bash supabase/tests/run.sh` | Run the migrations and `schema.sql` against a throwaway Postgres and check the result. Needs `psql`, `createdb`, `dropdb` and `pg_dump`, with the `PG*` variables pointing at a server where it may create databases (all named `bettracker_test_*`) |
 
 CI (`.github/workflows/ci.yml`) runs on every push and pull request: a secret
@@ -306,22 +395,27 @@ Bettracker/
 │   ├── migrations/             # 001–005, for installs made before each change
 │   └── tests/                  # runs the two above against a real Postgres
 ├── build/make-icon.mjs         # regenerates all app/PWA icons
-├── e2e/                        # Playwright specs + a mock Supabase (harness.ts)
+├── e2e/                        # Playwright specs + the harness that boots the app on a fake Supabase
 └── src/
     ├── main/index.ts           # Electron: a native window around the web UI
     ├── preload/index.ts        # minimal (data goes over the network, not IPC)
     ├── shared/types.ts         # Bet, BetInput, Settings, OddsFormat, BankrollMove
+    ├── shared/supabaseEnv.ts   # checks VITE_SUPABASE_URL / _ANON_KEY (the build and the app)
     └── renderer/src/
         ├── App.tsx             # auth gate + dashboard + live sync wiring
-        ├── auth/               # AuthProvider + Login screen
+        ├── auth/               # AuthProvider + Login screen (+ authErrors.ts, Supabase's refusals in words)
         ├── data/bets.ts        # Supabase CRUD + realtime subscription
         ├── data/useBetSync.ts  # bets state: cache, outbox, sync loop
         ├── data/offline.ts     # device cache + outbox
         ├── data/drain.ts       # replaying the outbox: what leaves it, what stays
-        ├── data/errors.ts      # reading a failed request: offline, migration needed, refused
+        ├── data/errors.ts      # reading a failed request: offline, paused, retry, migration needed, refused
+        ├── data/session.ts     # no request for a user's rows without their session
+        ├── data/store.ts       # the queues in storage, shared by every window under a lock (and a version in IndexedDB)
+        ├── data/useOpQueue.ts  # a queue of ops as the bets and the moves keep it (storage, drain lock, refused)
         ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
-        ├── lib/                # supabase client, validation, csv, odds, dates, stats, bankroll, format, strings, …
+        ├── lib/                # supabase client (requests time out after 30 s), validation, csv, odds, dates, stats, bankroll, format, strings, …
+        ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e) and its entry
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, …
 ```
 
@@ -363,16 +457,36 @@ landed): an edit or a delete made afterwards queues behind it and goes out
 after it, so nothing done while a request is out, or after one fails, is lost.
 The change at the head of the queue when the app starts counts as gone out,
 since a version from before this rule did not record it. If the server
-refuses a new bet on its first try, the edits queued for it are dropped with
-it (they could only be refused too); a delete or an Undo queued for it stays.
+refuses a new bet for good (not as one it already has, which is how it
+answers one that landed), what was queued for that bet after it (its edits
+and its delete, up to an Undo that adds it again) goes into the **Refused**
+notice with it: sending them again does what you did, so a bet you deleted
+stays deleted and one you edited is made as you left it.
 Deposits and withdrawals have their own cache and outbox under exactly the
 same rules (and the same conflict rule), so one held back by a missing
-migration never holds back a bet.
+migration never holds back a bet. A change that finds no session (it ran out
+and couldn't be renewed: signing out on another device ends it here too) or
+a key Supabase doesn't take stays queued too, and goes out after the next
+sign-in, or with a copy of the app that has the right key. The data layer
+asks for the session before every read and write, because without one
+supabase-js would go as nobody and row-level security would answer as for
+nobody: an empty history, an edit with no row to change. A request the server
+fails for now (a 5xx, a rate limit, a timeout) leaves the change queued and is
+tried again after a growing wait; only a refusal for good takes a change out
+of the queue, into the **Refused** notice. Every failure keeps its HTTP status
+and error code, which is what tells the two apart. Full reads page through
+the rows the server sends, from where the last page ended, so a project whose
+`max-rows` is below the 1,000 asked for still reads in full. Reads don't wait
+for the queue: one answered before a change landed lays that change over what
+it read, so an import's rows don't vanish and a deleted bet doesn't come back
+when it arrives.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read
-or write another's rows. The anon key in the client grants nothing beyond those
-policies.
+or write another's rows. The publishable (or anon) key in the client grants
+nothing beyond those policies, and the build refuses a key that would (a secret
+or `service_role` key) or a database connection string, so neither can end up
+in a published bundle.
 
 ## Data model
 
@@ -449,4 +563,10 @@ number follows your odds format setting, both as the odds box reads them. A
 cell that is not a price that can be stored counts for nothing. Lines that can't be read are skipped and reported
 rather than half-guessed, and the import queues through the same offline outbox
 as everything else — so it works with no connection and can't create duplicate
-rows if it's retried.
+rows if it's retried. It goes up in chunks of 250, and the app keeps count of
+the chunks the server confirmed: an import cut halfway sends only the rest
+when it is retried, and a row that did land is never written over (another
+device may have edited it since). A confirmed row is the server's from then
+on, so one deleted on another device stays deleted. Only rows of the chunk
+that was out when the connection dropped are sent again; if one of those
+had landed and was deleted elsewhere before the retry, it comes back.

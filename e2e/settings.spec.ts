@@ -23,8 +23,7 @@ test.describe('settings', () => {
     await expect(odds).toHaveText('10/11')
     // Offline: the change is queued for the server, not lost.
     await expect(dialog.locator('.settings-sync')).toContainText('Saved on this device')
-    const queued = await page.evaluate((uid) => localStorage.getItem(`bettracker:settings-outbox:${uid}`), USER.id)
-    expect(queued).toContain('"oddsFormat":"fractional"')
+    await expect.poll(() => page.evaluate((uid) => localStorage.getItem(`bettracker:settings-outbox:${uid}`) ?? '', USER.id)).toContain('"oddsFormat":"fractional"')
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
 

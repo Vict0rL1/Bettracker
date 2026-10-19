@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * holds. Enough to check what the data layer sends and how it reads replies.
  */
 const state = vi.hoisted(() => ({
+  /** What auth.getSession() answers: signed in unless a test says otherwise. */
+  session: { data: { session: { user: { id: 'user-1' } } as unknown }, error: null as Error | null },
   result: { data: null as unknown, error: null as { message: string; code?: string } | null, count: null as number | null },
   /** Answers for the next requests, in order; `result` once they run out. */
   queued: [] as { data: unknown; error: { message: string; code?: string } | null; count: number | null }[],
@@ -24,17 +26,19 @@ vi.mock('../lib/supabase', () => {
   return {
     supabase: {
       ...chain,
-      auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } }, error: null }) }
+      auth: { getSession: async () => state.session }
     }
   }
 })
 
 import { addBet, addBets, getBets, sendOp, updateBet, updateBetLegacy } from './bets'
-import { MigrationNeededError } from './errors'
+import { classifySyncError, MigrationNeededError, SignedOutError } from './errors'
+import type { PendingOp } from './offline'
 
 const call = (method: string) => state.calls.find((c) => c.method === method)
 
 beforeEach(() => {
+  state.session = { data: { session: { user: { id: 'user-1' } } }, error: null }
   state.calls = []
   state.result = { data: null, error: null, count: null }
   state.queued = []
@@ -163,13 +167,32 @@ describe('reading every row, page by page', () => {
     expect(state.calls.filter((c) => c.method === 'order').map((c) => c.args[0])).toEqual(['date', 'created_at', 'id', 'date', 'created_at', 'id'])
   })
 
-  it('without a count, stops at the first short page', async () => {
+  // A project's max-rows can be lower than the page asked for: a page that
+  // comes back short is then not the last. The read used to jump a whole page
+  // ahead (or stop) and miss the rows in between.
+  it('goes on from the rows that came when the server answers fewer than asked', async () => {
+    state.queued = [
+      { data: rows(300), error: null, count: 700 },
+      { data: rows(300, 300), error: null, count: 700 },
+      { data: rows(100, 600), error: null, count: 700 }
+    ]
+    const bets = await getBets()
+    expect(bets.map((b) => b.id)).toEqual(rows(700).map((r) => r.id))
+    expect(ranges()).toEqual([
+      [0, 999],
+      [300, 1299],
+      [600, 1599]
+    ])
+  })
+
+  it('without a count, goes on until a page comes back empty: a short page may be the server’s limit', async () => {
     state.queued = [
       { data: rows(1000), error: null, count: null },
-      { data: rows(3, 1000), error: null, count: null }
+      { data: rows(3, 1000), error: null, count: null },
+      { data: [], error: null, count: null }
     ]
     expect(await getBets()).toHaveLength(1003)
-    expect(ranges()).toHaveLength(2)
+    expect(ranges()).toHaveLength(3)
   })
 
   it('asks once for a history that fits in one page', async () => {
@@ -195,7 +218,7 @@ describe('reading rows', () => {
         { id: 'b', date: '2026-03-02', amount: '-4', stake: '4', odds: '1.950', status: 'lost', note: 'x', created_at: 'c', updated_at: 'u' }
       ],
       error: null,
-      count: null
+      count: 2
     }
     const [a, b] = await getBets()
     expect(a).toMatchObject({ amount: 12.5, stake: null, odds: null, status: 'won', note: '' })
@@ -203,7 +226,7 @@ describe('reading rows', () => {
   })
 
   it('reads a pending row as having no amount', async () => {
-    state.result = { data: [{ id: 'p', date: '2026-03-01', amount: null, status: 'pending', note: null, created_at: 'c', updated_at: 'u' }], error: null, count: null }
+    state.result = { data: [{ id: 'p', date: '2026-03-01', amount: null, status: 'pending', note: null, created_at: 'c', updated_at: 'u' }], error: null, count: 1 }
     const [p] = await getBets()
     expect(p.status).toBe('pending')
     expect(p.amount).toBeNull()
@@ -226,5 +249,122 @@ describe('missing migration', () => {
     const out = await addBet({ date: '2026-03-01', stake: 30, odds: 2.1, status: 'pending' }, 'id-1')
     expect(call('insert')?.args[0]).toMatchObject({ id: 'id-1', user_id: 'user-1', amount: null, stake: 30, odds: 2.1, status: 'pending' })
     expect(out.status).toBe('pending')
+  })
+})
+
+// The session ran out and could not be renewed (a sign-out on another device
+// ends it everywhere). Sent anyway, as nobody, a read would come back empty
+// and an edit would find no row; an add used to be refused and dropped.
+describe('without a session', () => {
+  const ops: PendingOp[] = [
+    { opId: 'o1', kind: 'add', id: 'a', input: { date: '2026-03-01', amount: 5 }, queuedAt: 'Q' },
+    { opId: 'o2', kind: 'update', id: 'a', input: { date: '2026-03-01', amount: 6 }, editedAt: 'E' },
+    { opId: 'o3', kind: 'delete', id: 'a' },
+    { opId: 'o4', kind: 'bulk-add', entries: [{ id: 'b', input: { date: '2026-03-01', amount: 1 } }], queuedAt: 'Q' }
+  ]
+
+  it('reads and sends nothing, and says signed out, which keeps the queue for the next sign-in', async () => {
+    state.session = { data: { session: null }, error: null }
+    await expect(getBets()).rejects.toBeInstanceOf(SignedOutError)
+    for (const op of ops) {
+      const err = await sendOp(op).catch((e: unknown) => e)
+      expect(err, op.kind).toBeInstanceOf(SignedOutError)
+      expect(classifySyncError(err), op.kind).toBe('paused')
+    }
+    expect(state.calls).toEqual([])
+  })
+
+  // A sync started for one account went on after another signed in on the
+  // device: its reads came back with the new account's rows (stored as the
+  // old one's), and its adds went into the new account.
+  it('another account signed in is a sign-out for the one whose queue or screen it is', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getBets('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    for (const op of ops) await expect(sendOp(op, undefined, 'user-1'), op.kind).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
+    // As that account, it goes.
+    state.result = { data: [], error: null, count: 0 }
+    await expect(getBets('user-2')).resolves.toEqual([])
+  })
+
+  it('a token that could not be renewed for good (revoked) is a sign-out too', async () => {
+    state.session = { data: { session: null }, error: new Error('Invalid Refresh Token: Refresh Token Not Found') }
+    await expect(sendOp(ops[0])).rejects.toBeInstanceOf(SignedOutError)
+  })
+
+  it('one that could not be renewed for want of a connection is offline', async () => {
+    const err = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 })
+    state.session = { data: { session: null }, error: err }
+    await expect(getBets()).rejects.toBe(err)
+    expect(classifySyncError(err)).toBe('offline')
+    expect(state.calls).toEqual([])
+  })
+})
+
+// An import interrupted partway is sent again. It used to upsert every row,
+// so a row that had landed and been edited (or deleted) since on another
+// device was overwritten (or brought back) with the import's values and its
+// older updated_at.
+describe('addBets — an import sent again after an interruption', () => {
+  const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `r${i}`, input: { date: '2026-03-01', amount: i + 1 } }))
+  const upserts = () => state.calls.filter((c) => c.method === 'upsert')
+
+  it('never overwrites a row that is already there: it inserts only the missing ones', async () => {
+    state.result = { data: null, error: null, count: 250 }
+    await addBets(entries(10), 'Q')
+    expect(upserts()[0].args[1]).toEqual({ count: 'exact', onConflict: 'id', ignoreDuplicates: true })
+  })
+
+  it('reports each chunk the server confirmed, and starts after the confirmed ones next time', async () => {
+    state.result = { data: null, error: null, count: 250 }
+    const progress: number[] = []
+    await addBets(entries(600), 'Q', 0, async (n) => void progress.push(n))
+    expect(progress).toEqual([250, 500, 600])
+    expect(upserts().map((c) => (c.args[0] as unknown[]).length)).toEqual([250, 250, 100])
+
+    state.calls = []
+    await addBets(entries(600), 'Q', 500, async (n) => void progress.push(n))
+    const sent = upserts().map((c) => (c.args[0] as { id: string }[]).map((r) => r.id))
+    expect(sent).toEqual([entries(600).slice(500).map((e) => e.id)])
+  })
+
+  it('stops at a failed chunk, having reported only the ones before it', async () => {
+    state.queued = [
+      { data: null, error: null, count: 250 },
+      { data: null, error: { message: 'TypeError: Failed to fetch' }, count: null }
+    ]
+    const progress: number[] = []
+    await expect(addBets(entries(600), 'Q', 0, async (n) => void progress.push(n))).rejects.toThrow(/Failed to fetch/)
+    expect(progress).toEqual([250])
+  })
+
+  it('stops between chunks once another account has signed in, having reported the ones before', async () => {
+    state.result = { data: null, error: null, count: 250 }
+    const done: number[] = []
+    const progress = async (n: number): Promise<void> => {
+      done.push(n)
+      state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    }
+    await expect(addBets(entries(600), 'Q', 0, progress, 'user-1')).rejects.toBeInstanceOf(SignedOutError)
+    expect(done).toEqual([250])
+    expect(upserts()).toHaveLength(1)
+  })
+
+  it('sends an import with its progress through sendOp', async () => {
+    state.result = { data: null, error: null, count: 250 }
+    const op: PendingOp = { opId: 'imp', kind: 'bulk-add', entries: entries(300), queuedAt: 'Q', done: 250, sent: true }
+    await sendOp(op, async () => {})
+    expect(upserts().map((c) => (c.args[0] as unknown[]).length)).toEqual([50])
+  })
+})
+
+describe('addBet — an add sent again', () => {
+  it('when the read-back of a duplicate fails, fails the same way, to try again later', async () => {
+    state.queued = [
+      { data: null, error: { message: 'duplicate key value violates unique constraint "entries_pkey"', code: '23505' }, count: null },
+      { data: null, error: { message: 'TypeError: Failed to fetch' }, count: null }
+    ]
+    const err = await addBet({ date: '2026-03-01', amount: 5 }, 'a', 'Q').catch((e: unknown) => e)
+    expect(classifySyncError(err)).toBe('offline')
   })
 })

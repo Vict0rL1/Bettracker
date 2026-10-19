@@ -40,3 +40,26 @@ test.describe('quick add', () => {
     await expect(page.locator('.history-card tbody tr').first().locator('.td-amt')).toHaveText('+$42.00')
   })
 })
+
+// The dev server's Network URL (plain http on the LAN, to try the app on a
+// phone) is not a secure context: the browser offers no crypto.randomUUID there.
+test('adding works where the browser offers no crypto.randomUUID', async ({ page }) => {
+  await page.addInitScript(() => {
+    delete (Crypto.prototype as { randomUUID?: unknown }).randomUUID
+  })
+  await boot(page, { backend: 'live', settings: { startingBankroll: 1000 }, moves: [] })
+  expect(await page.evaluate(() => typeof (crypto as { randomUUID?: unknown }).randomUUID)).toBe('undefined')
+
+  await page.click('.fab')
+  const sheet = page.locator('.quick-modal')
+  await sheet.locator('.field input').first().fill('20')
+  await sheet.locator('.seg-btn.loss').click()
+  await expect(page.locator('.toast')).toContainText('Added a bet')
+
+  await page.locator('.mini-bankroll').click()
+  const dialog = page.locator('.bank-modal')
+  await dialog.locator('.move-amount').fill('500')
+  await dialog.locator('.move-save').click()
+  await expect(page.locator('.toast')).toContainText('Added a deposit')
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+})

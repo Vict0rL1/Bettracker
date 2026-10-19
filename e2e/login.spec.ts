@@ -1,0 +1,92 @@
+import { expect, test, type Locator, type Page } from '@playwright/test'
+import { APP_URL } from './urls'
+
+// The production build (playwright.config.ts) without the harness: the real
+// supabase-js, signing in against https://example.supabase.co — which these
+// tests play with page.route, answering as Supabase does.
+type Answer = { status: number; body: object } | 'offline'
+
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': '*',
+  'access-control-allow-methods': '*'
+}
+
+async function signIn(page: Page, answer: Answer, lang: 'en' | 'es' = 'en'): Promise<Locator> {
+  await page.route('https://example.supabase.co/**', (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+    if (answer === 'offline') return route.abort('internetdisconnected')
+    return route.fulfill({ status: answer.status, headers: CORS, contentType: 'application/json', body: JSON.stringify(answer.body) })
+  })
+  if (lang === 'es') await page.addInitScript(() => localStorage.setItem('bettracker:lang', 'es'))
+  await page.goto('/')
+  const form = page.locator('.auth-card')
+  await form.locator('input[type=email]').fill('you@example.com')
+  await form.locator('input[type=password]').fill('hunter22')
+  await form.locator('.auth-submit').click()
+  return form.locator('.auth-error')
+}
+
+// What Supabase's API gateway answers for a key that isn't the project's.
+const INVALID_KEY = { status: 401, body: { message: 'Invalid API key', hint: 'Double check your Supabase `anon` or `service_role` API key.' } }
+
+test.describe('signing in, when Supabase says no', () => {
+  test('"Invalid API key" says which key to put in .env, instead of only repeating it', async ({ page }) => {
+    const error = await signIn(page, INVALID_KEY)
+    await expect(error).toContainText('Supabase rejected this app’s key (“Invalid API key”).')
+    await expect(error).toContainText('publishable key (sb_publishable_…) of the same project as the URL')
+  })
+
+  test('the same, in Spanish', async ({ page }) => {
+    const error = await signIn(page, INVALID_KEY, 'es')
+    await expect(error).toContainText('Supabase ha rechazado la clave de esta app («Invalid API key»).')
+  })
+
+  test('an expired confirmation link opens on the sign-in screen saying so, once', async ({ page }) => {
+    await page.goto('/#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired')
+    await expect(page.locator('.auth-card .auth-error')).toContainText('That email link has expired or was already used.')
+    expect(await page.evaluate(() => window.location.hash)).toBe('')
+    await page.reload()
+    await expect(page.locator('.auth-card')).toBeVisible()
+    await expect(page.locator('.auth-card .auth-error')).toHaveCount(0)
+  })
+
+  test('a wrong password, an unconfirmed email and no connection, in plain words', async ({ page }) => {
+    const answers: [Answer, string][] = [
+      [{ status: 400, body: { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' } }, 'Wrong email or password.'],
+      [{ status: 400, body: { code: 400, error_code: 'email_not_confirmed', msg: 'Email not confirmed' } }, 'Confirm your email first'],
+      ['offline', 'Couldn’t reach Supabase.']
+    ]
+    for (const [answer, words] of answers) {
+      await page.unrouteAll()
+      const error = await signIn(page, answer)
+      await expect(error).toContainText(words)
+    }
+  })
+})
+
+// Supabase sends the confirmation link to its Site URL (http://localhost:3000
+// on a new project) unless the sign-up names another address it allows.
+test('signing up asks for the confirmation link to come back to this address', async ({ page }) => {
+  let signup = ''
+  await page.route('https://example.supabase.co/**', (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+    signup = route.request().url()
+    // Confirmation on: a user, and no session until the link is opened.
+    return route.fulfill({
+      status: 200,
+      headers: CORS,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'u1', aud: 'authenticated', role: '', email: 'you@example.com', confirmation_sent_at: '2026-10-17T10:00:00Z' })
+    })
+  })
+  await page.goto('/')
+  const form = page.locator('.auth-card')
+  await form.locator('.auth-toggle').click()
+  await form.locator('input[type=email]').fill('you@example.com')
+  await form.locator('input[type=password]').fill('hunter22')
+  await form.locator('.auth-submit').click()
+  await expect(form.locator('.auth-notice')).toContainText('Account created. Check your email to confirm')
+  expect(new URL(signup).pathname).toBe('/auth/v1/signup')
+  expect(new URL(signup).searchParams.get('redirect_to')).toBe(APP_URL)
+})

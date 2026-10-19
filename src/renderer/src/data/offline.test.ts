@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, type BankrollMove, type Bet } from '../../../shared/types'
 import { bet } from '../test-utils'
 import {
+  afterSettingsAnswer,
   applyMoveOutbox,
   applyOutbox,
   clearUserData,
+  readOutbox,
   enqueueOp,
   headAsSent,
   insertStamp,
@@ -19,6 +21,14 @@ import {
   opSize,
   reconcile,
   reconcileMove,
+  editSettings,
+  landImport,
+  markHeadSent,
+  markSignedIn,
+  signedOutElsewhere,
+  requeueOp,
+  keepRefused,
+  requeueRefused,
   saveCache,
   saveMoveCache,
   saveMoveOutbox,
@@ -56,7 +66,14 @@ const bulk = (ids: string[]): PendingOp => ({
   queuedAt: '2026-02-01T10:00:00.000Z'
 })
 
-beforeEach(() => localStorage.clear())
+/** An import whose first `done` rows the server has confirmed. */
+const imported = (ids: string[], done: number) => ({ ...(bulk(ids) as Extract<PendingOp, { kind: 'bulk-add' }>), done })
+
+beforeEach(() => {
+  localStorage.clear()
+  // A test that signs a user out leaves them so for the module (see clearUserData).
+  for (const uid of ['u1', 'u2', 'u3']) markSignedIn(uid)
+})
 
 describe('hydrateBet', () => {
   it('fills in fields a cache from an older version never stored', () => {
@@ -128,12 +145,66 @@ describe('cache and outbox persistence', () => {
     expect(loadOutbox('u1')).toEqual([])
   })
 
+  // Failing to store a cache is fine (the server has it); failing to store a
+  // queue is not, and it used to be swallowed as if it had worked.
+  it('a cache that can’t be stored is let go; a queue that can’t be stored says so', () => {
+    const setItem = localStorage.setItem.bind(localStorage)
+    localStorage.setItem = () => {
+      throw Object.assign(new Error('The quota has been exceeded.'), { name: 'QuotaExceededError' })
+    }
+    try {
+      expect(() => saveCache('u1', [bet({})])).not.toThrow()
+      expect(() => saveOutbox('u1', [add('a')])).toThrow(/could not store/)
+      expect(() => saveMoveOutbox('u1', [])).toThrow(/could not store/)
+      expect(() => saveSettingsOutbox('u1', { patch: { unitSize: 25 }, editedAt: 'E' })).toThrow(/could not store/)
+    } finally {
+      localStorage.setItem = setItem
+    }
+  })
+
+  it('reads the queue exactly as stored for a change under its lock: the head is not marked sent', () => {
+    saveOutbox('u1', [add('a')])
+    expect(readOutbox('u1')[0].sent).toBeUndefined()
+    expect(loadOutbox('u1')[0].sent).toBe(true)
+  })
+
   it('wipes both on sign-out', () => {
     saveCache('u1', [bet({})])
     saveOutbox('u1', [add('a')])
     clearUserData('u1')
     expect(loadCache('u1')).toBeNull()
     expect(loadOutbox('u1')).toEqual([])
+  })
+
+  // A sync still out when the user signed out wrote their copy back once it
+  // ended: the data sign-out had just removed from the device.
+  it('stores nothing more of a user who signed out, until they sign in again', () => {
+    clearUserData('u3')
+    saveCache('u3', [bet({})])
+    saveOutbox('u3', [add('a')])
+    saveSettingsCache('u3', DEFAULT_SETTINGS)
+    saveSettingsOutbox('u3', { patch: { defaultStake: 10 }, editedAt: 'E' })
+    saveMoveCache('u3', [])
+    saveMoveOutbox('u3', [{ opId: 'm', kind: 'delete', id: 'x' }])
+    expect(loadCache('u3')).toBeNull()
+    expect(loadOutbox('u3')).toEqual([])
+    expect(loadSettingsCache('u3')).toBeNull()
+    expect(loadSettingsOutbox('u3')).toBeNull()
+    expect(loadMoveCache('u3')).toBeNull()
+    expect(loadMoveOutbox('u3')).toEqual([])
+    markSignedIn('u3')
+    saveCache('u3', [bet({})])
+    expect(loadCache('u3')).toHaveLength(1)
+  })
+
+  it('reads a sign-out in another window from the storage event that removed the last user', () => {
+    const user = JSON.stringify({ id: 'u2', email: 'a@b.c' })
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: null, oldValue: user })).toBe('u2')
+    // Another user signing in, another key, or something this app did not store: no sign-out.
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: user, oldValue: user })).toBeNull()
+    expect(signedOutElsewhere({ key: 'bettracker:outbox:u2', newValue: null, oldValue: user })).toBeNull()
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: null, oldValue: 'not json' })).toBeNull()
+    expect(signedOutElsewhere({ key: 'bettracker:last-user', newValue: null, oldValue: null })).toBeNull()
   })
 })
 
@@ -417,6 +488,105 @@ describe('enqueueOp', () => {
   })
 })
 
+// "Send again" queued the refused edit as a new one, and enqueueOp folded it
+// into the newer edit queued since: the older content, with its older time,
+// replaced the newer edit.
+describe('requeueOp: a refused change sent again', () => {
+  const T10 = '2026-01-02T10:00:00.000Z'
+  const T11 = '2026-01-02T11:00:00.000Z'
+
+  it('an edit with a newer edit of its bet queued adds nothing, even once that one went out', () => {
+    const newer = update('a', 99, T11)
+    expect(requeueOp([newer], update('a', 1, T10))).toEqual([newer])
+    const out = { ...newer, sent: true as const }
+    expect(requeueOp([out], update('a', 1, T10))).toEqual([out])
+  })
+
+  it('nor with the bet deleted since, or added again by an Undo since', () => {
+    expect(requeueOp([del('a')], update('a', 1, T10))).toEqual([del('a')])
+    const undo = { ...add('a'), queuedAt: T11 }
+    expect(requeueOp([undo], update('a', 1, T10))).toEqual([undo])
+  })
+
+  it('otherwise it is queued as a new change: folded into an older edit not yet sent, or after the rest', () => {
+    const older = update('a', 5, '2026-01-02T09:00:00.000Z')
+    expect(requeueOp([older], update('a', 1, T10))).toEqual([{ ...older, input: { date: '2026-01-01', amount: 1, stake: null }, editedAt: T10 }])
+    expect(requeueOp([update('b', 7, T11)], update('a', 1, T10)).map((o) => o.opId)).toEqual([update('b', 7, T11).opId, update('a', 1, T10).opId])
+    expect(requeueOp([], add('a'))).toEqual([add('a')])
+  })
+})
+
+describe('keepRefused: one entry per refused op', () => {
+  const T = '2026-01-01T10:00:00.000Z'
+
+  it('adds an entry, and writes the same op’s entry again rather than twice', () => {
+    const once = keepRefused([], [add('a')], 'refused', T)
+    expect(once).toEqual([{ ops: [add('a')], reason: 'refused', at: T }])
+    // Replayed (see store.ts), or written again with an edit folded in.
+    expect(keepRefused(once, [add('a')], 'refused', T)).toEqual(once)
+    expect(keepRefused(once, [add('a'), update('a', 5)], 'refused', T, true)).toEqual([{ ops: [add('a'), update('a', 5)], reason: 'refused', at: T }])
+  })
+
+  it('does not bring back, written again, an entry sent again or let go meanwhile', () => {
+    const other = keepRefused([], [add('b')], 'refused', T)
+    expect(keepRefused(other, [add('a'), update('a', 5)], 'refused', T, true)).toEqual(other)
+  })
+})
+
+describe('requeueRefused: refused changes sent again, each as it was queued', () => {
+  const fresh = (ops: PendingOp[]) => ops.map((o) => ({ ...o, opId: `again-${o.opId}` }))
+
+  it('an add with its delete behind it is nothing', () => {
+    expect(requeueRefused([update('b', 1)], [fresh([add('a'), del('a')])])).toEqual([update('b', 1)])
+  })
+
+  it('an add with an edit behind it goes as one add, with the edit', () => {
+    const out = requeueRefused([], [fresh([add('a', { amount: 10 }), update('a', 55)])])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'add', id: 'a', input: { amount: 55 } })
+  })
+
+  it('a refused edit still gives way to a newer edit queued since', () => {
+    const newer = update('a', 99, '2026-01-02T11:00:00.000Z')
+    expect(requeueRefused([newer], [fresh([update('a', 1, '2026-01-02T10:00:00.000Z')])])).toEqual([newer])
+  })
+})
+
+describe('markHeadSent: the head marked as gone out, decided once', () => {
+  it('marks the op that led the queue when it first ran, also when replayed on a queue led by another', () => {
+    const change = markHeadSent<PendingOp>()
+    expect(change([add('a'), add('b')]).map((o) => o.sent)).toEqual([true, undefined])
+    // Replayed later (storage full, see store.ts) on a queue whose head was sent since.
+    expect(change([add('b'), add('a')]).map((o) => [o.opId, o.sent])).toEqual([
+      ['op-b', undefined],
+      ['op-a', true]
+    ])
+  })
+})
+
+// A settings edit kept in a window whose storage was full, replayed later
+// over a newer edit of the same field stored by another window, undid it.
+describe('editSettings: field by field, the newer edit wins', () => {
+  it('merges an edit into what is pending, with the time of each field', () => {
+    expect(editSettings(null, { unitSize: 25 }, 'T1')).toEqual({ patch: { unitSize: 25 }, editedAt: 'T1', fieldEditedAt: { unitSize: 'T1' } })
+  })
+
+  it('an older edit does not undo a newer one of the same field, and still sets the others', () => {
+    const stored = { patch: { defaultStake: 20 }, editedAt: 'T2', fieldEditedAt: { defaultStake: 'T2' } }
+    expect(editSettings(stored, { defaultStake: 10, oddsFormat: 'decimal' }, 'T1')).toEqual({
+      patch: { defaultStake: 20, oddsFormat: 'decimal' },
+      editedAt: 'T2',
+      fieldEditedAt: { defaultStake: 'T2', oddsFormat: 'T1' }
+    })
+  })
+
+  it('a patch stored by an older version counts its fields as edited when it was', () => {
+    const legacy = { patch: { defaultStake: 20 }, editedAt: 'T2' }
+    expect(editSettings(legacy, { defaultStake: 10 }, 'T1').patch).toEqual({ defaultStake: 20 })
+    expect(editSettings(legacy, { defaultStake: 30 }, 'T3').patch).toEqual({ defaultStake: 30 })
+  })
+})
+
 describe('opSize', () => {
   it('counts rows, not ops', () => {
     expect(opSize(add('a'))).toBe(1)
@@ -450,6 +620,16 @@ describe('reconcile', () => {
   it('does not duplicate rows when an import is replayed', () => {
     const first = reconcile([], bulk(['x']), null)
     expect(reconcile(first, bulk(['x']), null)).toHaveLength(1)
+  })
+
+  // A row an earlier attempt stored may have been edited on another device
+  // since: the server kept that (the retry inserts only missing rows), and so
+  // does the device.
+  it('keeps a row the server already had when an import is replayed, as the server has it', () => {
+    const edited = bet({ id: 'x', note: 'edited elsewhere', updatedAt: 'T9' })
+    const rows = reconcile([edited], bulk(['x', 'y']), null)
+    expect(rows.find((b) => b.id === 'x')).toEqual(edited)
+    expect(rows.map((b) => b.id).sort()).toEqual(['x', 'y'])
   })
 })
 
@@ -582,3 +762,61 @@ describe('deposits and withdrawals', () => {
     })
   })
 })
+
+describe('applyOutbox — an import that partly landed', () => {
+  it('shows a row the server already has as the server has it, and the rest from the import', () => {
+    const edited = bet({ id: 'x', note: 'edited elsewhere', updatedAt: 'T9' })
+    const view = applyOutbox([edited], [bulk(['x', 'y'])])
+    expect(view.find((b) => b.id === 'x')).toEqual(edited)
+    expect(view.map((b) => b.id).sort()).toEqual(['x', 'y'])
+  })
+
+  // A confirmed row the server no longer has was deleted on another device:
+  // the import showed it again.
+  it('shows nothing of the rows the server confirmed: those are the server’s', () => {
+    const view = applyOutbox([bet({ id: 'y' })], [imported(['x', 'y', 'z'], 2)])
+    expect(view.map((b) => b.id).sort()).toEqual(['y', 'z'])
+  })
+})
+
+describe('landImport: rows the server confirmed, into its copy', () => {
+  it('adds the confirmed rows it lacks, and leaves the rows it has as they are', () => {
+    const edited = bet({ id: 'x', note: 'edited elsewhere' })
+    const rows = landImport([edited], imported(['x', 'y', 'z'], 0), 0, 2)
+    expect(rows.map((b) => b.id).sort()).toEqual(['x', 'y'])
+    expect(rows.find((b) => b.id === 'x')).toEqual(edited)
+  })
+
+  it('on the answer, adds only what this attempt sent: an earlier attempt’s rows are the server’s already', () => {
+    expect(reconcile([], imported(['x', 'y', 'z'], 2), null).map((b) => b.id)).toEqual(['z'])
+  })
+})
+
+describe('settings: what an answer leaves pending', () => {
+  const sent = { patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E1' }
+
+  it('nothing, when nothing was edited while it was out', () => {
+    expect(afterSettingsAnswer(sent, sent)).toBeNull()
+    expect(afterSettingsAnswer({ ...sent }, sent)).toBeNull()
+    expect(afterSettingsAnswer(null, sent)).toBeNull()
+  })
+
+  it('the fields edited since, with the newest edit time', () => {
+    expect(afterSettingsAnswer({ patch: { unitSize: 25, lossLimit: 200, oddsFormat: 'decimal' }, editedAt: 'E2' }, sent)).toEqual({
+      patch: { lossLimit: 200, oddsFormat: 'decimal' },
+      editedAt: 'E2'
+    })
+  })
+
+  it('a field set to null since is an edit too', () => {
+    expect(afterSettingsAnswer({ patch: { unitSize: null, lossLimit: 100 }, editedAt: 'E2' }, sent)).toEqual({ patch: { unitSize: null }, editedAt: 'E2' })
+  })
+
+  // Set back to the value that went while it was out, and that answer lost
+  // to a newer edit elsewhere: the newest edit of all was dropped.
+  it('a field set again since, even to the value that went, stays', () => {
+    const current = { patch: { unitSize: 25, lossLimit: 100 }, editedAt: 'E3', fieldEditedAt: { unitSize: 'E3', lossLimit: 'E1' } }
+    expect(afterSettingsAnswer(current, sent)).toEqual({ patch: { unitSize: 25 }, editedAt: 'E3', fieldEditedAt: { unitSize: 'E3' } })
+  })
+})
+
