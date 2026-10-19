@@ -22,9 +22,11 @@ import { removeDurable, writeDurable, writeExpendable } from './store'
 /**
  * `sent` marks an op whose request has gone out at least once. Whether that
  * request failed or not, it may have reached the server, so the op is never
- * rewritten or cancelled from then on (see enqueueOp).
+ * rewritten or cancelled from then on (see enqueueOp). `sentBy` names the
+ * attempt that marked it, so that attempt alone takes the mark back (see
+ * drainOutbox); a version from before has none.
  */
-export type PendingOp<I = BetInput> =
+export type PendingOp<I = BetInput> = (
   /** `editedAt`, when present, is the last edit folded into a not-yet-sent add. */
   | { opId: string; kind: 'add'; id: string; input: I; queuedAt: string; editedAt?: string; sent?: true }
   /**
@@ -41,6 +43,7 @@ export type PendingOp<I = BetInput> =
    * after an interruption sends only the rest (see addBets).
    */
   | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; done?: number; sent?: true }
+) & { sentBy?: string }
 
 /**
  * A queued deposit or withdrawal: the same op shapes and rules as bets. Only
@@ -181,6 +184,19 @@ export function readOutbox(userId: string, loadedAt: string = new Date().toISOSt
 export const headAsSent = <T extends { sent?: true }>(ops: readonly T[]): T[] =>
   ops.map((op, i) => (i === 0 && !op.sent ? { ...op, sent: true as const } : op))
 
+/**
+ * headAsSent as a change of the stored queue: the head is decided the first
+ * time it runs, so replayed later (see store.ts) it marks that same op, not
+ * whichever leads the queue by then.
+ */
+export function markHeadSent<T extends { opId: string; sent?: true }>(): (ops: T[]) => T[] {
+  let head: string | null = null
+  return (ops) => {
+    head ??= ops[0]?.opId ?? ''
+    return ops.map((op) => (op.opId === head && !op.sent ? { ...op, sent: true as const } : op))
+  }
+}
+
 const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
   status === 'pending' ? amount === null : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 : amount === 0)
 
@@ -229,6 +245,24 @@ export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): v
   forUser(userId, () => (p === null ? removeDurable(settingsOutboxKey(userId)) : writeDurable(settingsOutboxKey(userId), p)))
 
 /**
+ * A settings edit made at `editedAt`, merged into what is pending, field by
+ * field: the newer edit of a field wins. Replayed later on a patch another
+ * window stored since (see store.ts), an older edit made here does not undo
+ * a newer one made there. A patch stored by an older version has no times
+ * per field: its fields count as edited when the patch was.
+ */
+export function editSettings(current: PendingSettings | null, patch: SettingsPatch, editedAt: string): PendingSettings {
+  const times = current?.fieldEditedAt as Record<string, string | undefined> | undefined
+  const at = (k: string): string => (times ? (times[k] ?? '') : current && k in current.patch ? current.editedAt : '')
+  const fresh = Object.entries(patch).filter(([k]) => at(k) <= editedAt)
+  return {
+    patch: { ...(current?.patch ?? {}), ...Object.fromEntries(fresh) },
+    editedAt: current && current.editedAt > editedAt ? current.editedAt : editedAt,
+    fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...Object.fromEntries(fresh.map(([k]) => [k, editedAt])) }
+  }
+}
+
+/**
  * What is left pending once `sent` has had its answer — saved, refused, or
  * beaten by a newer edit from another device: the edits made since it went
  * out. A field still at the value that went has had its answer and goes; a
@@ -260,6 +294,17 @@ export interface Refused<I = BetInput> {
   ops: PendingOp<I>[]
   reason: string
   at: string
+}
+/**
+ * The refused list with `ops` kept apart: one entry per refused op (the
+ * first). `revised` (they changed before they left the queue, see
+ * drainOutbox): its entry is written again, if it is still there; one sent
+ * again or let go meanwhile does not come back.
+ */
+export function keepRefused<I>(list: readonly Refused<I>[], ops: PendingOp<I>[], reason: string, at: string, revised = false): Refused<I>[] {
+  const first = ops[0]?.opId
+  if (list.some((x) => x.ops[0]?.opId === first)) return list.map((x) => (x.ops[0]?.opId === first ? { ...x, ops } : x))
+  return revised ? [...list] : [...list, { ops, reason, at }]
 }
 export const loadRefused = (userId: string): Refused[] => readJson<Refused[]>(refusedKey(userId)) ?? []
 export const saveRefused = (userId: string, list: readonly Refused[]): void =>

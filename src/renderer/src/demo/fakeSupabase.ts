@@ -50,7 +50,11 @@ export interface FakeSupabaseConfig {
  *                    reads of that table fail with that status (a 503);
  *  - `e2e:hold`      set: every write waits on the wire, unanswered, until
  *                    it is cleared, so a test acts while one is out for as
- *                    long as it needs, whatever the machine's speed.
+ *                    long as it needs, whatever the machine's speed;
+ *  - `e2e:hold-reads`  a table: each read of it is answered at once, as the
+ *                    database is then, but handed over only once this is
+ *                    cleared, after whatever writes land meanwhile (a read
+ *                    that comes back late); `e2e:reads-held` counts them.
  * A row written without `updated_at` gets the time it was answered, as the
  * server's now() would. Answers carry the HTTP status PostgREST would give.
  *
@@ -100,6 +104,14 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   const held = (q: { action: string }): Promise<void> =>
     new Promise((resolve) => {
       const check = (): void => void (q.action === 'select' || !flag('hold') ? resolve() : setTimeout(check, 20))
+      check()
+    })
+  /** A read of the table `hold-reads` names, already answered, is handed over once that is cleared. */
+  const late = (q: { action: string; table: string }, out: Answer): Promise<Answer> =>
+    new Promise((resolve) => {
+      const holding = (): boolean => q.action === 'select' && localStorage.getItem(key('hold-reads')) === q.table
+      if (holding()) localStorage.setItem(key('reads-held'), String(Number(localStorage.getItem(key('reads-held')) || 0) + 1))
+      const check = (): void => void (holding() ? setTimeout(check, 20) : resolve(out))
       check()
     })
   const down = (): boolean => flag('down') || (cfg.demo && typeof navigator !== 'undefined' && navigator.onLine === false)
@@ -266,6 +278,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
         return new Promise((r) => setTimeout(r, latency()))
           .then(() => held(q))
           .then(() => answer(q))
+          .then((out) => late(q, out))
           .then(resolve, reject)
       }
     }

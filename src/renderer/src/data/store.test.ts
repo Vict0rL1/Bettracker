@@ -262,3 +262,71 @@ describe('queueStore across processes: the next holder reads the last write', ()
     }
   })
 })
+
+/** An IndexedDB whose open answers after `openMs`, holding the versions in `map`. */
+function slowIndexedDB(openMs: number) {
+  const map = new Map<string, number>()
+  const later = <T>(fn: () => T) => {
+    const req: { result?: T; onsuccess?: () => void; onerror?: () => void } = {}
+    setTimeout(() => {
+      req.result = fn()
+      req.onsuccess?.()
+    }, 0)
+    return req
+  }
+  const db = {
+    onclose: null,
+    onversionchange: null,
+    close: () => {},
+    createObjectStore: () => ({}),
+    transaction: () => {
+      const tx: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; objectStore: () => unknown } = {
+        objectStore: () => ({
+          get: (k: string) => later(() => map.get(k)),
+          put: (v: number, k: string) => {
+            map.set(k, v)
+            setTimeout(() => tx.oncomplete?.(), 0)
+            return {}
+          }
+        })
+      }
+      return tx
+    }
+  }
+  const open = () => {
+    const req: { result?: unknown; onsuccess?: () => void; onupgradeneeded?: () => void; onerror?: () => void; onblocked?: () => void } = {}
+    setTimeout(() => {
+      req.result = db
+      req.onupgradeneeded?.()
+      req.onsuccess?.()
+    }, openMs)
+    return req
+  }
+  return { map, api: { open } }
+}
+
+describe('IndexedDB that is slow to open', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  // An open that answered after the wait for it left the page without
+  // versions for good: its writes went unfenced both ways.
+  it('is used from the moment it opens, even after the wait for it ran out', async () => {
+    vi.useFakeTimers()
+    const idb = slowIndexedDB(3500)
+    vi.stubGlobal('indexedDB', idb.api)
+    vi.resetModules()
+    const fresh = await import('./store')
+    const q = fresh.queueStore<string[]>({ lock: 'slow-lock', load: () => JSON.parse(localStorage.getItem('q') ?? '[]') as string[], save: (v) => fresh.writeDurable('q', v) })
+    const first = q.update((x) => [...x, 'a'])
+    await vi.advanceTimersByTimeAsync(4000)
+    expect((await first).saved).toBe(true)
+    expect(idb.map.get('slow-lock')).toBeUndefined()
+    const second = q.update((x) => [...x, 'b'])
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await second).saved).toBe(true)
+    expect(idb.map.get('slow-lock')).toBeGreaterThan(0)
+  })
+})

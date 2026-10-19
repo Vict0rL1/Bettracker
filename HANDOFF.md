@@ -138,10 +138,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 603 tests unitarios (vitest)
+npm test            # 620 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 117 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 124 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -351,7 +351,12 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      Cada lote confirmado pasa a la copia del servidor en ese momento
      (`landImport`) y la importación solo muestra las filas sin confirmar:
      una fila que llegó y se borró en otro dispositivo no vuelve. Solo puede
-     volver una del lote que estaba en vuelo cuando se cortó.
+     volver una del lote que estaba en vuelo cuando se cortó. Las lecturas no
+     esperan al envío (y una lista larga se lee por páginas): una que salió
+     antes de que llegara un lote, una alta, una edición o un borrado vuelve
+     con eso puesto encima (`confirmedLog`), en apuestas y en movimientos.
+     Si no, las filas del lote desaparecían y una apuesta borrada volvía
+     hasta la siguiente lectura.
   2. *Varias pestañas se pisaban la cola.* Cada una escribía la cola que
      leyó al arrancar. Ahora la cola guardada es la verdad: cada cambio es
      leer-modificar-escribir bajo un candado entre ventanas (Web Locks,
@@ -373,10 +378,12 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      Sin IndexedDB lee enseguida, como antes. El drenado lee la cola igual
      (`fresh()`). Test: `e2e/resilience.spec.ts`, tres ventanas con el
      `store.ts` real (servidor de desarrollo).
-     Una petición sin respuesta se abandona a los 30 s
-     (`lib/timeoutFetch.ts`, en `global.fetch` del cliente) y cuenta como
-     sin conexión: si no, una ventana colgada se quedaba el candado de
-     vaciado y ninguna otra sincronizaba.
+     Una petición sin respuesta completa (cuerpo incluido) se abandona a los
+     30 s (`lib/timeoutFetch.ts`, en `global.fetch` del cliente) y cuenta
+     como sin conexión: si no, una ventana colgada se quedaba el candado de
+     vaciado y ninguna otra sincronizaba. Si IndexedDB tarda más de 3 s en
+     abrirse, la ventana sigue sin versiones mientras tanto y las usa desde
+     que abre.
   3. *Un fallo al guardar se daba por guardado.* La caché se puede perder
      (`writeExpendable`); la cola no (`writeDurable`): si no cabe, se tiran
      las cachés y se reintenta, y si aun así falla la cola se queda en la
@@ -386,7 +393,12 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      es la lista de cambios hechos en la ventana, que se reaplican sobre la
      cola guardada en cada intento: lo que otras guardaron se queda y lo que
      esta quitó (una operación enviada, una apuesta borrada) no vuelve. Por
-     eso cada cambio busca por id y decide una sola vez qué quita.
+     eso cada cambio busca por id y decide una sola vez qué quita: la marca
+     `sent` lleva el intento que la puso (`sentBy`, opcional) y solo ese
+     intento la quita, el progreso de una importación no retrocede, la
+     cabeza que se marca al arrancar se decide una vez (`markHeadSent`) y
+     los ajustes se combinan campo a campo por hora (`editSettings`).
+     "Volver a enviar" solo quita de la lista lo que la cola guardó.
   4. *Errores temporales tiraban la cola.* `describeError` guarda status y
      código (`SyncError`). 5xx, 408, 429 y códigos PGRST000–003, 08…, 40001,
      40P01, 53…, 57P01–03, 57014 → `'retry'` con espera creciente (1 s, 2 s…
@@ -394,17 +406,24 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
      `'paused'`; solo un rechazo definitivo saca el cambio, a la lista de
      rechazadas (`bettracker:refused:<usuario>`, `moves-refused`), visible
      tras recargar, con "Volver a enviar" y "Descartar". Un alta rechazada
-     en su primer intento se lleva lo que se encoló detrás para su apuesta
+     (no como duplicada: una que llegó responde así y se lee de vuelta), en
+     el intento que sea, se lleva lo que se encoló detrás para su apuesta
      (ediciones y borrado, hasta un Deshacer que la crea de nuevo), y entra
-     en la lista antes de salir de la cola. "Volver a enviar" encola primero
+     en la lista antes de salir de la cola; lo que se pliega en ellas o se
+     encola para la apuesta mientras tanto sale con ellas, y la entrada se
+     reescribe. "Volver a enviar" encola primero
      y luego quita de la lista; cada entrada se pliega antes
      (`requeueRefused`: un alta y su borrado no son nada) y una edición
      rechazada no pisa una más nueva de la misma apuesta, ni su borrado
      (`requeueOp`). "Cerrar sesión" cuenta también las rechazadas antes de
      borrarlas. Cada parada limpia los motivos de la anterior en la
-     insignia, y los ajustes pendientes también salen en ella. Una primera
+     insignia (solo el estado: cada aviso se dice una vez por episodio), y
+     los ajustes pendientes también salen en ella; una lectura que funciona
+     no da por enviado un ajuste que sigue fallando. Una primera
      lectura fallida se repite con el temporizador (`retryPlan`), como en
-     movimientos y ajustes. Sesión terminada → insignia "Sesión cerrada",
+     movimientos y ajustes; lo confirmado antes de esa primera lectura se
+     muestra aparte (`foldApplied`), sin contar como leído ni guardarse en
+     caché como la lista entera. Sesión terminada → insignia "Sesión cerrada",
      "Volver a entrar" sin borrar la cola, y el aviso de cada cambio dice
      que se sincronizará al volver a entrar.
      Cada lectura y cada envío dicen para qué cuenta son
@@ -617,10 +636,10 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       117 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       124 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
-                                    importación cortada, paginación, ajustes en vuelo)
+                                    importación cortada, lecturas tardías, paginación, ajustes en vuelo)
 e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
 supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real

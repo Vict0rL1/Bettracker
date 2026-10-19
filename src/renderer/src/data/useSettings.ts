@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_SETTINGS, type Settings, type SettingsPatch } from '../../../shared/types'
 import {
   afterSettingsAnswer,
+  editSettings,
   loadSettingsCache,
   loadSettingsOutbox,
   queueKeys,
@@ -150,7 +151,9 @@ export function useSettings(
     try {
       const row = await getSettings(userId)
       if (userRef.current !== userId) return
-      reached()
+      // The table is there. Whatever stops the writes is theirs to clear.
+      noticeRef.current.clear()
+      setBlocked(false)
       setServer(row ?? { ...DEFAULT_SETTINGS })
     } catch (err) {
       if (userRef.current !== userId) return
@@ -158,7 +161,7 @@ export function useSettings(
       const failure = classifySyncError(err)
       if (failure !== 'retry' && failure !== 'paused') report(err)
     }
-  }, [userId, setServer, report, reached])
+  }, [userId, setServer, report, setBlocked])
 
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
@@ -285,13 +288,8 @@ export function useSettings(
       setStoring((xs) => [...xs, patch])
       try {
         // Merged into what is pending now, other windows' edits included,
-        // with the time of each field's edit (see afterSettingsAnswer).
-        const times = Object.fromEntries(Object.keys(patch).map((k) => [k, editedAt]))
-        const saved = await change((current) => ({
-          patch: { ...(current?.patch ?? {}), ...patch },
-          editedAt,
-          fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...times }
-        }))
+        // field by field by edit time (see editSettings).
+        const saved = await change((current) => editSettings(current, patch, editedAt))
         setTimeout(() => void syncNowRef.current(), 0)
         return saved
       } finally {

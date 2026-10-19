@@ -42,6 +42,32 @@ const writesStarted = (page: Page): Promise<number> => page.evaluate(() => Numbe
 const queuedBets = (page: Page): Promise<number> =>
   page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:outbox:${uid}`) ?? '[]') as unknown[]).length, USER.id)
 
+/** Every read of the bets is answered at once but handed over only when let go (null), as a read that comes back late. */
+const holdReads = (page: Page, table: string | null): Promise<void> =>
+  page.evaluate((t) => (t ? localStorage.setItem('e2e:hold-reads', t) : localStorage.removeItem('e2e:hold-reads')), table)
+const readsHeld = (page: Page): Promise<number> => page.evaluate(() => Number(localStorage.getItem('e2e:reads-held') || 0))
+
+/** Every text `selector` shows from now on, in order ('' while it is not there). */
+async function watchText(page: Page, selector: string): Promise<() => Promise<string[]>> {
+  const name = `__watch${Math.random().toString(36).slice(2)}`
+  await page.evaluate(
+    ({ selector, name }) => {
+      const seen: string[] = []
+      ;(window as unknown as Record<string, string[]>)[name] = seen
+      let last: string | null = null
+      const look = (): void => {
+        const now = document.querySelector(selector)?.textContent?.trim() ?? ''
+        if (now !== last) seen.push(now)
+        last = now
+      }
+      look()
+      new MutationObserver(look).observe(document.body, { childList: true, subtree: true, characterData: true })
+    },
+    { selector, name }
+  )
+  return () => page.evaluate((name) => [...(window as unknown as Record<string, string[]>)[name]], name)
+}
+
 test.describe('several windows of the app', () => {
   // Each window wrote back the queue it had read at startup: the last write
   // wiped what the other had queued, and closing that one lost it for good.
@@ -378,6 +404,70 @@ test.describe('a server that fails', () => {
     await expect(bet).toHaveCount(0)
   })
 
+  // Only an add refused on its first try took what was queued for its bet
+  // with it. One logged offline has been tried already (it went out, and
+  // failed): its delete went out as a no-op, the refused entry held the add
+  // alone, and "Send again" made the bet the user had deleted.
+  test('sending again an add refused after an attempt made offline leaves the bet deleted', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await setDown(page, true)
+    await logLoss(page, '13')
+    await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
+    const sent = () => page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:outbox:${uid}`) ?? '[]') as { sent?: boolean }[])[0]?.sent, USER.id)
+    await expect.poll(sent).toBe(true)
+    const bet = page.locator('.history-card tbody tr', { hasText: '-$13.00' })
+    await bet.locator('.btn-icon.danger').click()
+    await bet.locator('.btn-icon.danger').click()
+    await expect(bet).toHaveCount(0)
+    await expect.poll(() => queuedBets(page)).toBe(2)
+
+    await failNext(page, { status: 400, message: 'violates check constraint', code: '23514', times: 1 })
+    await setDown(page, false)
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect(page.locator('.refused-notice')).toBeVisible()
+    await expect.poll(() => queuedBets(page)).toBe(0)
+
+    await page.locator('.refused-notice .notice-retry').click()
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+    // Whatever "Send again" queued has gone.
+    await expect.poll(() => queuedBets(page)).toBe(0)
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect((await serverRows(page)).filter((r) => r.stake === 13)).toHaveLength(0)
+    await expect(bet).toHaveCount(0)
+  })
+
+  // The same with an edit: it went out for a bet that was never made, came
+  // back as a false "newer edit from another device", and "Send again" made
+  // the bet as it was before the edit.
+  test('sending again an add refused after an attempt made offline makes the bet as it was last edited', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await setDown(page, true)
+    await logLoss(page, '14')
+    await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
+    const row = page.locator('.history-card tbody tr', { hasText: '-$14.00' })
+    await row.locator('.td-actions .btn-icon').first().click()
+    const modal = page.locator('.day-modal')
+    await modal.locator('.bet-item', { hasText: '14' }).locator('.btn-icon').first().click()
+    await modal.locator('.bet-form .field-wide input').fill('edited while offline')
+    await modal.locator('.bet-form .bet-add').click()
+    await page.keyboard.press('Escape')
+    await expect(modal).toHaveCount(0)
+    await expect.poll(() => queuedBets(page)).toBe(2)
+
+    const toasts = await watchText(page, '.toast')
+    await failNext(page, { status: 400, message: 'violates check constraint', code: '23514', times: 1 })
+    await setDown(page, false)
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect(page.locator('.refused-notice')).toBeVisible()
+    await expect.poll(() => queuedBets(page)).toBe(0)
+
+    await page.locator('.refused-notice .notice-retry').click()
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+    await expect.poll(async () => (await serverRows(page)).filter((r) => r.stake === 14).map((r) => r.note)).toEqual(['edited while offline'])
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect((await toasts()).filter((t) => t.includes('A newer edit from another device'))).toEqual([])
+  })
+
   // Signing out cleared the refused changes with one click: the count that
   // makes it ask first left them out.
   test('signing out asks first while a refused change waits, and keeps it until then', async ({ page }) => {
@@ -412,6 +502,50 @@ test.describe('a server that fails', () => {
     await failNext(page, { status: 503, message: 'Service Unavailable', times: 50 })
     await page.evaluate(() => window.dispatchEvent(new Event('online')))
     await expect(page.locator('.sync-badge')).toHaveText('Retrying · 1 queued')
+  })
+
+  // A stop cleared the other stops' notices with their flags: one 503
+  // between two refusals for a missing migration showed its hint again.
+  test('the migration hint shows once, with a passing failure between two refusals', async ({ page }) => {
+    await boot(page, { backend: 'behind' })
+    await logLoss(page, '21')
+    await expect(page.locator('.sync-badge')).toHaveText('Update needed · 1 queued')
+    await expect(page.locator('.toast')).toContainText('Your database is behind the app')
+    const toasts = await watchText(page, '.toast')
+    await failNext(page, { status: 503, message: 'Service Unavailable', times: 1 })
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect(page.locator('.sync-badge')).toHaveText('Retrying · 1 queued')
+    // Tried again after its wait, and refused for the migration again.
+    await expect(page.locator('.sync-badge')).toHaveText('Update needed · 1 queued', { timeout: 10_000 })
+    // What showed after the hint that was up.
+    const shown = (await toasts()).slice(1).filter((t) => t !== '')
+    expect(shown.filter((t) => t.includes('Your database is behind the app'))).toEqual([])
+    expect(shown.filter((t) => t.includes('Supabase had a problem'))).toHaveLength(1)
+  })
+
+  // A read that went through (back to the app) ended the save's failure: the
+  // badge said "Syncing…" though nothing had gone, and the next failed try
+  // said so again.
+  test('back in the app, a settings save that keeps failing for now still shows "Retrying", said once', async ({ page }) => {
+    test.setTimeout(60_000)
+    await boot(page, { backend: 'live', settings: { oddsFormat: 'american' } })
+    await failNext(page, { status: 503, message: 'Service Unavailable', times: 500 })
+    await page.click('.settings-btn')
+    await page.locator('.settings-modal .settings-seg .seg-btn', { hasText: 'Decimal' }).click()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.sync-badge')).toHaveText('Retrying')
+    await expect(page.locator('.toast')).toContainText('Supabase had a problem')
+    // Once its toast is gone, a toast that comes again shows.
+    await expect(page.locator('.toast')).toHaveCount(0, { timeout: 10_000 })
+    const badge = await watchText(page, '.sync-badge')
+    const toasts = await watchText(page, '.toast')
+    const tried = await writesStarted(page)
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    // Tried again on its timer, and failed again.
+    await expect.poll(() => writesStarted(page), { timeout: 20_000 }).toBeGreaterThan(tried)
+    await expect(page.locator('.sync-badge')).toHaveText('Retrying')
+    expect(await badge()).toEqual(['Retrying'])
+    expect((await toasts()).filter((t) => t !== '')).toEqual([])
   })
 
   test('a refused change let go is gone, and nothing else is', async ({ page }) => {
@@ -480,6 +614,61 @@ test.describe('an import cut halfway', () => {
     await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
     await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
     await expect(page.locator('.sync-badge')).toHaveText('Offline · 50 queued', { timeout: 15_000 })
+  })
+})
+
+test.describe('a read that comes back after a change landed', () => {
+  // Reads do not wait for the sync: one answered before an import's chunk
+  // landed, and handed over after, replaced the copy without the chunk, and
+  // the import no longer showed its rows either. 250 of them were gone from
+  // the list until the next read.
+  test('does not hide the rows of an import chunk that landed meanwhile', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await expect(page.getByText('3 bets over')).toBeVisible()
+    const csv = ['date,amount,stake,note', ...Array.from({ length: 300 }, (_, i) => `2026-07-01,${i + 1}.00,10.00,row ${i}`)].join('\n')
+    // The first chunk goes out and waits; after it, the connection drops for writes.
+    await hold(page, true)
+    await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
+    await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+    await expect.poll(() => writesStarted(page)).toBe(1)
+    await expect(page.getByText('303 bets over')).toBeVisible()
+    // Back to the app: the bets are read again, answered now, before the chunk lands.
+    await holdReads(page, 'entries')
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    await expect.poll(() => readsHeld(page)).toBe(1)
+    await hold(page, false)
+    await expect(page.locator('.sync-badge')).toHaveText('Offline · 50 queued', { timeout: 15_000 })
+
+    // The read comes back (a read that went through: no longer offline).
+    await holdReads(page, null)
+    await expect(page.locator('.sync-badge')).not.toHaveText(/Offline/)
+    await expect(page.getByText('303 bets over')).toBeVisible()
+    expect(await page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:cache:${uid}`) ?? '[]') as unknown[]).length, USER.id)).toBe(253)
+  })
+
+  // The same with a delete: the bet came back until the next read.
+  test('does not bring back a bet whose delete landed meanwhile', async ({ page }) => {
+    await boot(page, { backend: 'live' })
+    await hold(page, true)
+    const bet = page.locator('.history-card tbody tr', { hasText: '-$50.00' })
+    await bet.locator('.btn-icon.danger').click()
+    await bet.locator('.btn-icon.danger').click()
+    await expect(bet).toHaveCount(0)
+    await expect.poll(() => writesStarted(page)).toBe(1)
+    // A bet logged behind it does not get through: the connection drops after the delete.
+    await logLoss(page, '12')
+    await expect.poll(() => queuedBets(page)).toBe(2)
+    await holdReads(page, 'entries')
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    await expect.poll(() => readsHeld(page)).toBe(1)
+    await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
+    await hold(page, false)
+    await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued', { timeout: 15_000 })
+    expect((await serverRows(page)).filter((r) => r.amount === -50)).toHaveLength(0)
+
+    await holdReads(page, null)
+    await expect(page.locator('.sync-badge')).not.toHaveText(/Offline/)
+    await expect(bet).toHaveCount(0)
   })
 })
 
@@ -621,6 +810,32 @@ test.describe('a first read that fails', () => {
     await expect.poll(() => page.evaluate(() => localStorage.getItem('e2e:fail-reads'))).toBeNull()
     await expect(page.locator('.history-card')).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('.history-card tbody tr')).toHaveCount(3)
+  })
+})
+
+test.describe('an import that lands before the first read', () => {
+  // A device with no copy of the bets (its cache made room for the import)
+  // sent the import before its first read went through: the rows the server
+  // confirmed became the copy, cached and counted as read, and the bets were
+  // never read again. 5 of 8 showed for good.
+  test('the bets are still read once reads go through', async ({ page }) => {
+    test.setTimeout(90_000)
+    const entries = Array.from({ length: 5 }, (_, i) => ({ id: `imp-${i}`, input: { date: '2026-07-01', amount: i + 1, stake: 10, note: `row ${i}` } }))
+    await install(page.context(), { backend: 'live', outbox: [{ opId: 'op-imp', kind: 'bulk-add', entries, queuedAt: '2026-07-01T10:00:00.000Z' }] })
+    await page.context().addInitScript((uid) => {
+      if (sessionStorage.getItem('e2e:first-load')) return
+      sessionStorage.setItem('e2e:first-load', '1')
+      localStorage.removeItem(`bettracker:cache:${uid}`)
+      localStorage.setItem('e2e:fail-reads', JSON.stringify({ table: 'entries', status: 503, message: 'Service Unavailable', times: 2 }))
+    }, USER.id)
+    await page.goto('/')
+    await expect.poll(async () => (await serverRows(page)).length).toBe(3 + 5)
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('e2e:fail-reads'))).toBeNull()
+    // The rows the import landed show meanwhile, and are not cached as the whole list.
+    await expect(page.getByText('5 bets over')).toBeVisible()
+    expect(await page.evaluate((uid) => localStorage.getItem(`bettracker:cache:${uid}`), USER.id)).toBeNull()
+    // Reads go through again: the slow timer reads the bets.
+    await expect(page.getByText('8 bets over')).toBeVisible({ timeout: 45_000 })
   })
 })
 

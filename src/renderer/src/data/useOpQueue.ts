@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { drainOutbox, type DrainHooks, type DrainResult } from './drain'
-import { enqueueOp, headAsSent, requeueRefused, type PendingOp, type Refused } from './offline'
+import { enqueueOp, headAsSent, keepRefused, markHeadSent, requeueRefused, type PendingOp, type Refused } from './offline'
 import { queueStore, withLock } from './store'
 
 export interface OpQueueOptions<I> {
@@ -124,7 +124,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     outboxRef.current = boot
     setOutboxState(boot)
     setRefusedState(optsRef.current.readRefused(userId))
-    if (stored.length > 0 && !stored[0].sent) void stores.queue.update((q) => headAsSent(q)).then((r) => mirror(r.value))
+    if (stored.length > 0 && !stored[0].sent) void stores.queue.update(markHeadSent<PendingOp<I>>()).then((r) => mirror(r.value))
   }, [userId, stores, mirror])
 
   // Another window changed the queue, or the refused list.
@@ -167,11 +167,12 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
           update: async (fn) => (await update(fn)).value,
           send: hooks.send,
           applied: hooks.applied,
-          rejected: async (ops, err) => {
-            const entry: Refused<I> = { ops, reason: err instanceof Error ? err.message : String(err), at: new Date().toISOString() }
-            const r = await stores.refused.update((list) => [...list, entry])
+          rejected: async (ops, err, revised) => {
+            const reason = err instanceof Error ? err.message : String(err)
+            const at = new Date().toISOString()
+            const r = await stores.refused.update((list) => keepRefused(list, ops, reason, at, revised))
             showRefused(r.value)
-            if (userRef.current === userId) optsRef.current.onRefused(err)
+            if (!revised && userRef.current === userId) optsRef.current.onRefused(err)
           }
         })
       )
@@ -186,11 +187,13 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     // changes, with ids given once here (the queue change may be replayed,
     // see store.ts), never over what was queued since (see requeueRefused).
     const entries = await stores.refused.fresh()
-    const stories = entries.map((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined }) as PendingOp<I>))
+    const stories = entries.map((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined, sentBy: undefined }) as PendingOp<I>))
     const saved = stories.length === 0 || (await update((q) => requeueRefused<I>(q, stories))).saved
+    // Queued only in this window (storage full): they stay on the list too, until storage takes them.
+    if (!saved) return false
     const r = await stores.refused.update(without(entries))
     showRefused(r.value)
-    return saved
+    return true
   }, [stores, update, showRefused])
 
   const discardRefused = useCallback(async (): Promise<void> => {

@@ -3,7 +3,7 @@ import type { Bet, BetInput } from '../../../shared/types'
 import { newId } from '../lib/uuid'
 import { normalizeInput } from '../lib/validate'
 import { getBets, sendOp, subscribeToBets } from './bets'
-import { backoff, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
 import { applyOutbox, landImport, loadCache, loadRefused, opSize, queueKeys, readOutbox, reconcile, saveCache, saveOutbox, saveRefused, type PendingOp, type Refused } from './offline'
 import { useOpQueue } from './useOpQueue'
@@ -71,6 +71,10 @@ export function useBetSync(
   onNotice?: (code: 'conflict') => void
 ): BetSync {
   const [server, setServerState] = useState<Bet[] | null>(null)
+  // Rows the server confirmed before this device had any copy to fold them
+  // into (see foldApplied): shown until the first read, never cached.
+  const [landed, setLanded] = useState<Bet[]>([])
+  const landedRef = useRef<Bet[]>([])
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
   const [behind, setBehindState] = useState(false)
   const [paused, setPausedState] = useState(false)
@@ -79,6 +83,9 @@ export function useBetSync(
   // Refs are the source of truth inside the async sync loop; state mirrors
   // them for rendering.
   const serverRef = useRef<Bet[] | null>(null)
+  // Changes the server confirmed while a read was out, for that read to lay
+  // over what it got (see confirmedLog).
+  const confirmedRef = useRef(confirmedLog<Bet>())
   // The user whose sync is running, if any.
   const syncingRef = useRef<string | null>(null)
   // The user this render is for. A sync started for an earlier one (signed
@@ -149,12 +156,31 @@ export function useBetSync(
     setRetryingState(next)
   }, [])
 
+  // A row (or rows) the server got back: into the copy when there is one,
+  // else kept apart until the first read (see foldApplied).
+  const fold = useCallback(
+    (change: (rows: readonly Bet[]) => Bet[]) => {
+      if (userRef.current !== userId) return
+      confirmedRef.current.confirmed(change)
+      const next = foldApplied(serverRef.current, landedRef.current, change)
+      if (next.server !== null) setServer(next.server)
+      else {
+        landedRef.current = next.landed
+        setLanded(next.landed)
+      }
+    },
+    [userId, setServer]
+  )
+
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
+    const read = confirmedRef.current.read()
     try {
-      const rows = await getBets(userId)
+      const rows = read.over(await getBets(userId))
       if (userRef.current !== userId) return
       setServer(rows)
+      landedRef.current = []
+      setLanded([])
       setOffline(false)
     } catch (err) {
       if (userRef.current !== userId) return
@@ -163,6 +189,8 @@ export function useBetSync(
       const failure = classifySyncError(err)
       if (failure === 'offline') setOffline(true)
       else if (failure !== 'paused' && failure !== 'retry') onErrorRef.current(err)
+    } finally {
+      read.end()
     }
   }, [userId, setServer])
 
@@ -184,7 +212,8 @@ export function useBetSync(
           return sendOp(
             op,
             async (done) => {
-              setServer(landImport(serverRef.current ?? [], op, from, done))
+              const start = from
+              fold((rows) => landImport(rows, op, start, done))
               from = done
               await progress(done)
             },
@@ -198,7 +227,7 @@ export function useBetSync(
           // version that won. Unless a later change of this device for the
           // same bet is still queued: that one has the last word.
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
-          setServer(reconcile(serverRef.current ?? [], op, row))
+          fold((rows) => reconcile(rows, op, row))
           setOffline(false)
           setBehind(false)
           setPaused(false)
@@ -217,15 +246,17 @@ export function useBetSync(
     setOffline(false)
     // Each stop says what holds the queue back now: a reason from an earlier
     // stop would otherwise outrank it on the badge (see syncStatus).
+    // Only their state: their notices and the wait end with an op that goes
+    // through, or a queue that empties.
     if (result.stop === 'paused') {
-      setRetrying(false)
-      setBehind(false)
+      setRetryingState(false)
+      setBehindState(false)
       setPaused(true, result.error)
       return
     }
     if (result.stop === 'retry') {
-      setPaused(false)
-      setBehind(false)
+      setPausedState(false)
+      setBehindState(false)
       const wait = backoffRef.current.failed(result.error)
       setRetrying(true, result.error)
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
@@ -233,8 +264,8 @@ export function useBetSync(
       return
     }
     if (result.stop === 'behind') {
-      setPaused(false)
-      setRetrying(false)
+      setPausedState(false)
+      setRetryingState(false)
       setBehind(true, result.error)
       return
     }
@@ -243,7 +274,7 @@ export function useBetSync(
     setRetrying(false)
     // True-up after a drain so totals can never drift from the server.
     if (result.processed > 0 && outboxRef.current.length === 0) await refresh()
-  }, [userId, drain, outboxRef, setServer, setBehind, setPaused, setRetrying, refresh])
+  }, [userId, drain, outboxRef, fold, setBehind, setPaused, setRetrying, refresh])
   syncNowRef.current = syncNow
 
   // Boot: hydrate this user's cache synchronously for instant paint (the
@@ -251,6 +282,9 @@ export function useBetSync(
   useEffect(() => {
     serverRef.current = null
     setServerState(null)
+    landedRef.current = []
+    setLanded([])
+    confirmedRef.current = confirmedLog<Bet>()
     setOffline(false)
     noticeRef.current.clear()
     pausedNoticeRef.current.clear()
@@ -439,9 +473,9 @@ export function useBetSync(
   }, [saveQueued])
 
   const bets = useMemo(() => {
-    if (server === null && outbox.length === 0) return null
-    return applyOutbox(server ?? [], outbox)
-  }, [server, outbox])
+    if (server === null && outbox.length === 0 && landed.length === 0) return null
+    return applyOutbox(server ?? landed, outbox)
+  }, [server, landed, outbox])
 
   const status = syncStatus({ canSync, offline, queued: outbox.length, behind, paused, retrying })
 

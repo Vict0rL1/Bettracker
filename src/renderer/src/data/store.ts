@@ -74,43 +74,64 @@ function answer<T>(ms: number, fallback: T, ask: (done: (value: T) => void) => v
 
 /** The versions in IndexedDB; null where it can't be opened (then nothing waits). */
 function indexedVersions(): Promise<Versions | null> {
-  // An open that never answers leaves this page without versions, as without IndexedDB.
-  indexed ??= answer<Versions | null>(OPEN_MS, null, (done) => {
-    const open = indexedDB.open('bettracker-locks', 1)
-    const failed = (): void => {
-      indexed = undefined
-      done(null)
+  indexed ??= new Promise<Versions | null>((resolve) => {
+    let settled = false
+    const settle = (versions: Versions | null): void => {
+      if (settled) return
+      settled = true
+      resolve(versions)
     }
-    open.onupgradeneeded = () => open.result.createObjectStore('versions')
-    open.onerror = failed
-    open.onblocked = failed
-    open.onsuccess = () => {
-      const db = open.result
-      // Closed by the browser, or wanted by a newer version of the app: open it again next time.
-      db.onclose = () => (indexed = undefined)
-      db.onversionchange = () => {
-        db.close()
+    // An open that hangs leaves this page without versions until it opens.
+    const hung = setTimeout(() => settle(null), OPEN_MS)
+    try {
+      const open = indexedDB.open('bettracker-locks', 1)
+      const failed = (): void => {
+        clearTimeout(hung)
         indexed = undefined
+        settle(null)
       }
-      done({
-        get: (lock) =>
-          answer(REQUEST_MS, 0, (got) => {
-            const req = db.transaction('versions', 'readonly').objectStore('versions').get(lock)
-            req.onsuccess = () => got(typeof req.result === 'number' ? req.result : 0)
-            req.onerror = () => got(0)
-          }),
-        set: (lock, version) =>
-          answer<void>(REQUEST_MS, undefined, (stored) => {
-            const tx = db.transaction('versions', 'readwrite', { durability: 'relaxed' })
-            tx.objectStore('versions').put(version, lock)
-            tx.oncomplete = () => stored()
-            tx.onerror = () => stored()
-            tx.onabort = () => stored()
-          })
-      })
+      open.onupgradeneeded = () => open.result.createObjectStore('versions')
+      open.onerror = failed
+      open.onblocked = failed
+      open.onsuccess = () => {
+        clearTimeout(hung)
+        const versions = versionsIn(open.result)
+        // Open after all, late: with versions from now on.
+        if (settled) indexed = Promise.resolve(versions)
+        else settle(versions)
+      }
+    } catch {
+      // No IndexedDB here.
+      clearTimeout(hung)
+      settle(null)
     }
   })
   return indexed
+}
+
+function versionsIn(db: IDBDatabase): Versions {
+  // Closed by the browser, or wanted by a newer version of the app: open it again next time.
+  db.onclose = () => (indexed = undefined)
+  db.onversionchange = () => {
+    db.close()
+    indexed = undefined
+  }
+  return {
+    get: (lock) =>
+      answer(REQUEST_MS, 0, (got) => {
+        const req = db.transaction('versions', 'readonly').objectStore('versions').get(lock)
+        req.onsuccess = () => got(typeof req.result === 'number' ? req.result : 0)
+        req.onerror = () => got(0)
+      }),
+    set: (lock, version) =>
+      answer<void>(REQUEST_MS, undefined, (stored) => {
+        const tx = db.transaction('versions', 'readwrite', { durability: 'relaxed' })
+        tx.objectStore('versions').put(version, lock)
+        tx.oncomplete = () => stored()
+        tx.onerror = () => stored()
+        tx.onabort = () => stored()
+      })
+  }
 }
 
 /** How long a holder waits for a version that may never come (storage cleared by hand). */

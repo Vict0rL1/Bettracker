@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { newId } from '../lib/uuid'
 import { normalizeMove } from '../lib/validate'
-import { afterFailedRead, backoff, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
+import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { SignedOutError } from './errors'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
@@ -88,6 +88,8 @@ export function useMoves(
   const landedRef = useRef<BankrollMove[]>([])
 
   const serverRef = useRef<BankrollMove[] | null>(null)
+  // As useBetSync: what a read out while a change was confirmed lays over what it got.
+  const confirmedRef = useRef(confirmedLog<BankrollMove>())
   // The user whose sync is running, if any.
   const syncingRef = useRef<string | null>(null)
   // As useBetSync: what a sync of an earlier user brings back is dropped.
@@ -159,8 +161,9 @@ export function useMoves(
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
+    const read = confirmedRef.current.read()
     try {
-      const rows = await getMoves(userId)
+      const rows = read.over(await getMoves(userId))
       if (userRef.current !== userId) return
       setServer(rows)
       setOffline(false)
@@ -169,12 +172,14 @@ export function useMoves(
       setBehind(false)
     } catch (err) {
       if (userRef.current !== userId) return
-      const read = afterFailedRead(err, serverRef.current)
-      setOffline(read.offline)
+      const failed = afterFailedRead(err, serverRef.current)
+      setOffline(failed.offline)
       // Only the missing table changes the snapshot: no table, no moves yet.
-      if (read.server !== null && read.server !== serverRef.current) setServer(read.server)
-      if (read.tableMissing) tableMissingRef.current = true
-      if (read.report) onErrorRef.current(err)
+      if (failed.server !== null && failed.server !== serverRef.current) setServer(failed.server)
+      if (failed.tableMissing) tableMissingRef.current = true
+      if (failed.report) onErrorRef.current(err)
+    } finally {
+      read.end()
     }
   }, [userId, setServer, setBehind])
 
@@ -195,7 +200,9 @@ export function useMoves(
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
           // Folded only into a snapshot this device has (see foldApplied).
           // The refresh after the drain brings the whole list.
-          const next = foldApplied(serverRef.current, landedRef.current, (rows) => reconcileMove(rows, op, row))
+          const change = (rows: readonly BankrollMove[]): BankrollMove[] => reconcileMove(rows, op, row)
+          confirmedRef.current.confirmed(change)
+          const next = foldApplied(serverRef.current, landedRef.current, change)
           if (next.server !== null) setServer(next.server)
           else {
             landedRef.current = next.landed
@@ -219,15 +226,17 @@ export function useMoves(
     setOffline(false)
     // Each stop says what holds the queue back now: a reason from an earlier
     // stop would otherwise outrank it on the badge (see syncStatus).
+    // Only their state: their notices and the wait end with an op that goes
+    // through, or a queue that empties.
     if (result.stop === 'paused') {
-      setRetrying(false)
-      setBehind(false)
+      setRetryingState(false)
+      setBehindState(false)
       setPaused(true, result.error)
       return
     }
     if (result.stop === 'retry') {
-      setPaused(false)
-      setBehind(false)
+      setPausedState(false)
+      setBehindState(false)
       const wait = backoffRef.current.failed(result.error)
       setRetrying(true, result.error)
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
@@ -235,8 +244,8 @@ export function useMoves(
       return
     }
     if (result.stop === 'behind') {
-      setPaused(false)
-      setRetrying(false)
+      setPausedState(false)
+      setRetryingState(false)
       setBehind(true, result.error)
       return
     }
@@ -265,6 +274,7 @@ export function useMoves(
     setTableReady(false)
     landedRef.current = []
     setLanded([])
+    confirmedRef.current = confirmedLog<BankrollMove>()
     if (!userId) return
     const cached = loadMoveCache(userId)
     serverRef.current = cached

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BankrollMove, Bet, MoveInput, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { afterFailedRead, combinedStatus, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
+import { afterFailedRead, combinedStatus, confirmedLog, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
 import { describeError, MigrationNeededError, SignedOutError } from './errors'
 import { afterSettingsAnswer, applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, requeueRefused, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
@@ -667,6 +667,64 @@ describe('drainOutbox — changes made while a request is out', () => {
     expect(t.conflicts).toEqual([])
   })
 
+  // Replayed by a window whose storage was full (see store.ts), taking the
+  // mark back un-marked an add another window had sent since, answer lost:
+  // a delete then cancelled it instead of following it.
+  it('takes back only its own mark: replayed on a queue another window marked since, the mark stays', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    const changes: ((q: PendingOp[]) => PendingOp[])[] = []
+    const update = t.hooks.update
+    t.hooks.update = (fn) => {
+      changes.push(fn)
+      return update(fn)
+    }
+    t.fail('add-a-v1', 'behind')
+    expect((await t.drain()).stop).toBe('behind')
+    const [mark, unmark] = changes
+    expect(t.queue()[0].sent).toBeUndefined()
+    // Another window sent it since: the queue as stored carries its mark.
+    const theirs: PendingOp[] = [{ ...addOp('a', 'v1'), sent: true, sentBy: 'their-attempt' }]
+    expect(unmark(mark(theirs))[0]).toMatchObject({ sent: true, sentBy: 'their-attempt' })
+  })
+
+  it('never takes an import’s confirmed rows back, replayed on a queue that got further', async () => {
+    const entries = [{ id: 'x', input: { date: '2026-03-01', amount: 5 } }]
+    const t = setup({}, [{ opId: 'imp', kind: 'bulk-add', entries, queuedAt: 'T1' }])
+    const changes: ((q: PendingOp[]) => PendingOp[])[] = []
+    const update = t.hooks.update
+    t.hooks.update = (fn) => {
+      changes.push(fn)
+      return update(fn)
+    }
+    t.hooks.send = async (_op, progress) => {
+      await progress(250)
+      throw new TypeError('Failed to fetch')
+    }
+    await t.drain()
+    const progressed = changes[1]
+    const further: PendingOp[] = [{ opId: 'imp', kind: 'bulk-add', entries, queuedAt: 'T1', done: 500, sent: true }]
+    expect(progressed(further)[0]).toMatchObject({ done: 500 })
+  })
+
+  // The entry was written with the ops as they were read; an edit folded
+  // into one of them before they left the queue left with it, and was lost.
+  it('a refusal writes the entry again when an edit was folded in, or queued, before the ops left', async () => {
+    const t = setup({}, [addOp('a', 'v1'), editOp('a', 'v2', 'T2')])
+    t.fail('add-a-v1', 'refused')
+    const entries: { ops: string[]; revised?: boolean }[] = []
+    t.hooks.rejected = async (ops, _err, revised) => {
+      entries.push({ ops: ops.map((o) => (o.kind === 'update' ? `${o.opId}:${(o.input as { note?: string }).note}` : o.opId)), revised })
+      // The user edits the bet again while the entry is being written.
+      if (!revised) t.user(editOp('a', 'v3', 'T3'))
+    }
+    await t.drain()
+    expect(entries).toEqual([
+      { ops: ['add-a-v1', 'edit-a-v2:v2'], revised: undefined },
+      { ops: ['add-a-v1', 'edit-a-v2:v3'], revised: true }
+    ])
+    expect(t.queue()).toEqual([])
+  })
+
   it('a refused add takes the edits queued for its bet with it, with no false conflict', async () => {
     const t = setup({}, [addOp('a', 'v1'), addOp('b', 'v1')])
     t.fail('add-a-v1', 'refused')
@@ -725,17 +783,31 @@ describe('drainOutbox — changes made while a request is out', () => {
     expect(requeueRefused([], [story])).toEqual([])
   })
 
-  it('an add refused after an earlier attempt that may have landed keeps the edits queued for it', async () => {
+  // Logged offline, an add has been tried once (marked sent) before it is
+  // refused for good. Only a first try took the edits and the delete with
+  // it: these stayed, the edit came back as a false "newer edit elsewhere"
+  // and "Send again" made the bet with the text from before it.
+  it('an add refused for good after an earlier attempt takes the edits queued for it too: one that landed answers as a duplicate', async () => {
+    const t = setup({}, [addOp('a', 'v1')])
+    t.fail('add-a-v1', 'offline')
+    expect((await t.drain()).stop).toBe('offline')
+    t.user(editOp('a', 'v2', 'T2'))
+    t.fail('add-a-v1', 'refused')
+    await t.drain()
+    expect(t.rejected).toEqual(['add-a-v1', 'edit-a-v2'])
+    expect(t.notices).toEqual([])
+    expect([...t.server.keys()]).toEqual([])
+    expect(t.queue()).toEqual([])
+  })
+
+  it('an add that landed and is retried answers as the row already there, and its edit follows', async () => {
     const t = setup({}, [addOp('a', 'v1')])
     t.fail('add-a-v1', 'landed-then-offline')
     expect((await t.drain()).stop).toBe('offline')
     t.user(editOp('a', 'v2', 'T2'))
-    // The retry is refused (an expired session, say), but the first attempt made the bet.
-    t.fail('add-a-v1', 'refused')
     await t.drain()
-    expect(t.rejected).toEqual(['add-a-v1'])
+    expect(t.rejected).toEqual([])
     expect(t.server.get('a')?.note).toBe('v2')
-    expect(t.notices).toEqual([])
   })
 
   it('a refused import keeps the edits queued for its rows: an earlier chunk may have landed', async () => {
@@ -833,6 +905,47 @@ describe('drainOutbox — changes made while a request is out', () => {
     await drain.finish()
     expect(t.reached).toContain('add-b-v1')
     expect([...t.server.keys()].sort()).toEqual(['b', 'c'])
+  })
+})
+
+describe('confirmedLog — a read that comes back after a change was confirmed', () => {
+  const add = (x: string) => (rows: readonly string[]) => (rows.includes(x) ? [...rows] : [...rows, x])
+  const remove = (x: string) => (rows: readonly string[]) => rows.filter((r) => r !== x)
+
+  it('lays over what a read got the changes confirmed after it went out, not those from before', () => {
+    const log = confirmedLog<string>()
+    log.confirmed(add('before'))
+    const read = log.read()
+    log.confirmed(add('new'))
+    log.confirmed(remove('gone'))
+    // Answered before both: the delete is not in it, nor the add.
+    expect(read.over(['before', 'gone'])).toEqual(['before', 'new'])
+    read.end()
+  })
+
+  it('keeps a change for every read out when it was confirmed, whichever ends first', () => {
+    const log = confirmedLog<string>()
+    const older = log.read()
+    log.confirmed(add('a'))
+    const newer = log.read()
+    log.confirmed(add('b'))
+    expect(newer.over([])).toEqual(['b'])
+    newer.end()
+    // The newer read ended first: the older one still gets both.
+    expect(older.over([])).toEqual(['a', 'b'])
+    older.end()
+  })
+
+  it('keeps nothing once no read is out, and nothing confirmed while none is', () => {
+    const log = confirmedLog<string>()
+    log.confirmed(add('a'))
+    const first = log.read()
+    log.confirmed(add('b'))
+    first.end()
+    first.end()
+    const next = log.read()
+    expect(next.over([])).toEqual([])
+    next.end()
   })
 })
 

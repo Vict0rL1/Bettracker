@@ -456,8 +456,11 @@ landed): an edit or a delete made afterwards queues behind it and goes out
 after it, so nothing done while a request is out, or after one fails, is lost.
 The change at the head of the queue when the app starts counts as gone out,
 since a version from before this rule did not record it. If the server
-refuses a new bet on its first try, the edits queued for it are dropped with
-it (they could only be refused too); a delete or an Undo queued for it stays.
+refuses a new bet for good (not as one it already has, which is how it
+answers one that landed), what was queued for that bet after it (its edits
+and its delete, up to an Undo that adds it again) goes into the **Refused**
+notice with it: sending them again does what you did, so a bet you deleted
+stays deleted and one you edited is made as you left it.
 Deposits and withdrawals have their own cache and outbox under exactly the
 same rules (and the same conflict rule), so one held back by a missing
 migration never holds back a bet. A change that finds no session (it ran out
@@ -472,7 +475,10 @@ tried again after a growing wait; only a refusal for good takes a change out
 of the queue, into the **Refused** notice. Every failure keeps its HTTP status
 and error code, which is what tells the two apart. Full reads page through
 the rows the server sends, from where the last page ended, so a project whose
-`max-rows` is below the 1,000 asked for still reads in full.
+`max-rows` is below the 1,000 asked for still reads in full. Reads don't wait
+for the queue: one answered before a change landed lays that change over what
+it read, so an import's rows don't vanish and a deleted bet doesn't come back
+when it arrives.
 
 **Security.** Auth is Supabase email/password. Row-level security means every
 query is automatically scoped to the signed-in user; one account can never read

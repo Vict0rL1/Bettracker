@@ -50,9 +50,11 @@ export interface DrainHooks<I = BetInput, R = Bet> {
   /**
    * The server refused these for good: the op, with what was queued after
    * it for a bet it never made. Keep them where the user can send them
-   * again; they leave the queue once this resolves.
+   * again; they leave the queue once this resolves. Called once more with
+   * `revised` when they changed before they left (an edit folded in): the
+   * entry of the same refused op (the first) is written again with them.
    */
-  rejected: (ops: PendingOp<I>[], err: unknown) => void | Promise<void>
+  rejected: (ops: PendingOp<I>[], err: unknown, revised?: boolean) => void | Promise<void>
 }
 
 /** What was queued for an add's bet after it, up to the next add of that bet (an Undo, which starts it anew). */
@@ -68,8 +70,22 @@ function queuedAfter<I>(queue: readonly PendingOp<I>[], add: PendingOp<I>): Pend
   return after
 }
 
-const markSent = <I>(queue: PendingOp<I>[], opId: string, sent: boolean): PendingOp<I>[] =>
-  queue.map((o) => (o.opId === opId ? { ...o, sent: sent ? (true as const) : undefined } : o))
+/**
+ * Mark `opId` as gone out by `attempt`, or take that mark back. A mark that
+ * is already there stays, and only the attempt that made a mark takes it
+ * back: replayed later on a queue another window has changed (see store.ts),
+ * this never unmarks an op that window sent.
+ */
+const markSent = <I>(queue: PendingOp<I>[], opId: string, attempt: string, sent: boolean): PendingOp<I>[] =>
+  queue.map((o) => {
+    if (o.opId !== opId) return o
+    if (sent) return o.sent ? o : { ...o, sent: true as const, sentBy: attempt }
+    return o.sentBy === attempt ? { ...o, sent: undefined, sentBy: undefined } : o
+  })
+
+let attempts = 0
+/** Names one attempt at sending one op (see markSent). */
+const newAttempt = (): string => `${Date.now().toString(36)}-${(attempts++).toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 
 /**
  * Send the queued ops in order until the queue is empty or one can't go
@@ -88,14 +104,16 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
   for (let head = (await h.outbox())[0]; head !== undefined; head = (await h.outbox())[0]) {
     let op: PendingOp<I> = head
     const firstTry = !op.sent
+    const attempt = newAttempt()
     if (firstTry) {
-      const stored = (await h.update((q) => markSent(q, head.opId, true))).find((o) => o.opId === head.opId)
+      const stored = (await h.update((q) => markSent(q, head.opId, attempt, true))).find((o) => o.opId === head.opId)
       // Cancelled by another window before it went: nothing to send.
       if (!stored) continue
       op = stored
     }
+    // Never back: another window may have got further with this import.
     const progress = async (done: number): Promise<void> => {
-      await h.update((q) => q.map((o) => (o.opId === op.opId && o.kind === 'bulk-add' ? { ...o, done } : o)))
+      await h.update((q) => q.map((o) => (o.opId === op.opId && o.kind === 'bulk-add' ? { ...o, done: Math.max(o.done ?? 0, done) } : o)))
     }
     try {
       const result = await h.send(op, progress)
@@ -113,26 +131,39 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
       // could apply, so a first attempt never landed and can still be folded
       // into or cancelled. Keep it and the rest for later.
       if (failure === 'paused' || failure === 'behind') {
-        if (firstTry) await h.update((q) => markSent(q, op.opId, false))
+        if (firstTry) await h.update((q) => markSent(q, op.opId, attempt, false))
         return { stop: failure, processed, error: err }
       }
       // The server refused this op for good (validation, RLS, row gone). It
-      // leaves the queue so it can't block it. An add refused on its first
-      // try (not as a duplicate) never made the bet, so what was queued for
-      // that bet after it goes with it, up to an Undo that adds the bet again:
-      // its edits would only come back refused, as false "newer edit"
-      // notices, and with its delete kept beside it, sending them again does
-      // what the user did (an add then a delete is nothing). Not after an
-      // earlier attempt (it may have landed), and not for an import (earlier
-      // chunks may have landed).
-      const neverMade = op.kind === 'add' && firstTry && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
-      const queue = await h.outbox()
-      const gone = [queue.find((o) => o.opId === op.opId) ?? op, ...(neverMade ? queuedAfter(queue, op) : [])]
+      // leaves the queue so it can't block it. An add refused for good (not
+      // as a duplicate) never made the bet, whatever its earlier attempts: one
+      // that landed answers a retry as a duplicate (and addBet reads the row
+      // back). So what was queued for that bet after it goes with it, up to an
+      // Undo that adds the bet again: its edits would only come back refused,
+      // as false "newer edit" notices, and with its delete kept beside it,
+      // sending them again does what the user did (an add then a delete is
+      // nothing). Not for an import: earlier chunks may have landed.
+      const neverMade = op.kind === 'add' && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
+      const read = await h.outbox()
+      const kept = [read.find((o) => o.opId === op.opId) ?? op, ...(neverMade ? queuedAfter(read, op) : [])]
       // Kept apart before it leaves the queue: a window closed in between
-      // leaves it in both (sent twice at worst), never in neither. It leaves
-      // by id, so the change takes out the same ops when replayed (see store.ts).
-      await h.rejected(gone, err)
-      await h.update((q) => q.filter((o) => !gone.some((g) => g.opId === o.opId)))
+      // leaves it in both (sent twice at worst), never in neither.
+      await h.rejected(kept, err)
+      // Then out of the queue, as the ops are now: an edit folded into one
+      // since, or queued for the bet since, goes too, and the entry is
+      // written again with them. Decided once, so a replay takes the same.
+      const taken: { ops: PendingOp<I>[] | null } = { ops: null }
+      await h.update((q) => {
+        if (taken.ops === null) {
+          const ids = new Set([...kept.map((o) => o.opId), ...(neverMade ? queuedAfter(q, op).map((o) => o.opId) : [])])
+          taken.ops = q.filter((o) => ids.has(o.opId))
+        }
+        const gone = taken.ops
+        return q.filter((o) => !gone.some((g) => g.opId === o.opId))
+      })
+      const gone = taken.ops ?? []
+      const same = gone.length === kept.length && gone.every((o, i) => JSON.stringify(o) === JSON.stringify(kept[i]))
+      if (gone[0]?.opId === op.opId && !same) await h.rejected(gone, err, true)
     }
   }
   return { stop: 'done', processed }
@@ -317,6 +348,43 @@ export function foldApplied<T>(
   fold: (rows: readonly T[]) => T[]
 ): { server: T[] | null; landed: T[] } {
   return server === null ? { server: null, landed: fold(landed) } : { server: fold(server), landed: [...landed] }
+}
+
+/**
+ * The changes the server confirmed while reads were out. Reads do not wait
+ * for the sync, and a long list is read page by page: a read can be answered
+ * before a change lands and come back after it was folded into the copy.
+ * Installed as it is, it would hide that change until the next read (a
+ * deleted bet back, an import's rows gone). Each read lays the changes
+ * confirmed after it went out over what it read; once no read is out, none
+ * is kept.
+ */
+export function confirmedLog<T>(): {
+  confirmed: (change: (rows: readonly T[]) => T[]) => void
+  read: () => { over: (rows: T[]) => T[]; end: () => void }
+} {
+  let seq = 0
+  let out = 0
+  let log: { seq: number; change: (rows: readonly T[]) => T[] }[] = []
+  return {
+    confirmed(change) {
+      seq++
+      if (out > 0) log.push({ seq, change })
+    },
+    read() {
+      const since = seq
+      out++
+      let open = true
+      return {
+        over: (rows) => log.filter((l) => l.seq > since).reduce<T[]>((acc, l) => l.change(acc), rows),
+        end() {
+          if (!open) return
+          open = false
+          if (--out === 0) log = []
+        }
+      }
+    }
+  }
 }
 
 /**

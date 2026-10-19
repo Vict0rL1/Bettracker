@@ -21,9 +21,12 @@ import {
   opSize,
   reconcile,
   reconcileMove,
+  editSettings,
   landImport,
+  markHeadSent,
   markSignedIn,
   requeueOp,
+  keepRefused,
   requeueRefused,
   saveCache,
   saveMoveCache,
@@ -502,6 +505,23 @@ describe('requeueOp: a refused change sent again', () => {
   })
 })
 
+describe('keepRefused: one entry per refused op', () => {
+  const T = '2026-01-01T10:00:00.000Z'
+
+  it('adds an entry, and writes the same op’s entry again rather than twice', () => {
+    const once = keepRefused([], [add('a')], 'refused', T)
+    expect(once).toEqual([{ ops: [add('a')], reason: 'refused', at: T }])
+    // Replayed (see store.ts), or written again with an edit folded in.
+    expect(keepRefused(once, [add('a')], 'refused', T)).toEqual(once)
+    expect(keepRefused(once, [add('a'), update('a', 5)], 'refused', T, true)).toEqual([{ ops: [add('a'), update('a', 5)], reason: 'refused', at: T }])
+  })
+
+  it('does not bring back, written again, an entry sent again or let go meanwhile', () => {
+    const other = keepRefused([], [add('b')], 'refused', T)
+    expect(keepRefused(other, [add('a'), update('a', 5)], 'refused', T, true)).toEqual(other)
+  })
+})
+
 describe('requeueRefused: refused changes sent again, each as it was queued', () => {
   const fresh = (ops: PendingOp[]) => ops.map((o) => ({ ...o, opId: `again-${o.opId}` }))
 
@@ -518,6 +538,41 @@ describe('requeueRefused: refused changes sent again, each as it was queued', ()
   it('a refused edit still gives way to a newer edit queued since', () => {
     const newer = update('a', 99, '2026-01-02T11:00:00.000Z')
     expect(requeueRefused([newer], [fresh([update('a', 1, '2026-01-02T10:00:00.000Z')])])).toEqual([newer])
+  })
+})
+
+describe('markHeadSent: the head marked as gone out, decided once', () => {
+  it('marks the op that led the queue when it first ran, also when replayed on a queue led by another', () => {
+    const change = markHeadSent<PendingOp>()
+    expect(change([add('a'), add('b')]).map((o) => o.sent)).toEqual([true, undefined])
+    // Replayed later (storage full, see store.ts) on a queue whose head was sent since.
+    expect(change([add('b'), add('a')]).map((o) => [o.opId, o.sent])).toEqual([
+      ['op-b', undefined],
+      ['op-a', true]
+    ])
+  })
+})
+
+// A settings edit kept in a window whose storage was full, replayed later
+// over a newer edit of the same field stored by another window, undid it.
+describe('editSettings: field by field, the newer edit wins', () => {
+  it('merges an edit into what is pending, with the time of each field', () => {
+    expect(editSettings(null, { unitSize: 25 }, 'T1')).toEqual({ patch: { unitSize: 25 }, editedAt: 'T1', fieldEditedAt: { unitSize: 'T1' } })
+  })
+
+  it('an older edit does not undo a newer one of the same field, and still sets the others', () => {
+    const stored = { patch: { defaultStake: 20 }, editedAt: 'T2', fieldEditedAt: { defaultStake: 'T2' } }
+    expect(editSettings(stored, { defaultStake: 10, oddsFormat: 'decimal' }, 'T1')).toEqual({
+      patch: { defaultStake: 20, oddsFormat: 'decimal' },
+      editedAt: 'T2',
+      fieldEditedAt: { defaultStake: 'T2', oddsFormat: 'T1' }
+    })
+  })
+
+  it('a patch stored by an older version counts its fields as edited when it was', () => {
+    const legacy = { patch: { defaultStake: 20 }, editedAt: 'T2' }
+    expect(editSettings(legacy, { defaultStake: 10 }, 'T1').patch).toEqual({ defaultStake: 20 })
+    expect(editSettings(legacy, { defaultStake: 30 }, 'T3').patch).toEqual({ defaultStake: 30 })
   })
 })
 

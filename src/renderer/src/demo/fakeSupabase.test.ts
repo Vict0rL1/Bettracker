@@ -303,6 +303,23 @@ describe('fake Supabase: a server that misbehaves on purpose', () => {
     expect(await write).toMatchObject({ error: null, status: 201 })
   })
 
+  it('hands over a read of the table it was told to, answered as the rows were then, only once let go', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:hold-reads', 'entries')
+    let answered = false
+    const read = Promise.resolve(fake.from('entries').select('*')).then((r) => ((answered = true), r))
+    // Other tables are not held.
+    expect(await fake.from('bankroll_moves').select('*')).toMatchObject({ error: null })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(answered).toBe(false)
+    expect(localStorage.getItem('e2e:reads-held')).toBe('1')
+    // A write lands while the read is held: the read was answered before it.
+    expect(await fake.from('entries').insert({ id: 'a' })).toMatchObject({ error: null, status: 201 })
+    localStorage.removeItem('e2e:hold-reads')
+    expect(await read).toMatchObject({ error: null, data: [] })
+  })
+
   it('leaves a row that is there as it is on an upsert that ignores duplicates', async () => {
     const fake = install('e2e:', false)
     migrate('e2e:')

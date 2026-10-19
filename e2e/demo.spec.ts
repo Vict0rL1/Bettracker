@@ -103,6 +103,8 @@ test.describe('demo', () => {
   // fine and the session gone.
   test('a change made once the session has ended says it waits for a sign-in', async ({ page }) => {
     await page.goto('/')
+    // Signed in first: a session that has ended before the app reads it opens on the sign-in screen.
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
     await page.evaluate(() => (window as unknown as { __supabaseMock: { __endSession(): void } }).__supabaseMock.__endSession())
     await expect(page.locator('.sync-badge')).toHaveText('Signed out')
     await addLoss(page, '15')
