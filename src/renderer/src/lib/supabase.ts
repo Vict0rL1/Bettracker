@@ -40,6 +40,16 @@ export function hasStoredSession(): boolean {
   }
 }
 
+/**
+ * True when the app was opened from a password reset email: the link lands
+ * here with `type=recovery` in the address. Read before supabase-js takes
+ * the session out of the address (and before it says PASSWORD_RECOVERY,
+ * which can come before the app listens), so the app asks for a new password
+ * instead of going straight in.
+ */
+export const openedForRecovery =
+  typeof window !== 'undefined' && /(?:^|[#&?])type=recovery(?:&|$)/.test(`${window.location.hash}&${window.location.search.slice(1)}`)
+
 /** How long a request may go without an answer before it counts as unreachable. */
 const REQUEST_TIMEOUT_MS = 30_000
 

@@ -14,7 +14,8 @@ interface Props {
   oddsFormat: OddsFormat
   /** Settle with the result the stake and odds imply, or open the day when they can't. */
   onSettle: (bet: Bet, status: BetStatus, amount: number | null) => void
-  onOpenDay: (date: string) => void
+  /** Open this bet, in its day, ready to edit (as the history's pencil does). */
+  onEdit: (bet: Bet) => void
   onClose: () => void
 }
 
@@ -24,7 +25,7 @@ const SETTLE: readonly BetStatus[] = ['won', 'lost', 'push', 'void']
  * Every bet still waiting for a result, oldest first, each settled in one tap.
  * A bet whose date has passed is flagged: that is the one the user forgot.
  */
-export default function PendingPanel({ open, oddsFormat, onSettle, onOpenDay, onClose }: Props) {
+export default function PendingPanel({ open, oddsFormat, onSettle, onEdit, onClose }: Props) {
   const { t, tn } = useLang()
   const money = useMoney()
   const titleId = useId()
@@ -108,7 +109,7 @@ export default function PendingPanel({ open, oddsFormat, onSettle, onOpenDay, on
                     </span>
                   </span>
                   <span className="bet-actions">
-                    <button type="button" className="btn-icon" aria-label={t('hist.editAria', { date: b.date })} title={t('hist.editDay')} onClick={() => onOpenDay(b.date)}>
+                    <button type="button" className="btn-icon" aria-label={t('hist.editAria', { date: humanDate(b.date) })} title={t('hist.editBet')} onClick={() => onEdit(b)}>
                       <PencilIcon />
                     </button>
                   </span>

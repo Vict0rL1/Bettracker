@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { SyncStatus } from '../data/useBetSync'
 import { useLang } from '../lib/i18n'
 import type { Theme } from '../lib/theme'
-import { ClockIcon, DownloadIcon, MoonIcon, PlusIcon, SlidersIcon, SparkIcon, SunIcon, UploadIcon } from './icons'
+import { ArchiveIcon, ClockIcon, MoonIcon, PlusIcon, SlidersIcon, SparkIcon, SunIcon } from './icons'
 
 interface Props {
   email: string | null
@@ -14,14 +14,14 @@ interface Props {
   pendingCount: number
   /** Changes this device has not got to the server yet (bets, deposits and withdrawals, settings). */
   unsynced: number
-  canExport: boolean
   theme: Theme
-  onExport: () => void
-  onImport: (file: File) => void
+  /** Import, export, backups (see DataDialog). */
+  onOpenData: () => void
   onToggleTheme: () => void
   onOpenSettings: () => void
   onOpenPending: () => void
-  onLogToday: () => void
+  /** The quick add, for today (the same sheet as the + button on a phone). */
+  onAddBet: () => void
   onSignOut: () => void
 }
 
@@ -31,18 +31,15 @@ export default function Header({
   queuedCount,
   pendingCount,
   unsynced,
-  canExport,
   theme,
-  onExport,
-  onImport,
+  onOpenData,
   onToggleTheme,
   onOpenSettings,
   onOpenPending,
-  onLogToday,
+  onAddBet,
   onSignOut
 }: Props) {
   const { t, tn, toggle: toggleLang } = useLang()
-  const fileRef = useRef<HTMLInputElement>(null)
 
   // Signing out wipes this device's copy, queue included. With changes still
   // waiting (offline, or held back by a missing migration) the first click
@@ -88,29 +85,8 @@ export default function Header({
         </span>
       </div>
       <div className="topbar-actions">
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".csv,text/csv"
-          className="visually-hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) onImport(file)
-            // Reset so picking the same file twice still fires a change event.
-            e.target.value = ''
-          }}
-        />
-        <button type="button" className="btn btn-ghost" onClick={() => fileRef.current?.click()} title={t('header.importTitle')}>
-          <UploadIcon /> {t('header.import')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={!canExport}
-          onClick={onExport}
-          title={canExport ? t('header.exportTitle') : t('header.exportEmpty')}
-        >
-          <DownloadIcon /> {t('header.export')}
+        <button type="button" className="btn btn-ghost data-btn" onClick={onOpenData} title={t('header.dataTitle')}>
+          <ArchiveIcon /> {t('header.data')}
         </button>
         <button type="button" className={`btn btn-ghost pending-btn ${pendingCount > 0 ? 'has-open' : ''}`} onClick={onOpenPending} title={t('header.pendingTitle', { n: pendingCount })}>
           <ClockIcon /> {t('header.pending')}
@@ -131,8 +107,8 @@ export default function Header({
         <button type="button" className="btn-icon theme-btn settings-btn" onClick={onOpenSettings} aria-label={t('header.settings')} title={t('header.settings')}>
           <SlidersIcon />
         </button>
-        <button type="button" className="btn btn-primary" onClick={onLogToday}>
-          <PlusIcon /> {t('header.logToday')}
+        <button type="button" className="btn btn-primary add-bet-btn" onClick={onAddBet} title={t('header.addBetTitle')}>
+          <PlusIcon /> {t('header.addBet')}
         </button>
         <div className="account">
           {email && (

@@ -75,6 +75,24 @@ do $$ begin
   assert (select status from public.entries where note = 'still open') = 'pending', 'pending kept on a stake edit';
 end $$;
 
+-- 4a. A free bet (stake 0) that lost nets $0 and stays lost (006), when it
+-- is logged, settled, or edited later; a lost bet at $0 with a real stake is
+-- still worked out again (it is a push), as before.
+insert into public.entries (id, user_id, date, amount, stake, status, note) values
+  ('30000000-0000-0000-0000-000000000010', '00000000-0000-0000-0000-000000000001', '2026-08-06', 0, 0, 'lost', 'free bet lost'),
+  ('30000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', '2026-08-06', null, 0, 'pending', 'free bet open'),
+  ('30000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', '2026-08-06', -10, 10, 'lost', 'cash loss');
+update public.entries set note = 'free bet lost, noted' where note = 'free bet lost';
+update public.entries set status = 'lost', amount = 0 where note = 'free bet open';
+update public.entries set note = 'free bet open, noted' where note = 'free bet open';
+update public.entries set amount = 0 where note = 'cash loss';
+do $$ begin
+  assert (select status from public.entries where note = 'free bet lost, noted') = 'lost', 'a lost free bet stays lost when edited';
+  assert (select amount from public.entries where note = 'free bet lost, noted') = 0, 'and keeps its $0';
+  assert (select status from public.entries where note = 'free bet open, noted') = 'lost', 'a free bet settled as lost stays lost';
+  assert (select status from public.entries where note = 'cash loss') = 'push', 'a cash loss edited to $0 is a push';
+end $$;
+
 -- 4b. The current app settling a pending bet as a push or a void at $0
 -- (an explicit status) is not mistaken for an older app's $0.
 insert into public.entries (id, user_id, date, amount, status, note) values

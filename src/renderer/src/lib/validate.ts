@@ -18,16 +18,53 @@ export function isValidDate(date: string): boolean {
 
 export const round2 = (n: number): number => Math.round(n * 100) / 100
 
+/** Why a bet or a deposit was refused, as a code the forms put in the user's language. */
+export type InputCode =
+  | 'date'
+  | 'status'
+  | 'amountNumber'
+  | 'amountRange'
+  | 'wonNeedsResult'
+  | 'wonPositive'
+  | 'lostNeedsResult'
+  | 'lostNegative'
+  | 'zeroResult'
+  | 'stakeNumber'
+  | 'stakeNegative'
+  | 'stakeRange'
+  | 'oddsNumber'
+  | 'oddsLow'
+  | 'oddsRange'
+  | 'closingNumber'
+  | 'closingLow'
+  | 'closingRange'
+  | 'moveZero'
+
+/**
+ * Bad input, refused before anything is queued. The message stays English
+ * (the CSV import quotes it per line); `code` and `vars` are for the forms.
+ */
+export class InputError extends Error {
+  readonly code: InputCode
+  readonly vars: Record<string, string | number>
+  constructor(code: InputCode, message: string, vars: Record<string, string | number> = {}) {
+    super(message)
+    this.name = 'InputError'
+    this.code = code
+    this.vars = vars
+  }
+}
+
 /** Tags are free text: collapse whitespace, cap the length, keep the user's casing. */
 function cleanTag(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH)
 }
 
-function cleanMoney(value: number | null | undefined, what: string, min: number): number | null {
+function cleanStake(value: number | null | undefined): number | null {
   if (value === undefined || value === null) return null
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
-  if (value < min) throw new Error(`${what} cannot be ${min === 0 ? 'negative' : `below ${min}`}`)
-  if (value > MAX_AMOUNT) throw new Error(`${what} is out of range`)
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new InputError('stakeNumber', 'Stake must be a finite number')
+  if (value < 0) throw new InputError('stakeNegative', 'Stake cannot be negative')
+  if (value > MAX_AMOUNT) throw new InputError('stakeRange', 'Stake is out of range')
   return round2(value)
 }
 
@@ -44,14 +81,15 @@ export const storableOdds = (value: number): boolean => {
   return rounded > 1 && rounded <= MAX_ODDS
 }
 
-function cleanOdds(value: number | null | undefined, what: string): number | null {
+function cleanOdds(value: number | null | undefined, which: 'odds' | 'closing'): number | null {
   if (value === undefined || value === null) return null
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
+  const what = which === 'odds' ? 'Odds' : 'Closing odds'
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new InputError(`${which}Number`, `${what} must be a finite number`)
   // Checked after rounding to what the database stores: 1.0004 would
   // otherwise pass here and be refused there as 1.000.
   const rounded = roundOdds(value)
-  if (rounded <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
-  if (rounded > MAX_ODDS) throw new Error(`${what} are out of range`)
+  if (rounded <= 1) throw new InputError(`${which}Low`, `${what} must be greater than 1 (decimal)`)
+  if (rounded > MAX_ODDS) throw new InputError(`${which}Range`, `${what} are out of range`)
   return rounded
 }
 
@@ -69,33 +107,40 @@ export interface CleanBet {
 }
 
 /**
- * Validate and clean a raw bet before it is written anywhere. Throws on bad
- * input, so nothing half-valid reaches the outbox or the backend.
+ * Validate and clean a raw bet before it is written anywhere. Throws an
+ * InputError on bad input, so nothing half-valid reaches the outbox or the
+ * backend.
  *
  * Status and amount are checked against each other: a pending bet has no
  * amount, a won bet nets positive, a lost one negative, and a push or void is
- * exactly 0. The same rule the 003 migration used to backfill status.
+ * exactly 0. The same rule the 003 migration used to backfill status. One
+ * exception: a free bet (a stake of 0) that loses costs nothing, so its
+ * result is 0 (migration 006 keeps the database from reading it as a push).
  */
 export function normalizeInput(input: BetInput): CleanBet {
   if (!isValidDate(input.date)) {
-    throw new Error(`"${input.date}" is not a valid calendar date`)
+    throw new InputError('date', `"${input.date}" is not a valid calendar date`)
   }
 
   if (input.status !== undefined && !isBetStatus(input.status)) {
-    throw new Error(`"${String(input.status)}" is not a bet status`)
+    throw new InputError('status', `"${String(input.status)}" is not a bet status`)
   }
 
   const rawAmount = input.amount === undefined ? null : input.amount
   if (rawAmount !== null && (typeof rawAmount !== 'number' || !Number.isFinite(rawAmount))) {
-    throw new Error('Amount must be a finite number')
+    throw new InputError('amountNumber', 'Amount must be a finite number')
   }
   if (rawAmount !== null && Math.abs(rawAmount) > MAX_AMOUNT) {
-    throw new Error('Amount is out of range')
+    throw new InputError('amountRange', 'Amount is out of range')
   }
   // The sign is read off what gets stored, in cents: a 0.004 result is 0.00,
   // a push, not a win. Checking before rounding would store a "won" 0.00,
   // which the database's status trigger would later read as a push.
   const cents = rawAmount === null ? null : round2(rawAmount)
+
+  // Undefined/null both mean "not recorded" and stay null — only a real number
+  // becomes a stake, so ROI is never computed against a value nobody entered.
+  const stake = cleanStake(input.stake)
 
   // No status given: it is whatever the result says, which is what every bet
   // logged before statuses existed relies on.
@@ -110,28 +155,25 @@ export function normalizeInput(input: BetInput): CleanBet {
       amount = null
       break
     case 'won':
-      if (cents === null) throw new Error('A won bet needs its result')
-      if (cents <= 0) throw new Error('A won bet nets a positive amount')
+      if (cents === null) throw new InputError('wonNeedsResult', 'A won bet needs its result')
+      if (cents <= 0) throw new InputError('wonPositive', 'A won bet nets a positive amount')
       amount = cents
       break
     case 'lost':
-      if (cents === null) throw new Error('A lost bet needs its result')
-      if (cents >= 0) throw new Error('A lost bet nets a negative amount')
-      amount = cents
+      if (cents === null) throw new InputError('lostNeedsResult', 'A lost bet needs its result')
+      if (cents > 0 || (cents === 0 && stake !== 0)) throw new InputError('lostNegative', 'A lost bet nets a negative amount')
+      // 0, never -0 (a free bet's stake, negated): it would show as "-$0.00".
+      amount = cents === 0 ? 0 : cents
       break
     case 'push':
     case 'void':
-      if (cents !== null && cents !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
+      if (cents !== null && cents !== 0) throw new InputError('zeroResult', `A ${status} returns the stake — its result is 0`, { status })
       amount = 0
       break
   }
 
-  // Undefined/null both mean "not recorded" and stay null — only a real number
-  // becomes a stake, so ROI is never computed against a value nobody entered.
-  const stake = cleanMoney(input.stake, 'Stake', 0)
-
-  const odds = cleanOdds(input.odds, 'Odds')
-  const closingOdds = cleanOdds(input.closingOdds, 'Closing odds')
+  const odds = cleanOdds(input.odds, 'odds')
+  const closingOdds = cleanOdds(input.closingOdds, 'closing')
 
   return {
     date: input.date,
@@ -185,11 +227,11 @@ export interface CleanMove {
  * is 0, which the database refuses.
  */
 export function normalizeMove(input: MoveInput): CleanMove {
-  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
-  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new Error('Amount must be a finite number')
+  if (!isValidDate(input.date)) throw new InputError('date', `"${input.date}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new InputError('amountNumber', 'Amount must be a finite number')
   const amount = roundCents(input.amount)
-  if (amount === 0) throw new Error('Amount cannot be zero')
-  if (Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount is out of range')
+  if (amount === 0) throw new InputError('moveZero', 'Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new InputError('amountRange', 'Amount is out of range')
   return { date: input.date, amount, note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH) }
 }
 

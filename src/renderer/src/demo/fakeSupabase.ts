@@ -307,6 +307,17 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       stopAutoRefresh: () => {},
       signInWithPassword: signIn,
       signUp: signIn,
+      // The demo sends no email; the e2e server notes what was asked.
+      resetPasswordForEmail(email: string, opts?: { redirectTo?: string }) {
+        if (cfg.demo) return Promise.resolve({ data: null, error: { message: 'The demo sends no email', code: 'demo_no_email' } })
+        write('recovery-email', { email, redirectTo: opts?.redirectTo ?? null })
+        return Promise.resolve({ data: {}, error: null })
+      },
+      updateUser() {
+        if (down()) return Promise.resolve({ data: { user: null }, error: { message: 'Failed to fetch', status: 0 } })
+        localStorage.setItem(key('password-updated'), '1')
+        return Promise.resolve({ data: { user: session.user }, error: null })
+      },
       signOut() {
         if (cfg.demo) {
           localStorage.setItem(key('signed-out'), '1')

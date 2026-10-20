@@ -1,4 +1,4 @@
-import type { Page, BrowserContext } from '@playwright/test'
+import { expect, type Page, type BrowserContext } from '@playwright/test'
 import { installFakeSupabase } from '../src/renderer/src/demo/fakeSupabase'
 
 /**
@@ -215,4 +215,26 @@ export async function boot(page: Page, opts: BootOptions = {}): Promise<void> {
 export async function reload(page: Page): Promise<void> {
   await page.reload()
   await page.waitForSelector('.history-card')
+}
+
+/**
+ * Import a CSV the way a user does: Import & export, pick the file, read the
+ * review, import. `keepDuplicates` keeps the possible duplicates the review
+ * would skip.
+ */
+export async function importCsv(page: Page, csv: string, opts: { name?: string; keepDuplicates?: boolean } = {}): Promise<void> {
+  await page.locator('.data-btn').click()
+  const dialog = page.locator('.data-modal')
+  await page.setInputFiles('.data-csv-input', { name: opts.name ?? 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await dialog.locator('.imp-summary').waitFor()
+  if (opts.keepDuplicates) await dialog.getByLabel(/Import them too/).check()
+  await dialog.locator('.imp-go, .imp-again').click()
+  await dialog.waitFor({ state: 'detached' })
+}
+
+/** Open the advanced analytics (strike rate, CLV, days, breakdowns), closed until asked. */
+export async function openAdvanced(page: Page): Promise<void> {
+  const toggle = page.locator('.advanced-toggle')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 }

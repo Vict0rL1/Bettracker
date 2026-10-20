@@ -22,7 +22,8 @@ test.describe('day modal', () => {
 
   test('LOSS mirrors the stake into the amount until the user types their own', async ({ page }) => {
     await boot(page)
-    await page.locator('.history-card tbody tr').first().locator('button[aria-label^="Edit"]').click()
+    // The date opens the whole day, with the form for a new bet.
+    await page.locator('.history-card tbody tr').first().locator('.td-day').click()
     await page.click('.day-modal .seg-btn.loss')
     // Fields, in order: stake, odds, amount.
     const stake = page.locator('.day-modal .field').nth(0).locator('input')

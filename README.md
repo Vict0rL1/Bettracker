@@ -123,9 +123,14 @@ close a dialog.
      (settings, closing odds) and
      [`005_bankroll_moves.sql`](supabase/migrations/005_bankroll_moves.sql)
      (deposits and withdrawals; it doesn't depend on 004, so the two can run
-     in either order). Your existing bets are untouched — old ones simply have
-     no stake or odds recorded, and 003 gives each the status its result
-     implies.
+     in either order) and
+     [`006_lost_free_bets.sql`](supabase/migrations/006_lost_free_bets.sql)
+     (a free bet that loses stays lost when edited later; it only replaces
+     003's trigger, so it runs after 003). Your existing bets are untouched —
+     old ones simply have no stake or odds recorded, and 003 gives each the
+     status its result implies. Without 006 everything works, except that
+     editing a lost free bet ($0 stake, $0 result) turns it into a push (its
+     P/L stays $0).
    - *Upgrading an install people are using?* Run the migrations **before**
      you deploy the new version. Devices still on the old version keep
      working in between: their writes carry no status, and 003 gives them the
@@ -155,6 +160,14 @@ close a dialog.
    use, you can turn **Confirm email** off instead, in the **Email** provider's
    settings (**Authentication → Sign In / Providers**). A link that has expired,
    or was already opened, brings you to the sign-in screen, which says so.
+   **Forgot your password?** on the sign-in screen uses the same rule: the
+   reset email links back to the address it was asked from when that is
+   listed under Redirect URLs, else to the Site URL, and the app opens on a
+   form for the new password. Supabase's own mailer sends only a few emails
+   an hour; for real use, set up SMTP (**Authentication → Emails**). The
+   desktop app (a `file://` page) can't receive the link: it opens in the
+   browser, at the Site URL — set the new password there, then sign in on
+   the desktop.
 
 ### 2. Point the app at your project
 
@@ -354,20 +367,66 @@ shorter), favorite (to 1.90 / −111), even (to 2.10 / +110), underdog (to 3.50 
 are left out rather than lumped into a "none" bucket, and every row shows its
 sample size.
 
+## The dashboard
+
+First come the numbers looked at most: P/L over the chosen range, the
+bankroll, and the bets still waiting for a result (a click opens the bankroll
+or the pending list). Then the month (with its own month to month arrows)
+and ROI. Strike rate, the break-even rate the odds imply, CLV, winning days,
+streaks, best and worst day, drawdown and the breakdowns are under
+**Advanced analytics**, closed until opened (remembered on the device).
+Bets and days are kept apart in the words: "bets won" is the strike rate,
+"winning days" the share of days that ended up; each figure says how many
+bets it covers (the break-even rate covers only those with odds).
+
+A new account (no bets yet) gets a short **Getting started** guide: set the
+starting bankroll, choose how odds are written, log the first bet. It goes
+once the three are done, or when hidden.
+
+**Add bet** (and the **+** button on a phone, the same sheet) logs a bet for
+today in a couple of taps; **More details** carries what was typed to the
+full form. For another day, click the day on the calendar.
+
 ## Date ranges
 
-The row above the stat cards picks the range the stats, the balance chart and
-the breakdown are computed over: all time, this week (Sunday to Saturday),
-this month, the last 30 days, this year, or custom dates (inclusive at both
-ends). The calendar, its month card, the history and the pending count always
-show everything. The choice is remembered on the device.
+The row above the stat cards picks the range P/L, ROI, the balance chart and
+the advanced analytics are computed over: all time, this week (Sunday to
+Saturday), this month, the last 30 days, this year, or custom dates
+(inclusive at both ends). The bankroll, the pending bets, the calendar, its
+month card and the history always cover every date, and each card says
+which (a tag such as "All dates"); the history can be narrowed to the range
+with its **Dates shown** filter. The choice is remembered on the device.
+
+## Forms: problems in words, drafts, free bets
+
+A form says what is wrong next to the box, in words (tied to the box for
+screen readers), and moves the focus there; buttons are not greyed out
+instead. A bet the app refuses keeps the form open with everything typed,
+and says why above the buttons; a form closes only once its bet is accepted.
+Closing a form by accident (Escape, a tap outside, a reload) keeps what was
+typed as a draft: the quick add keeps one, the day's form one per day and
+one per bet being edited. It opens again with the draft (and says so), until
+it is saved or **Discard**ed. Drafts live on the device and go with a
+sign-out.
+
+A **free bet** is a stake of 0: it stays out of ROI and its profit is shown
+apart, as bonus. Its win can't be worked out from a $0 stake, so the app
+asks for the promotional profit the book paid; one that loses is lost at
+$0. A profit that rounds to $0.00 at the odds given is asked for too.
+
+The pencil in the history edits that bet; the date opens the whole day. On a
+phone the history is a list of cards (date, result, amount, stake and a
+short description), each opening to its odds, closing odds, tags, note and
+actions; selecting cards works as ticking rows does.
 
 ## Editing the history in bulk, and Undo
 
-Tick rows in the history (the header box ticks the page) and a bar appears
-to **retag** them (empty boxes keep a bet's current tag), **settle** the
-pending ones as won / lost / push / void (a win with no odds is skipped, since
-its profit cannot be worked out) or **delete** them (click twice). Every delete
+Tick rows in the history (the header box ticks the page) and a bar appears,
+saying how many are selected and how many of those the filters hide, to
+**retag** them (empty boxes keep a bet's current tag), **settle** the
+pending ones as won / lost / push / void (a win whose profit can't be worked
+out, with no odds or a free bet, is skipped) or **delete** them (click
+twice: the button says how many). Every delete
 — single or bulk — and every bulk edit shows an **Undo** in its toast. Undo
 writes the previous values back through the same outbox, so it works offline
 and syncs like any other change; a restored bet keeps its id but gets a new
@@ -533,13 +592,41 @@ bet almost always costs exactly what was risked.
 
 ## Import and export
 
-**Export CSV** writes one row per bet, sorted by date, with the columns
+Everything that goes in or out is under **Import & export** in the header.
+
+**Full backup** downloads one JSON file with every bet, deposit and
+withdrawal, and the settings:
+`{ "format": "bettracker-backup", "version": 1, "exportedAt", "account",
+"bets", "moves", "settings" }`. **Restore** checks the whole file first (a
+file that isn't a backup, or comes from a newer version, is refused; an
+entry that fails the app's checks is left out and listed) and then shows
+what it would do. A restore only adds: a bet or deposit already here (same
+id) stays as it is now, even if the backup has it differently, so restoring
+the same file twice adds nothing the second time, and one deleted since
+comes back. A backup of another account gets new ids, and its bets that
+look like bets here are offered as possible duplicates, skipped unless kept.
+The settings are replaced only when asked. A restore can be undone like an
+import.
+
+**Export bets CSV** writes one row per bet, sorted by date, with the columns
 `date, status, stake, odds, closing_odds, amount, sport, book, bet_type, note`
 (odds as decimal) — summing a
 spreadsheet reproduces that day's total.
 
-**Import** reads that same shape back, so an export is a working backup of
-your bets (deposits, withdrawals and settings are not in it). Only a
+**Import CSV** reads that same shape back (deposits, withdrawals and settings
+are not in it: that is what the full backup is for). Nothing is added before
+a **review**: how many rows are ready, every line that can't go in and why,
+and the possible duplicates, rows with the same date, result, amount, stake,
+odds and tags as a bet already here (each bet here matches at most one row;
+the note and the closing odds don't count, since they are often added
+later). Possible duplicates are skipped unless you say they are separate
+bets; two identical rows in the file are both kept, since two identical bets
+on one day are possible. Each import is kept on the device as a batch and can
+be **undone** as a whole later (the bets it added that are still there are
+deleted; that Undo can be undone in turn). The same file picked again is
+recognised: still on its way (an interrupted import, which finishes on its
+own), it says so and importing it again takes a deliberate choice; already
+imported, it says when, and its bets show as possible duplicates. Only a
 header row is required; column order doesn't matter, extra columns are ignored,
 and common aliases from other trackers are accepted (`day`, `p/l`, `profit`,
 `risk`, `wagered`, `league`, `sportsbook`, `market`, `notes`, `result`,

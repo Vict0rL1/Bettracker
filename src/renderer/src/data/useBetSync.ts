@@ -30,8 +30,15 @@ export interface BetSync {
   addBet: (input: BetInput) => Promise<boolean>
   updateBet: (id: string, input: BetInput) => Promise<boolean>
   deleteBet: (id: string) => Promise<boolean>
-  /** Queue an imported batch as a single op. Resolves with how many rows were queued. */
-  importBets: (inputs: readonly BetInput[]) => Promise<{ count: number; saved: boolean }>
+  /**
+   * Queue an imported batch as a single op. Resolves with how many rows were
+   * queued, the op that carries them and the ids they were given (an import's
+   * Undo deletes those). `ids`: the ids to give them (a backup restored keeps
+   * its own); a row whose id is on the server already is left as it is there.
+   */
+  importBets: (inputs: readonly BetInput[], ids?: readonly string[]) => Promise<{ count: number; saved: boolean; opId: string; ids: string[] }>
+  /** Imports still on their way, by the op that carries each: how many rows have landed, of how many. */
+  importing: ReadonlyMap<string, { done: number; total: number }>
   /** Several edits at once (bulk retag/settle, and Undo of either): one state update, one op per bet. */
   updateBets: (changes: readonly { id: string; input: BetInput }[]) => Promise<boolean>
   deleteBets: (ids: readonly string[]) => Promise<boolean>
@@ -407,13 +414,14 @@ export function useBetSync(
   const remove = useCallback((id: string): Promise<boolean> => mutate({ opId: newId(), kind: 'delete', id }), [mutate])
 
   const importBets = useCallback(
-    async (inputs: readonly BetInput[]): Promise<{ count: number; saved: boolean }> => {
+    async (inputs: readonly BetInput[], ids?: readonly string[]): Promise<{ count: number; saved: boolean; opId: string; ids: string[] }> => {
       // Validate the whole batch up front so a bad row fails the import instead
       // of half-writing it.
-      const entries = inputs.map((input) => ({ id: newId(), input: normalizeInput(input) }))
-      if (entries.length === 0) return { count: 0, saved: true }
-      const saved = await mutate({ opId: newId(), kind: 'bulk-add', entries, queuedAt: new Date().toISOString() })
-      return { count: entries.length, saved }
+      const entries = inputs.map((input, i) => ({ id: ids?.[i] ?? newId(), input: normalizeInput(input) }))
+      const opId = newId()
+      if (entries.length === 0) return { count: 0, saved: true, opId, ids: [] }
+      const saved = await mutate({ opId, kind: 'bulk-add', entries, queuedAt: new Date().toISOString() })
+      return { count: entries.length, saved, opId, ids: entries.map((e) => e.id) }
     },
     [mutate]
   )
@@ -483,10 +491,16 @@ export function useBetSync(
   // less the rows an interrupted attempt already stored.
   const queuedCount = useMemo(() => outbox.reduce((n, op) => n + opSize(op) - (op.kind === 'bulk-add' ? (op.done ?? 0) : 0), 0), [outbox])
 
+  const importing = useMemo(
+    () => new Map(outbox.filter((op) => op.kind === 'bulk-add').map((op) => [op.opId, { done: op.kind === 'bulk-add' ? (op.done ?? 0) : 0, total: opSize(op) }])),
+    [outbox]
+  )
+
   return {
     bets,
     status,
     queuedCount,
+    importing,
     isOffline: status === 'offline',
     unsaved: queue.held && outbox.length > 0,
     refused: queue.refused,

@@ -52,6 +52,19 @@ export const ChevronRightIcon = ({ size = 16 }: IconProps) => (
   </svg>
 )
 
+export const ChevronDownIcon = ({ size = 16 }: IconProps) => (
+  <svg {...svgProps(size)} className="chevron-down">
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+)
+
+/** A box with an arrow out of it: backups and files. */
+export const ArchiveIcon = ({ size = 14 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M4 3h16v4H4zM10 11h4" />
+  </svg>
+)
+
 export const CloseIcon = ({ size = 16 }: IconProps) => (
   <svg {...svgProps(size)}>
     <path d="M18 6 6 18M6 6l12 12" />

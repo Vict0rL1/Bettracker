@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  InputError,
   MAX_AMOUNT,
   MAX_ODDS,
   effectiveUnit,
@@ -285,5 +286,50 @@ describe('unitSizePatch — committing the unit size box', () => {
     expect(unitSizePatch('25', on)).toEqual({ unitSize: 25 })
     expect(unitSizePatch(' 12.5 ', off)).toEqual({ unitSize: 12.5 })
     expect(unitSizePatch('0.005', off)).toEqual({ unitSize: 0.01 })
+  })
+})
+
+describe('free bets (a stake of 0)', () => {
+  const base = { date: '2026-05-04' }
+
+  it('a lost free bet costs nothing: lost at $0', () => {
+    const clean = normalizeInput({ ...base, stake: 0, status: 'lost', amount: 0 })
+    expect(clean).toMatchObject({ status: 'lost', amount: 0, stake: 0 })
+    // A stake that rounds to 0 is a free bet too.
+    expect(normalizeInput({ ...base, stake: 0.004, status: 'lost', amount: -0.004 }).amount).toBe(0)
+  })
+
+  it('a lost bet at $0 with a real or unrecorded stake is still refused', () => {
+    expect(() => normalizeInput({ ...base, stake: 10, status: 'lost', amount: 0 })).toThrow(/negative/)
+    expect(() => normalizeInput({ ...base, status: 'lost', amount: 0 })).toThrow(/negative/)
+  })
+
+  // Stake $0, decimal odds 2.0, WON: the profit can't be worked out from the
+  // stake, and 0 is no win. The form asks for the promotional profit instead.
+  it('a won free bet needs its actual profit: the stake works out $0', () => {
+    expect(suggestedAmount('won', 0, 2)).toBe(0)
+    expect(() => normalizeInput({ ...base, stake: 0, odds: 2, status: 'won', amount: 0 })).toThrow(/positive/)
+    expect(normalizeInput({ ...base, stake: 0, odds: 2, status: 'won', amount: 25 })).toMatchObject({ status: 'won', amount: 25, stake: 0 })
+  })
+})
+
+describe('InputError', () => {
+  it('carries a code the forms put in words, and keeps the English message', () => {
+    const caught = (input: Parameters<typeof normalizeInput>[0]): InputError => {
+      try {
+        normalizeInput(input)
+      } catch (err) {
+        if (err instanceof InputError) return err
+      }
+      throw new Error('no InputError')
+    }
+    expect(caught({ date: '2026-02-31', amount: 1 }).code).toBe('date')
+    expect(caught({ date: '2026-05-04', amount: 0, status: 'won' }).code).toBe('wonPositive')
+    expect(caught({ date: '2026-05-04', amount: 3, status: 'void' })).toMatchObject({ code: 'zeroResult', vars: { status: 'void' } })
+    expect(caught({ date: '2026-05-04', amount: 1, stake: -1 }).code).toBe('stakeNegative')
+    expect(caught({ date: '2026-05-04', amount: 1, odds: 1 }).code).toBe('oddsLow')
+    expect(caught({ date: '2026-05-04', amount: 1, closingOdds: MAX_ODDS + 1 }).code).toBe('closingRange')
+    expect(caught({ date: '2026-05-04', amount: 1, odds: 1 }).message).toBe('Odds must be greater than 1 (decimal)')
+    expect(() => normalizeMove({ date: '2026-03-01', amount: 0 })).toThrow(InputError)
   })
 })

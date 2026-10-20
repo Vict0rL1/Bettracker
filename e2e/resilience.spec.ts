@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { boot, entry, install, move, reload, USER, type SeedEntry } from './harness'
+import { boot, entry, importCsv, install, move, reload, USER, type SeedEntry } from './harness'
 import { DEV_URL } from './urls'
 
 // The sync engine where real servers and real devices misbehave: several
@@ -27,7 +27,7 @@ async function secondWindow(context: BrowserContext): Promise<Page> {
 }
 
 async function logLoss(page: Page, stake: string): Promise<void> {
-  await page.click('.fab')
+  await page.click('.add-bet-btn')
   const sheet = page.locator('.quick-modal')
   await sheet.locator('.field input').first().fill(stake)
   await sheet.locator('.seg-btn.loss').click()
@@ -166,7 +166,7 @@ test.describe('several windows of the app', () => {
       [page, '100'],
       [other, '200']
     ] as const) {
-      await win.locator('.mini-bankroll').click()
+      await win.locator('.bankroll-card').click()
       const dialog = win.locator('.bank-modal')
       await dialog.locator('.move-amount').fill(amount)
       await dialog.locator('.move-save').click()
@@ -257,7 +257,7 @@ test.describe('a device whose storage is full', () => {
     })
     const rows = Array.from({ length: 60 }, (_, i) => `2026-07-${String((i % 28) + 1).padStart(2, '0')},${i + 1}.00,10.00,NBA,DK,Spread,row ${i}`)
     const csv = ['date,amount,stake,sport,book,bet_type,note', ...rows].join('\n')
-    await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+    await importCsv(page, csv)
     await expect(page.locator('.unsaved-notice')).toBeVisible()
 
     const bet = page.locator('.history-card tbody tr', { hasText: '-$13.00' })
@@ -605,7 +605,7 @@ test.describe('an import cut halfway', () => {
     const csv = ['date,amount,stake,sport,book,bet_type,note', ...lines].join('\n')
     // The first chunk (250 rows) lands, then the connection drops.
     await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
-    await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+    await importCsv(page, csv)
     await expect.poll(async () => (await serverRows(page)).length, { timeout: 15_000 }).toBe(3 + 250)
     await expect(page.locator('.sync-badge')).toHaveText(/Offline/)
 
@@ -631,7 +631,7 @@ test.describe('an import cut halfway', () => {
     await boot(page, { backend: 'live' })
     const csv = ['date,amount,stake,note', ...Array.from({ length: 300 }, (_, i) => `2026-07-01,${i + 1}.00,10.00,row ${i}`)].join('\n')
     await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
-    await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+    await importCsv(page, csv)
     await expect(page.locator('.sync-badge')).toHaveText('Offline · 50 queued', { timeout: 15_000 })
     await expect(page.getByText('303 bets over')).toBeVisible()
     // Another device deletes a row that landed; this one reads the bets again.
@@ -647,7 +647,7 @@ test.describe('an import cut halfway', () => {
     await boot(page, { backend: 'live' })
     const csv = ['date,amount,stake,note', ...Array.from({ length: 300 }, (_, i) => `2026-07-01,${i + 1}.00,10.00,row ${i}`)].join('\n')
     await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
-    await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+    await importCsv(page, csv)
     await expect(page.locator('.sync-badge')).toHaveText('Offline · 50 queued', { timeout: 15_000 })
   })
 })
@@ -664,7 +664,7 @@ test.describe('a read that comes back after a change landed', () => {
     // The first chunk goes out and waits; after it, the connection drops for writes.
     await hold(page, true)
     await page.evaluate(() => localStorage.setItem('e2e:writes-left', '1'))
-    await page.setInputFiles('input[type=file]', { name: 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+    await importCsv(page, csv)
     await expect.poll(() => writesStarted(page)).toBe(1)
     await expect(page.getByText('303 bets over')).toBeVisible()
     // Back to the app: the bets are read again, answered now, before the chunk lands.
@@ -730,7 +730,7 @@ test.describe('a server that answers fewer rows than asked', () => {
     await expect.poll(() => page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:cache:${uid}`) ?? '[]') as unknown[]).length, USER.id), { timeout: 15_000 }).toBe(700)
     await expect.poll(() => page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:moves:${uid}`) ?? '[]') as unknown[]).length, USER.id), { timeout: 15_000 }).toBe(450)
     // 700 bets of +$1 and 450 deposits of $2.
-    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,600')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('$1,600')
   })
 })
 

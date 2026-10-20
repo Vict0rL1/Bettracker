@@ -18,6 +18,13 @@ const BUSY = [
 ]
 const SETTINGS = { startingBankroll: 1000, unitSize: 25, oddsFormat: 'american', lossLimit: 150 }
 
+/** On a phone the history is a list of cards: open the first, then edit its bet. */
+async function editFirstCard(page: Page): Promise<void> {
+  const card = page.locator('.hcard').first()
+  await card.locator('.hcard-toggle').click()
+  await card.locator('.hcard-edit').click()
+}
+
 /** The page is as wide as the screen: nothing pushes it sideways. */
 const overflow = (page: Page): Promise<number> => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
 
@@ -36,9 +43,9 @@ for (const width of [320, 390]) {
       const dialogs: [string, () => Promise<unknown>][] = [
         ['.quick-modal', () => page.click('.fab')],
         ['.settings-modal', () => page.click('.settings-btn')],
-        ['.bank-modal', () => page.click('.mini-bankroll')],
+        ['.bank-modal', () => page.click('.bankroll-card')],
         ['.pending-modal', () => page.click('.pending-btn')],
-        ['.day-modal', () => page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()]
+        ['.day-modal', () => editFirstCard(page)]
       ]
       for (const [modal, show] of dialogs) {
         await show()
@@ -76,7 +83,7 @@ test('on a phone, no field is under 16px, so iOS does not zoom in on it', async 
   await page.click('.fab')
   expect(await small(), 'quick add').toEqual([])
   await page.keyboard.press('Escape')
-  await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
+  await editFirstCard(page)
   expect(await small(), 'day').toEqual([])
 })
 
@@ -94,7 +101,7 @@ test('at the bottom of the page, the + button leaves the history pager free to t
 
 test('odds boxes ask for a keyboard that can type them: minus and slash for American and fractional, the pad for decimal', async ({ page }) => {
   await boot(page, { settings: { oddsFormat: 'american' } })
-  await page.click('.fab')
+  await page.click('.add-bet-btn')
   await expect(page.locator('.quick-modal .quick-row input[type=text]')).toHaveAttribute('inputmode', 'text')
   await page.keyboard.press('Escape')
   await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
@@ -104,7 +111,7 @@ test('odds boxes ask for a keyboard that can type them: minus and slash for Amer
 
 test('with decimal odds the odds boxes get the number pad', async ({ page }) => {
   await boot(page, { settings: { oddsFormat: 'decimal' } })
-  await page.click('.fab')
+  await page.click('.add-bet-btn')
   await expect(page.locator('.quick-modal .quick-row input[type=text]')).toHaveAttribute('inputmode', 'decimal')
 })
 
@@ -113,11 +120,22 @@ test.describe('on a touch screen', () => {
 
   test('the day dialog opens at its top, without focusing the stake (no keyboard, no jump)', async ({ page }) => {
     await boot(page, { entries: BUSY })
-    await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
+    const card = page.locator('.hcard').first()
+    await card.locator('.hcard-toggle').click()
+    await card.locator('.hcard-day').click()
     const modal = page.locator('.day-modal')
     await expect(modal).toBeVisible()
     expect(await modal.evaluate((m) => m.scrollTop)).toBe(0)
     expect(await page.evaluate(() => document.activeElement?.classList.contains('day-modal'))).toBe(true)
+  })
+
+  test('editing one bet opens its form in view, still without the keyboard', async ({ page }) => {
+    await boot(page, { entries: BUSY })
+    await editFirstCard(page)
+    const form = page.locator('.day-modal .bet-form')
+    await expect(form).toHaveClass(/is-editing/)
+    await expect(form).toBeInViewport()
+    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('INPUT')
   })
 })
 
@@ -125,4 +143,66 @@ test('on a computer the day dialog still opens ready to type the stake', async (
   await boot(page)
   await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
   await expect(page.locator('.day-modal .amount-wrap input').first()).toBeFocused()
+})
+
+test.describe('the history on a phone', () => {
+  for (const width of [320, 390]) {
+    test(`at ${width}px: compact cards, with everything one tap away and nothing sideways`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 })
+      await boot(page, { entries: BUSY, settings: SETTINGS, moves: [] })
+      await expect(page.locator('.history-card table')).toHaveCount(0)
+      const card = page.locator('.hcard', { hasText: 'Parlay de tres patas' })
+      // Date, result, amount, stake and a short description, closed.
+      await expect(card.locator('.hcard-date')).toBeVisible()
+      await expect(card.locator('.pill')).toHaveText('LOST')
+      await expect(card.locator('.hcard-amt')).toHaveText('-$1,000.00')
+      await expect(card.locator('.hcard-stake')).toHaveText('$1,000 staked')
+      await expect(card.locator('.hcard-desc')).toContainText('Parlay de tres patas')
+      expect(await overflow(page)).toBeLessThanOrEqual(0)
+
+      // Open: odds, closing odds, tags, the whole note, and the actions.
+      const toggle = card.locator('.hcard-toggle')
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      const details = card.locator('.hcard-details')
+      await expect(details).toContainText('-111')
+      await expect(details).toContainText('NBA')
+      await expect(details).toContainText('Caesars')
+      await expect(details.locator('.hcard-note')).toHaveText('Parlay de tres patas con prórroga incluida, revisar el cierre')
+      expect(await overflow(page)).toBeLessThanOrEqual(0)
+
+      // A pending bet settles from its card.
+      const open = page.locator('.hcard.is-pending').first()
+      await open.locator('.settle-btn.loss').click()
+      await expect(page.locator('.toast')).toContainText('Settled')
+
+      // Bulk: select on the cards, the bar says how many.
+      await page.locator('.hcard .hcard-sel').nth(0).check()
+      await page.locator('.hcard .hcard-sel').nth(1).check()
+      await expect(page.locator('.bulk-count')).toHaveText('2 selected')
+      await expect(page.locator('.bulk-delete')).toHaveText('Delete 2')
+      expect(await overflow(page)).toBeLessThanOrEqual(0)
+
+      // Delete from the card asks first.
+      await card.locator('.hcard-delete').click()
+      await expect(card.locator('.hcard-delete')).toContainText('Sure?')
+      await card.locator('.hcard-delete').click()
+      await expect(page.locator('.hcard', { hasText: 'Parlay de tres patas' })).toHaveCount(0)
+    })
+  }
+
+  test('a card opens and closes from the keyboard', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 })
+    await boot(page, { entries: BUSY, settings: SETTINGS, moves: [] })
+    const toggle = page.locator('.hcard-toggle').first()
+    await toggle.focus()
+    await page.keyboard.press('Enter')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Tab')
+    // On to the card's own buttons (settle, then edit, day, delete), not elsewhere.
+    expect(await page.evaluate(() => document.activeElement?.closest('.hcard') === document.querySelector('.hcard'))).toBe(true)
+    await toggle.focus()
+    await page.keyboard.press('Space')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
 })

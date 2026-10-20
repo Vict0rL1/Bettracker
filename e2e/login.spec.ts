@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { APP_URL } from './urls'
+import { APP_URL, DEMO_URL } from './urls'
 
 // The production build (playwright.config.ts) without the harness: the real
 // supabase-js, signing in against https://example.supabase.co — which these
@@ -82,11 +82,95 @@ test('signing up asks for the confirmation link to come back to this address', a
   })
   await page.goto('/')
   const form = page.locator('.auth-card')
-  await form.locator('.auth-toggle').click()
+  await form.locator('.login-switch').click()
   await form.locator('input[type=email]').fill('you@example.com')
   await form.locator('input[type=password]').fill('hunter22')
   await form.locator('.auth-submit').click()
   await expect(form.locator('.auth-notice')).toContainText('Account created. Check your email to confirm')
   expect(new URL(signup).pathname).toBe('/auth/v1/signup')
   expect(new URL(signup).searchParams.get('redirect_to')).toBe(APP_URL)
+})
+
+test.describe('a forgotten password', () => {
+  const USER_JSON = { id: 'u1', aud: 'authenticated', role: 'authenticated', email: 'you@example.com', app_metadata: {}, user_metadata: {}, created_at: '2026-10-01T00:00:00Z' }
+  const b64 = (o: object): string => Buffer.from(JSON.stringify(o)).toString('base64url')
+  // A token as Supabase puts it in the reset link (not checked here: the routes below play the server).
+  const TOKEN = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: 'u1', email: 'you@example.com', aud: 'authenticated', role: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`
+
+  /** Answers as Supabase does; returns what was asked of /recover and PUT /user. */
+  async function serve(page: Page): Promise<{ recover: string[]; updates: string[] }> {
+    const seen = { recover: [] as string[], updates: [] as string[] }
+    await page.route('https://example.supabase.co/**', (route) => {
+      const req = route.request()
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+      const url = new URL(req.url())
+      const json = (status: number, body: unknown) => route.fulfill({ status, headers: CORS, contentType: 'application/json', body: JSON.stringify(body) })
+      if (url.pathname === '/auth/v1/recover') {
+        seen.recover.push(`${req.postData()} ${url.searchParams.get('redirect_to')}`)
+        return json(200, {})
+      }
+      if (url.pathname === '/auth/v1/user') {
+        if (req.method() === 'PUT') seen.updates.push(req.postData() ?? '')
+        return json(200, USER_JSON)
+      }
+      // The app's own reads once in: nothing stored.
+      if (url.pathname.startsWith('/rest/v1/')) return json(200, [])
+      return json(404, {})
+    })
+    return seen
+  }
+
+  test('asks for a link to set a new password, back to this address, with the same words whatever the account', async ({ page }) => {
+    const seen = await serve(page)
+    await page.goto('/')
+    const form = page.locator('.auth-card')
+    await form.locator('.login-forgot').click()
+    await expect(form.locator('input[type=password]')).toHaveCount(0)
+    await form.locator('input[type=email]').fill('you@example.com')
+    await form.locator('.auth-submit').click()
+    await expect(form.locator('.auth-notice')).toContainText('If there is an account for you@example.com, a link to set a new password is on its way.')
+    expect(seen.recover).toHaveLength(1)
+    expect(seen.recover[0]).toContain('"email":"you@example.com"')
+    expect(seen.recover[0]).toContain(APP_URL)
+  })
+
+  test('the link opens a form for the new password, checked before it is sent, then the app', async ({ page }) => {
+    const seen = await serve(page)
+    await page.goto(`/#access_token=${TOKEN}&expires_in=3600&refresh_token=r1&token_type=bearer&type=recovery`)
+    const form = page.locator('.new-password')
+    await expect(form).toContainText('Set a new password for you@example.com.')
+    const [first, second] = [form.locator('input').nth(0), form.locator('input').nth(1)]
+
+    await first.fill('abc')
+    await form.locator('.auth-submit').click()
+    await expect(first).toBeFocused()
+    await expect(first).toHaveAttribute('aria-invalid', 'true')
+    await expect(form.locator('.field-error').first()).toHaveText('At least 6 characters.')
+
+    await first.fill('a-new-password')
+    await second.fill('a-new-passw0rd')
+    await form.locator('.auth-submit').click()
+    await expect(second).toBeFocused()
+    await expect(form.locator('.field-error')).toHaveText('The two passwords are not the same.')
+    expect(seen.updates).toHaveLength(0)
+
+    await second.fill('a-new-password')
+    await form.locator('.auth-submit').click()
+    await expect(form.locator('.auth-notice')).toContainText('Your password is changed.')
+    expect(JSON.parse(seen.updates[0]).password).toBe('a-new-password')
+    // The token is out of the address.
+    expect(await page.evaluate(() => window.location.hash)).toBe('')
+    await form.getByRole('button', { name: 'Continue to BetTracker' }).click()
+    await expect(page.locator('.topbar')).toBeVisible()
+  })
+
+  test('the demo says it sends no email', async ({ page }) => {
+    await page.goto(DEMO_URL)
+    await page.locator('.btn-signout').click()
+    const form = page.locator('.auth-card')
+    await form.locator('.login-forgot').click()
+    await form.locator('input[type=email]').fill('you@example.com')
+    await form.locator('.auth-submit').click()
+    await expect(form.locator('.auth-error')).toHaveText('The demo sends no email: any email and password sign you in.')
+  })
 })

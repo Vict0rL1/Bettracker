@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry } from './harness'
+import { boot, entry, openAdvanced } from './harness'
 
 // Saturday underdog, Sunday even, Monday heavy favorite, and a Saturday in
 // September with no odds recorded.
@@ -15,6 +15,7 @@ const tab = (page: import('@playwright/test').Page, name: string) => page.locato
 test.describe('deeper breakdowns', () => {
   test('by odds band, in band order, leaving bets without odds out', async ({ page }) => {
     await boot(page, { entries: WITH_ODDS })
+    await openAdvanced(page)
     await tab(page, 'Odds').click()
     const labels = page.locator('.breakdown-card .bd-label')
     await expect(labels).toHaveText(['Heavy favorite · ≤ -200', 'Even · -111 – +110', 'Underdog · +110 – +250'])
@@ -24,6 +25,7 @@ test.describe('deeper breakdowns', () => {
 
   test('by weekday and by month, in calendar order', async ({ page }) => {
     await boot(page, { entries: WITH_ODDS })
+    await openAdvanced(page)
     await tab(page, 'Weekday').click()
     await expect(page.locator('.breakdown-card .bd-label')).toHaveText(['Sunday', 'Monday', 'Saturday'])
     await expect(page.locator('.breakdown-card .bd-row', { hasText: 'Saturday' }).locator('.bd-profit')).toHaveText('+$170.00')

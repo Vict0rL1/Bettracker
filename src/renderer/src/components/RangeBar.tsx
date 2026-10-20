@@ -23,13 +23,16 @@ export default function RangeBar({ range, onChange }: Props) {
 
   return (
     <div className="range-bar">
-      <div className="scope-toggle range-toggle" role="group" aria-label={t('range.aria')}>
+      <div className="scope-toggle range-toggle" role="group" aria-label={t('range.aria')} aria-describedby="range-scope">
         {RANGE_KINDS.map((k) => (
           <button key={k} type="button" className={`scope-btn ${range.kind === k ? 'active' : ''}`} aria-pressed={range.kind === k} onClick={() => pick(k)}>
             {t(`range.${k}`)}
           </button>
         ))}
       </div>
+      <p className="scope-note" id="range-scope">
+        {t('range.scope')}
+      </p>
       {range.kind === 'custom' && (
         <div className="range-custom">
           <label>

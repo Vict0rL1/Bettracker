@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry } from './harness'
+import { boot, entry, openAdvanced } from './harness'
 
 // 2.50 taken against a 2.20 close beats it by 13.6%; the −110 bet matched its
 // close; the NFL bet has no closing price yet.
@@ -12,6 +12,7 @@ const WITH_CLOSE = [
 test.describe('closing line value', () => {
   test('is shown per bet and averaged in the stats and the breakdown', async ({ page }) => {
     await boot(page, { entries: WITH_CLOSE })
+    await openAdvanced(page)
     const mini = page.locator('.mini', { hasText: 'CLV' })
     await expect(mini.locator('.mini-value')).toHaveText('+6.8%')
     await expect(mini.locator('.mini-sub')).toHaveText('beat the close 1 of 2')
@@ -25,6 +26,7 @@ test.describe('closing line value', () => {
 
   test('closing odds are typed in the chosen format from the day modal and apply offline', async ({ page }) => {
     await boot(page, { entries: WITH_CLOSE })
+    await openAdvanced(page)
     // Open the NFL day (Aug 3, the newest) and edit its one bet.
     await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
     const modal = page.locator('.day-modal')

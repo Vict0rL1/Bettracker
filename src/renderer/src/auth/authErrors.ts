@@ -45,6 +45,10 @@ export function authErrorKey(e: AuthFailure): StringKey | null {
       return 'login.err.email'
     case 'otp_expired':
       return 'login.err.link'
+    case 'same_password':
+      return 'login.err.samePassword'
+    case 'demo_no_email':
+      return 'login.err.demoNoEmail'
   }
   if (/invalid login credentials/i.test(e.message)) return 'login.err.credentials'
   if (/email not confirmed/i.test(e.message)) return 'login.err.unconfirmed'

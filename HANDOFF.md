@@ -52,7 +52,10 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    `supabase/migrations/002_stake_and_tags.sql` → `003_odds_and_status.sql`
    → `004_user_settings_and_closing_odds.sql` → `005_bankroll_moves.sql`
    (la 005, ingresos y retiradas, no depende de la 004: pueden ir en
-   cualquier orden). Todas son aditivas y re-ejecutables (`if not exists`,
+   cualquier orden) → `006_lost_free_bets.sql` (después de la 003: solo
+   sustituye su trigger para que una apuesta gratis perdida, stake 0 y
+   resultado 0, siga perdida al editarla; sin ella todo funciona, pero esa
+   edición la convierte en push). Todas son aditivas y re-ejecutables (`if not exists`,
    `drop … if exists` antes de cada constraint, policy y trigger).
    `supabase/schema.sql` contiene lo mismo acumulado por si prefieres
    ejecutar un solo archivo. La 001 ya estaba aplicada antes de este
@@ -66,7 +69,14 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    Configuration: **Site URL** = la dirección de la app publicada, y en
    **Redirect URLs** las demás desde las que te registres
    (`http://localhost:5173`); si no, el correo de confirmación lleva a
-   `http://localhost:3000` (la cuenta queda confirmada igual). Si está en
+   `http://localhost:3000` (la cuenta queda confirmada igual). La misma
+   regla vale para el enlace de **¿Olvidaste la contraseña?**: comprobar
+   en Supabase que la dirección publicada está en Site URL o en Redirect
+   URLs y que la plantilla **Reset Password** (Authentication → Emails)
+   está activa. El correo integrado de Supabase envía muy pocos mensajes
+   por hora: para uso real, configurar SMTP. Nada de esto se ha probado
+   contra el proyecto real (no hay acceso desde aquí y no se enviaron
+   correos): está pendiente una prueba en vivo. Si está en
    Netlify subida a mano (Netlify Drop): `npm run build` con el `.env` bueno
    y arrastrar `dist/` a
    la página **Deploys** del sitio que ya existe; soltarlo en la lista de
@@ -138,10 +148,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 621 tests unitarios (vitest)
+npm test            # 655 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 128 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 170 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -185,6 +195,44 @@ cargado). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Revisión de funciones y auditoría (octubre 2026)
+
+Hecho a partir de la revisión práctica y de la auditoría (los informes no
+estaban en este contenedor; se trabajó con la lista de hallazgos):
+
+- **Fiabilidad**: los seis defectos de la auditoría ya estaban resueltos;
+  se volvieron a comprobar (`e2e/resilience.spec.ts`, 38 casos).
+- **Alta rápida**: stake 0 + cuota 2.0 + GANADA ya no se cierra en
+  silencio: pide el beneficio de la promoción (`QuickAdd`, `lib/betForm.ts`).
+  Una gratis perdida queda perdida a 0 (`normalizeInput`, migración 006).
+  Un beneficio que se redondea a 0,00 se pide con su motivo. Los errores
+  van junto a su casilla (`aria-describedby`, foco al primero); un rechazo
+  deja el formulario abierto con lo escrito (`refusalText`) y solo se
+  cierra cuando se acepta. Los manejadores de `App` lanzan el error al
+  formulario en vez de solo mostrar un aviso.
+- **Importación CSV**: paso de revisión (`DataDialog`, `lib/importPlan.ts`):
+  listas, rechazadas con su motivo (traducido) y posibles duplicados
+  (omitidos salvo que se conserven; dos filas iguales del archivo se
+  importan las dos). Cada importación es un lote (`data/imports.ts`) que se
+  puede deshacer entero; el mismo archivo se reconoce (en curso o ya
+  importado).
+- **Edición directa y borradores**: el lápiz del historial abre esa
+  apuesta en edición; la fecha abre el día. Los formularios guardan
+  borrador al cerrarse sin querer (`data/drafts.ts`), con **Descartar**.
+- **Historial en móvil**: tarjetas compactas que se despliegan
+  (`HistoryTable`, ≤640 px); la tabla sigue en escritorio.
+- **Alcance**: cada cifra dice qué fechas cubre; el historial puede
+  limitarse al rango; la barra masiva dice cuántas hay seleccionadas y
+  cuántas ocultan los filtros; días ganadores y apuestas ganadas separados;
+  la tasa de equilibrio con su propio recuento.
+- **Copia completa** (`lib/backup.ts`): JSON versionado con apuestas,
+  movimientos y ajustes; se valida antes de aplicar y restaurar solo añade.
+  **¿Olvidaste la contraseña?** y pantalla de contraseña nueva
+  (`auth/NewPassword.tsx`).
+- **Panel**: P/L, bankroll y pendientes primero; analítica avanzada
+  plegable; guía de primeros pasos para cuentas nuevas; **Añadir apuesta**
+  y el **+** del móvil abren la misma hoja.
 
 ### Fase 1 · red de seguridad
 - Workflow de CI con jobs `calidad` (ci/test/build) y `e2e`; hoy es
@@ -637,16 +685,24 @@ src/renderer/src/data/
   store.ts                                las colas en el almacenamiento, compartidas entre ventanas con candado
                                           y versión en IndexedDB; lo retenido se reaplica
   useOpQueue.ts                           una cola de operaciones (apuestas o movimientos): candados, rechazadas
+src/renderer/src/lib/betForm.ts     los problemas de cada casilla, en palabras; rechazos
+src/renderer/src/lib/importPlan.ts  revisión de una importación: duplicados, huella del archivo
+src/renderer/src/lib/backup.ts      copia completa: formato, validación, plan de restauración
+src/renderer/src/lib/useMedia.ts    media queries (tarjetas del historial en móvil)
+src/renderer/src/data/drafts.ts     borradores de los formularios
+src/renderer/src/data/imports.ts    lotes de importación (para deshacerlos)
+src/renderer/src/auth/NewPassword.tsx  contraseña nueva desde el enlace de recuperación
 src/renderer/src/components/
+  DataDialog (importar/exportar/copias), FirstRun (primeros pasos), FieldError,
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       128 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       170 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo)
 e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
-supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
+supabase/migrations/00{2,3,4,5,6}_*.sql, supabase/schema.sql
 supabase/tests/                     el esquema contra un Postgres real
 ```

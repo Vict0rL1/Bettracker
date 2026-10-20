@@ -16,7 +16,7 @@ test.describe('monthly loss limit', () => {
     await expect(banner).toContainText('this month’s losses are $85.00, 85% of your $100.00 limit')
 
     // Logging is not blocked: a quick-add loss of $20 takes the month to $105 lost.
-    await page.click('.fab')
+    await page.click('.add-bet-btn')
     await page.locator('.quick-modal .field input').first().fill('20')
     await page.locator('.quick-modal .seg-btn.loss').click()
     await expect(page.locator('.toast')).toContainText('Added a bet')

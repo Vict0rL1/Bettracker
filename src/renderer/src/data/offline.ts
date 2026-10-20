@@ -102,6 +102,10 @@ const movesOutboxKey = (userId: string): string => `bettracker:moves-outbox:${us
 const refusedKey = (userId: string): string => `bettracker:refused:${userId}`
 const movesRefusedKey = (userId: string): string => `bettracker:moves-refused:${userId}`
 const LAST_USER_KEY = 'bettracker:last-user'
+/** An unfinished form (see data/drafts.ts): the quick add, or the day's form. */
+export const draftKey = (userId: string, slot: 'quick' | 'day'): string => `bettracker:draft-${slot}:${userId}`
+/** The imports made on this device, for their Undo (see data/imports.ts). */
+export const importsKey = (userId: string): string => `bettracker:imports:${userId}`
 
 /** The storage keys of a user's queues, which other windows watch for (see the hooks' storage listeners). */
 export const queueKeys = (userId: string) => ({
@@ -205,8 +209,11 @@ export function markHeadSent<T extends { opId: string; sent?: true }>(): (ops: T
   }
 }
 
-const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
-  status === 'pending' ? amount === null : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 : amount === 0)
+// Migration 006's rule: a free bet (stake 0) that lost nets 0 and stays lost.
+const fitsStatus = (status: BetStatus, amount: number | null, stake: number | null): boolean =>
+  status === 'pending'
+    ? amount === null
+    : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 || (amount === 0 && stake === 0) : amount === 0)
 
 /**
  * A legacy edit (see loadOutbox) laid over the row it edits, the way the
@@ -216,9 +223,10 @@ const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
  */
 export function applyLegacyEdit(current: Bet, input: BetInput): Bet {
   let amount = typeof input.amount === 'number' ? input.amount : current.amount
+  const stake = 'stake' in input ? (input.stake ?? null) : current.stake
   let status = current.status
   if (status === 'pending' && amount === 0) amount = null
-  else if (!fitsStatus(status, amount)) status = amount === null ? 'pending' : statusForAmount(amount)
+  else if (!fitsStatus(status, amount, stake)) status = amount === null ? 'pending' : statusForAmount(amount)
   return {
     ...current,
     date: input.date,
@@ -337,6 +345,9 @@ export function clearUserData(userId: string): void {
     localStorage.removeItem(movesOutboxKey(userId))
     localStorage.removeItem(refusedKey(userId))
     localStorage.removeItem(movesRefusedKey(userId))
+    localStorage.removeItem(draftKey(userId, 'quick'))
+    localStorage.removeItem(draftKey(userId, 'day'))
+    localStorage.removeItem(importsKey(userId))
     localStorage.removeItem(LAST_USER_KEY)
   } catch {
     // best effort

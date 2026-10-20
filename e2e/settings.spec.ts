@@ -46,7 +46,7 @@ test.describe('settings', () => {
     await stake.fill('30')
     await stake.press('Enter')
     await page.locator('.settings-modal .modal-actions .btn-ghost').click()
-    await page.click('.fab')
+    await page.click('.add-bet-btn')
     await expect(page.locator('.quick-modal .field input').first()).toHaveValue('30')
   })
 })

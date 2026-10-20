@@ -1802,7 +1802,8 @@ tbody tr:hover {
 }
 
 .filters input,
-.filters select {
+.filters select,
+.hcards-head select {
   background: var(--input-bg);
   border: 1px solid var(--tint-3);
   border-radius: var(--radius-sm);
@@ -1816,7 +1817,8 @@ tbody tr:hover {
 }
 
 .filters input:focus,
-.filters select:focus {
+.filters select:focus,
+.hcards-head select:focus {
   outline: none;
   border-color: var(--focus);
   box-shadow: 0 0 0 3px var(--focus-ring);
@@ -2904,6 +2906,751 @@ tbody tr.is-selected {
   .bank-form .bet-submit .move-save {
     width: 100%;
     justify-content: center;
+  }
+}
+
+/* ---------- forms: problems in words, refusals, drafts, free bets ---------- */
+/* A box's problem sits under it, in words; the box gets the red edge too, but
+   never only that. */
+.field-error {
+  margin: 4px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--red-text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.field input[aria-invalid='true'] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px var(--red-dim);
+}
+
+/* A change the app refused, above the form's buttons. */
+.form-error {
+  margin: 0;
+  background: var(--red-dim);
+  border: 1px solid var(--red-dim-2);
+  border-radius: var(--radius-sm);
+  color: var(--red-text);
+  font-size: var(--fs-md);
+  padding: 8px 12px;
+}
+
+/* "Your unfinished bet is back · Discard". */
+.draft-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--amber-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-md);
+  padding: 6px 6px 6px 12px;
+}
+
+.draft-note .auth-toggle {
+  padding: 6px 10px;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.tag.draft-tag {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+.free-bet-note {
+  color: var(--text-2);
+  white-space: normal;
+}
+
+.quick-more {
+  align-self: flex-start;
+  padding: 4px 0;
+  font-size: var(--fs-sm);
+}
+
+.bet-submit-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.bet-form.is-editing {
+  border-color: var(--green-dim-2);
+}
+
+/* ---------- scope: what a number or a list covers ---------- */
+.scope-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--tint-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.scope-note {
+  margin: 6px 2px 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.bulk-hidden {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+/* The date in the history opens the whole day; the pencil, the one bet. */
+.td-day {
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted var(--text-3);
+  text-underline-offset: 3px;
+}
+
+.td-day:hover {
+  color: var(--green);
+}
+
+/* ---------- history on a phone: compact cards ---------- */
+.hcards-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 8px;
+  flex-wrap: wrap;
+}
+
+.hcards-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.hcards-all input,
+.hcard-sel {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--green);
+  flex-shrink: 0;
+}
+
+.hcards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hcard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--tint-1);
+  min-width: 0;
+}
+
+.hcard.is-pending {
+  background: var(--amber-dim);
+}
+
+.hcard.is-selected {
+  border-color: var(--green-dim-2);
+  background: var(--green-dim);
+}
+
+.hcard-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 10px 10px 12px;
+}
+
+.hcard-sel {
+  margin-top: 2px;
+}
+
+.hcard-toggle {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hcard-toggle .chevron-down {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.hcard.is-open .chevron-down {
+  transform: rotate(180deg);
+}
+
+.hcard-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.hcard-date {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hcard-amt {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hcard-sub {
+  grid-column: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.hcard-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hcard-stake {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.hcard-settle {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 0 12px 10px;
+}
+
+.hcard-settle .settle-btn {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.hcard-details {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+}
+
+.hcard-details dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0 0 10px;
+}
+
+.hcard-details dl > div {
+  min-width: 0;
+}
+
+.hcard-details .hcard-wide {
+  grid-column: 1 / -1;
+}
+
+.hcard-details dt {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+
+.hcard-details dd {
+  margin: 2px 0 0;
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+.hcard-details dd .tag + .tag {
+  margin-left: 4px;
+}
+
+.hcard-details dd.win {
+  color: var(--green);
+}
+
+.hcard-details dd.loss {
+  color: var(--red);
+}
+
+.hcard-note {
+  white-space: pre-wrap;
+}
+
+.hcard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hcard-actions .btn {
+  min-height: 36px;
+}
+
+.hcard-actions .danger {
+  color: var(--red-text);
+}
+
+.hcard-actions .danger.confirming {
+  border-color: var(--red);
+  background: var(--red-dim);
+}
+
+/* ---------- import & export ---------- */
+.data-modal {
+  width: min(600px, 100%);
+}
+
+.data-section,
+.data-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.data-section + .data-section {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.data-section h3,
+.data-step h3 {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.data-step h3:focus {
+  outline: none;
+}
+
+.data-section .hint,
+.data-step .hint,
+.data-step .draft-note {
+  margin: 0;
+}
+
+.data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.imp-summary {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.imp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.imp-section h4 {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-2);
+}
+
+.imp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: var(--fs-md);
+}
+
+.imp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--tint-1);
+}
+
+.imp-line {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.imp-amt {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.imp-tags {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.imp-rejected li {
+  padding: 4px 8px;
+  border-left: 2px solid var(--red-dim-2);
+}
+
+.imp-more {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.imp-choice {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.imp-choice label,
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.imp-choice input,
+.check-line input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
+  flex-shrink: 0;
+}
+
+.imp-nothing {
+  margin: 0;
+}
+
+.data-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-batch-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.data-batch-text strong {
+  overflow-wrap: anywhere;
+}
+
+.restore-counts li {
+  padding-left: 12px;
+  position: relative;
+}
+
+.restore-counts li::before {
+  content: '·';
+  position: absolute;
+  left: 2px;
+  color: var(--text-3);
+}
+
+/* ---------- dashboard: key numbers first, the rest on demand ---------- */
+.hero-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Bankroll and pending open their dialogs: the whole card is the button. */
+.key-card {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.key-card:hover {
+  border-color: var(--border-strong);
+}
+
+.key-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.key-card .stat-head,
+.key-card .stat-label,
+.key-card .key-value,
+.key-card .key-sub {
+  display: flex;
+}
+
+.key-card .stat-head {
+  width: 100%;
+}
+
+.pending-card.has-open .key-value {
+  color: var(--amber);
+}
+
+.advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.advanced-head {
+  margin: 0;
+  font-size: inherit;
+}
+
+.advanced-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 14px 20px;
+  background: linear-gradient(180deg, var(--card-top) 0%, var(--card-bottom) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.advanced-toggle:hover {
+  border-color: var(--border-strong);
+}
+
+.advanced-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.advanced-title {
+  font-size: var(--fs-base);
+  font-weight: 700;
+}
+
+.advanced-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.advanced-toggle .chevron-down {
+  margin-left: auto;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.advanced.is-open .advanced-toggle .chevron-down {
+  transform: rotate(180deg);
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.advanced-body[hidden] {
+  display: none;
+}
+
+/* Eight tiles in two rows of four: room for the counts each sub carries. */
+.advanced-body .mini-card {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.advanced-body .mini-sub {
+  white-space: normal;
+}
+
+@media (max-width: 1120px) {
+  .hero-2 .roi-card {
+    grid-column: auto;
+  }
+
+  .key-stats .pending-card {
+    grid-column: span 2;
+  }
+
+  .advanced-body .mini-card {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-2,
+  .key-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .key-stats .pending-card {
+    grid-column: auto;
+  }
+
+  .advanced-body .mini-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .advanced-hint {
+    flex-basis: 100%;
+    order: 3;
+  }
+}
+
+/* The + button is the quick add on a phone, where the header's Add bet has scrolled away. */
+@media (min-width: 641px) {
+  .fab {
+    display: none;
+  }
+
+  .toast {
+    right: calc(24px + env(safe-area-inset-right));
+  }
+}
+
+/* ---------- first steps ---------- */
+.first-run {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-color: var(--green-dim-2);
+}
+
+.first-run-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.first-run-head h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
+.first-run-head .hint {
+  margin: 2px 0 0;
+}
+
+.first-run-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.first-run-steps li {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.step-mark {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--tint-2);
+  color: var(--text-2);
+  font-weight: 700;
+  font-size: var(--fs-sm);
+}
+
+.first-run-steps li.is-done .step-mark {
+  background: var(--green-dim-2);
+  color: var(--green);
+}
+
+.first-run-steps li.is-done strong {
+  color: var(--text-2);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-3);
+}
+
+.step-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.step-body .hint {
+  margin: 0;
+}
+
+.guide-odds {
+  width: 100%;
+}
+
+@media (max-width: 1120px) {
+  .first-run-steps {
+    grid-template-columns: 1fr;
   }
 }
 

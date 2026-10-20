@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, type BankrollMove, type Bet } from '../../../shared/types'
 import { bet } from '../test-utils'
 import {
+  applyLegacyEdit,
   afterSettingsAnswer,
   applyMoveOutbox,
   applyOutbox,
@@ -820,3 +821,13 @@ describe('settings: what an answer leaves pending', () => {
   })
 })
 
+
+describe('applyLegacyEdit and free bets (migration 006)', () => {
+  it('a lost free bet edited by an older app stays lost at $0, as the database keeps it', () => {
+    const lostFree = bet({ status: 'lost', amount: 0, stake: 0 })
+    expect(applyLegacyEdit(lostFree, { date: lostFree.date, amount: 0, note: 'renamed' })).toMatchObject({ status: 'lost', amount: 0, note: 'renamed' })
+    // With a real stake, a lost bet at $0 is still worked out again: a push.
+    const lostCash = bet({ status: 'lost', amount: -10, stake: 10 })
+    expect(applyLegacyEdit(lostCash, { date: lostCash.date, amount: 0 })).toMatchObject({ status: 'push', amount: 0 })
+  })
+})

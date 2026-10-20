@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, Bet, BetInput, BetStatus, MoveInput } from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
 import BankrollDialog from './components/BankrollDialog'
 import Breakdown from './components/Breakdown'
 import CalendarView from './components/CalendarView'
-import DayModal, { type TagSuggestions } from './components/DayModal'
+import DataDialog, { type ImportChoice, type RestoreChoice } from './components/DataDialog'
+import FirstRun from './components/FirstRun'
+import DayModal, { type DayDrafts, type TagSuggestions } from './components/DayModal'
 import Header from './components/Header'
-import HeroStats from './components/HeroStats'
+import HeroStats, { AdvancedSection, AdvancedStats, KeyStats } from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
 import LossBanner from './components/LossBanner'
 import PendingPanel from './components/PendingPanel'
@@ -16,6 +18,7 @@ import SettingsDialog from './components/SettingsDialog'
 import SyncNotices from './components/SyncNotices'
 import Toast, { type ToastMsg } from './components/Toast'
 import Login from './auth/Login'
+import NewPassword from './auth/NewPassword'
 import { useAuth } from './auth/AuthProvider'
 import { authErrorKey } from './auth/authErrors'
 import { combinedStatus } from './data/drain'
@@ -24,16 +27,19 @@ import { StorageWriteError } from './data/store'
 import { hasStoredSession } from './lib/supabase'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
+import { dayDraftId, loadDayDraft, loadQuickDraft, saveDayDraft, saveQuickDraft, type QuickDraft } from './data/drafts'
+import { loadImports, markUndone, recordImport, type ImportBatch } from './data/imports'
+import { downloadBackup, makeBackup } from './lib/backup'
 import { useSettings } from './data/useSettings'
 import { bankrollNow, firstBetDate } from './lib/bankroll'
-import { retagPlan, settlePlan, type TagPatch } from './lib/bulk'
-import { downloadCsv, parseBetsCsv } from './lib/csv'
+import { retagPlan, settlePlan, toInput, type TagPatch } from './lib/bulk'
+import { downloadCsv } from './lib/csv'
 import { moneyFormat } from './lib/format'
 import { useLang } from './lib/i18n'
 import { dismissKey, loadLossDismissed, lossState, saveLossDismissed } from './lib/lossLimit'
 import { MoneyContext } from './lib/money'
 import { openBets } from './lib/pending'
-import { filterRange, loadRange, saveRange, type DateRange } from './lib/range'
+import { filterRange, loadRange, rangeBounds, saveRange, type DateRange } from './lib/range'
 import { forMonth, groupByDay, summarize, tagValues, total, type DaySummary } from './lib/stats'
 import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
@@ -53,7 +59,7 @@ function Boot() {
 }
 
 export default function App() {
-  const { loading, session, userId, email, offlineUser, signOut } = useAuth()
+  const { loading, session, userId, email, offlineUser, signOut, recovering } = useAuth()
   const { theme, toggle: toggleTheme } = useTheme()
   const { t, tn } = useLang()
 
@@ -63,11 +69,18 @@ export default function App() {
   const activeEmail = email ?? offlineUser?.email ?? null
 
   const [ym, setYm] = useState<MonthKey>(currentMonth)
-  const [modalDate, setModalDate] = useState<string | null>(null)
+  // The day open, and the bet in it being edited (as `as`, when settling one).
+  const [day, setDay] = useState<{ date: string; edit?: { id: string; as?: BetStatus } } | null>(null)
+  const openDay = useCallback((date: string) => setDay({ date }), [])
   const [quickOpen, setQuickOpen] = useState(false)
+  // The quick add's draft as it opened (see data/drafts.ts).
+  const [quickStart, setQuickStart] = useState<QuickDraft | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState(false)
   const [bankrollOpen, setBankrollOpen] = useState(false)
+  const [dataOpen, setDataOpen] = useState(false)
+  // The imports made on this device (see data/imports.ts), as last read.
+  const [batches, setBatches] = useState<ImportBatch[]>([])
   const [toast, setToast] = useState<ToastMsg | null>(null)
 
   // An error in the user's words where the app knows it: storage that
@@ -141,9 +154,10 @@ export default function App() {
     }
   }, [loading, activeUserId, bets])
 
-  // The stat cards, the chart and the breakdown follow the chosen date range;
-  // the calendar, the month card, the history and the pending count always
-  // see everything.
+  // P/L, ROI, the chart and the advanced numbers (breakdown included) follow
+  // the chosen date range; the bankroll, the pending bets, the calendar, the
+  // month card and the history always see everything (the history can be
+  // narrowed to the range). Each card says which (see Scope).
   const [range, setRange] = useState<DateRange>(loadRange)
   const changeRange = useCallback((next: DateRange) => {
     setRange(next)
@@ -152,6 +166,7 @@ export default function App() {
   const ranged = useMemo(() => filterRange(bets ?? [], range, todayStr()), [bets, range])
   const scoped = useMemo(() => summarize(ranged), [ranged])
   const rangeName = range.kind === 'all' ? null : t(`range.${range.kind}`)
+  const historyRange = useMemo(() => (rangeName === null ? null : { name: rangeName, bounds: rangeBounds(range, todayStr()) }), [range, rangeName])
 
   const dayMap = useMemo(() => {
     const map = new Map<string, DaySummary>()
@@ -168,7 +183,26 @@ export default function App() {
     [bets]
   )
 
-  const modalBets = modalDate ? (dayMap.get(modalDate)?.bets ?? []) : []
+  const modalBets = day ? (dayMap.get(day.date)?.bets ?? []) : []
+
+  // Unfinished forms, kept per user (see data/drafts.ts).
+  // What the quick add holds now: closing it with something typed says it is kept.
+  const quickDraft = useRef<QuickDraft | null>(null)
+  const openQuick = useCallback(() => {
+    const draft = activeUserId ? loadQuickDraft(activeUserId) : null
+    quickDraft.current = draft
+    setQuickStart(draft)
+    setQuickOpen(true)
+  }, [activeUserId, quickDraft])
+  const dayDrafts = useMemo<DayDrafts>(
+    () => ({
+      load: (date, editingId) => (activeUserId ? loadDayDraft(activeUserId, date, editingId) : null),
+      save: (id, draft) => {
+        if (activeUserId) saveDayDraft(activeUserId, id, draft)
+      }
+    }),
+    [activeUserId]
+  )
   const openList = useMemo(() => openBets(bets ?? [], todayStr()), [bets])
 
   // The monthly loss limit watches the current calendar month, whatever the
@@ -184,7 +218,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (modalDate !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen) return
+      if (day !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen || dataOpen) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
@@ -193,12 +227,12 @@ export default function App() {
         // The sheet focuses and selects the stake box as it opens; without this
         // the same keystroke's character would land there and wipe the default.
         e.preventDefault()
-        setQuickOpen(true)
+        openQuick()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalDate, quickOpen, settingsOpen, pendingOpen, bankrollOpen])
+  }, [day, quickOpen, settingsOpen, pendingOpen, bankrollOpen, dataOpen, openQuick])
 
   // With the session ended the queue waits for a sign-in, not the connection.
   const savedNote = useCallback(
@@ -238,28 +272,23 @@ export default function App() {
     [savedNote, showError, t]
   )
 
+  // From a form: a refused bet throws, and the form says why with
+  // everything typed still in it (see refusalText). Accepted, the toast says
+  // so (or that it is only in this window).
   const handleAdd = useCallback(
-    async (input: BetInput) => {
-      try {
-        const saved = await sync.addBet(input)
-        done(saved, savedNote(t(input.status === 'pending' ? 'toast.loggedPending' : 'toast.added'), input.date))
-      } catch (err) {
-        showError(err)
-      }
+    async (input: BetInput): Promise<void> => {
+      const saved = await sync.addBet(input)
+      done(saved, savedNote(t(input.status === 'pending' ? 'toast.loggedPending' : 'toast.added'), input.date))
     },
-    [sync, savedNote, showError, done, t]
+    [sync, savedNote, done, t]
   )
 
   const handleUpdate = useCallback(
-    async (id: string, input: BetInput) => {
-      try {
-        const saved = await sync.updateBet(id, input)
-        done(saved, savedNote(t('toast.updated'), input.date))
-      } catch (err) {
-        showError(err)
-      }
+    async (id: string, input: BetInput): Promise<void> => {
+      const saved = await sync.updateBet(id, input)
+      done(saved, savedNote(t('toast.updated'), input.date))
     },
-    [sync, savedNote, showError, done, t]
+    [sync, savedNote, done, t]
   )
 
   const handleDelete = useCallback(
@@ -332,12 +361,13 @@ export default function App() {
   )
 
   // Settling from the history table: when the result follows from stake and
-  // odds it's one tap; when it doesn't (no odds on a win), open the day so the
-  // user can type it.
+  // odds it's one tap; when it doesn't (no odds on a win, a free bet's win, a
+  // profit that rounds to $0.00), the bet opens in its day's form, as won, so
+  // the user can type it.
   const handleSettle = useCallback(
     async (bet: Bet, next: BetStatus, amount: number | null) => {
-      if (next === 'won' && amount === null) {
-        setModalDate(bet.date)
+      if (next === 'won' && (amount === null || amount === 0)) {
+        setDay({ date: bet.date, edit: { id: bet.id, as: 'won' } })
         return
       }
       try {
@@ -422,27 +452,96 @@ export default function App() {
     setToast({ kind: 'ok', text: t('toast.exported', { bets: tn('bet', count) }) })
   }, [bets, t, tn])
 
-  const handleImport = useCallback(
-    async (file: File) => {
-      try {
-        const { rows, errors, skipped, noStake } = parseBetsCsv(await file.text(), settings.oddsFormat)
-        if (rows.length === 0) {
-          setToast({ kind: 'error', text: errors[0] ?? t('toast.importNothing') })
-          return
-        }
-        const { count, saved } = await sync.importBets(rows)
-        const notes: string[] = []
-        if (skipped > 0) notes.push(t('toast.skipped', { lines: tn('line', skipped) }))
-        if (noStake > 0) notes.push(t('toast.noStake', { n: noStake }))
-        done(saved, savedNote(t('toast.imported', { bets: tn('bet', count) }) + (notes.length ? ` · ${notes.join(' · ')}` : '')))
-      } catch (err) {
-        showError(err)
+  const handleBackup = useCallback(() => {
+    if (!activeUserId || !bets) return
+    const backup = makeBackup(bets, moves.moves, settings, { id: activeUserId, email: activeEmail })
+    downloadBackup(backup)
+    setToast({ kind: 'ok', text: t('backup.downloaded', { bets: tn('bet', backup.bets.length), moves: tn('move', backup.moves.length) }) })
+  }, [activeUserId, activeEmail, bets, moves.moves, settings, t, tn])
+
+  // The latest copy, for an Undo clicked long after the change it undoes.
+  const betsRef = useRef(bets)
+  betsRef.current = bets
+  const movesRef = useRef(moves.moves)
+  movesRef.current = moves.moves
+  const refreshBatches = useCallback(() => setBatches(activeUserId ? loadImports(activeUserId) : []), [activeUserId])
+
+  /**
+   * Undo a whole import (or restore): delete the bets it added that are
+   * still here, and the deposits and withdrawals a restore added. Itself
+   * undoable: the toast puts them back, with their ids.
+   */
+  const undoBatch = useCallback(
+    async (batch: ImportBatch): Promise<boolean> => {
+      const ids = new Set(batch.ids)
+      const moveIds = new Set(batch.moveIds ?? [])
+      const gone = (betsRef.current ?? []).filter((b) => ids.has(b.id))
+      const goneMoves = movesRef.current.filter((m) => moveIds.has(m.id))
+      if (activeUserId) markUndone(activeUserId, batch.id)
+      refreshBatches()
+      if (gone.length === 0 && goneMoves.length === 0) {
+        setToast({ kind: 'ok', text: t('imp.undoNothing') })
+        return true
       }
+      let saved = gone.length > 0 ? await sync.deleteBets(gone.map((b) => b.id)) : true
+      for (const m of goneMoves) saved = (await moves.deleteMove(m.id)) && saved
+      done(saved, savedNote(t('imp.undone', { bets: tn('bet', gone.length) })), async () => {
+        let back = gone.length > 0 ? await sync.restoreBets(gone) : true
+        for (const m of goneMoves) back = (await moves.restoreMove(m)) && back
+        if (activeUserId) markUndone(activeUserId, batch.id, false)
+        refreshBatches()
+        return back
+      })
+      return saved
     },
-    [sync, savedNote, showError, done, t, tn, settings.oddsFormat]
+    [activeUserId, refreshBatches, sync, moves, done, savedNote, t, tn]
+  )
+
+  // From the review step: what the user chose to import. Throws when refused.
+  const handleImport = useCallback(
+    async (choice: ImportChoice): Promise<void> => {
+      const { count, saved, opId, ids } = await sync.importBets(choice.rows)
+      const batch: ImportBatch = { id: opId, at: new Date().toISOString(), file: choice.file, fingerprint: choice.fingerprint, ids }
+      if (activeUserId && count > 0) recordImport(activeUserId, batch)
+      refreshBatches()
+      const notes =
+        (choice.skipped > 0 ? t('imp.doneSkipped', { n: choice.skipped }) : '') + (choice.rejected > 0 ? t('imp.doneRejected', { n: choice.rejected }) : '')
+      done(saved, savedNote(t('imp.done', { bets: tn('bet', count) }) + notes), () => undoBatch(batch))
+    },
+    [activeUserId, sync, refreshBatches, done, savedNote, undoBatch, t, tn]
+  )
+
+  // A backup, as planned in the review step: it only adds (see planRestore).
+  const handleRestore = useCallback(
+    async (choice: RestoreChoice): Promise<void> => {
+      const { plan } = choice
+      const add = [...plan.newBets, ...(choice.keepDuplicates ? plan.duplicateBets : [])]
+      const result = await sync.importBets(
+        add.map(toInput),
+        add.map((b) => b.id)
+      )
+      let saved = result.saved
+      for (const m of plan.newMoves) saved = (await moves.restoreMove(m)) && saved
+      if (choice.replaceSettings && plan.settingsDiffer) updateSettings(plan.settings)
+      const batch: ImportBatch = {
+        id: result.opId,
+        at: new Date().toISOString(),
+        file: choice.file,
+        fingerprint: choice.fingerprint,
+        ids: result.ids,
+        moveIds: plan.newMoves.map((m) => m.id),
+        kind: 'restore'
+      }
+      if (activeUserId && (add.length > 0 || plan.newMoves.length > 0)) recordImport(activeUserId, batch)
+      refreshBatches()
+      done(saved, savedNote(t('backup.restored', { bets: tn('bet', add.length), moves: tn('move', plan.newMoves.length) })), () => undoBatch(batch))
+    },
+    [activeUserId, sync, moves, updateSettings, refreshBatches, done, savedNote, undoBatch, t, tn]
   )
 
   if (loading) return <Boot />
+  // Opened from a password reset email: the new password first.
+  if (session && recovering) return <NewPassword />
   if (!activeUserId) return <Login />
   // Signing in again over this device's data: its queues wait meanwhile.
   if (reauth && !session) return <Login onCancel={() => setReauth(false)} />
@@ -461,14 +560,15 @@ export default function App() {
           queuedCount={badgeQueued}
           pendingCount={openList.length}
           unsynced={badgeQueued + (settingsDirty ? 1 : 0) + refusedList.length}
-          canExport={shownBets.length > 0}
           theme={theme}
-          onExport={handleExport}
-          onImport={handleImport}
+          onOpenData={() => {
+            refreshBatches()
+            setDataOpen(true)
+          }}
           onToggleTheme={toggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenPending={() => setPendingOpen(true)}
-          onLogToday={() => setModalDate(todayStr())}
+          onAddBet={openQuick}
           onSignOut={signOut}
         />
 
@@ -494,23 +594,44 @@ export default function App() {
 
         {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}
 
+        {settingsLoaded && (
+          <FirstRun
+            key={activeUserId}
+            userId={activeUserId}
+            bankrollSet={bankroll.known || settings.startingBankroll !== null || moves.moves.length > 0}
+            oddsFormat={settings.oddsFormat}
+            oddsSettled={settings.updatedAt !== '' || shownBets.length > 0}
+            hasBets={shownBets.length > 0}
+            onSetBankroll={openBankroll}
+            onPickOdds={(oddsFormat) => updateSettings({ oddsFormat })}
+            onAddBet={openQuick}
+          />
+        )}
+
         <RangeBar range={range} onChange={changeRange} />
+
+        <KeyStats
+          lifetime={scoped}
+          rangeName={rangeName}
+          bankroll={bankroll}
+          offline={isOffline}
+          open={openList}
+          onOpenBankroll={openBankroll}
+          onOpenPending={() => setPendingOpen(true)}
+        />
 
         <HeroStats
           bets={shownBets}
           lifetime={scoped}
           rangeName={rangeName}
           ym={ym}
-          bankroll={bankroll}
-          offline={isOffline}
           onPrev={() => setYm((m) => addMonths(m, -1))}
           onNext={() => setYm((m) => addMonths(m, 1))}
           onResetMonth={() => setYm(currentMonth())}
-          onOpenBankroll={openBankroll}
         />
 
         <div className="grid-mid">
-          <CalendarView ym={ym} dayMap={dayMap} onDayClick={setModalDate} />
+          <CalendarView ym={ym} dayMap={dayMap} onDayClick={openDay} />
           <BalanceChart
             bets={shownBets}
             lifetime={scoped}
@@ -523,12 +644,17 @@ export default function App() {
           />
         </div>
 
-        <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
+        <AdvancedSection rangeName={rangeName}>
+          <AdvancedStats lifetime={scoped} />
+          <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
+        </AdvancedSection>
 
         <HistoryTable
           bets={shownBets}
           oddsFormat={settings.oddsFormat}
-          onEdit={setModalDate}
+          range={historyRange}
+          onEdit={(b) => setDay({ date: b.date, edit: { id: b.id } })}
+          onOpenDay={openDay}
           onDelete={handleDelete}
           onSettle={handleSettle}
           onBulkRetag={handleBulkRetag}
@@ -536,17 +662,24 @@ export default function App() {
           onBulkDelete={handleBulkDelete}
         />
 
-        {modalDate !== null && (
+        {day !== null && (
           <DayModal
-            date={modalDate}
+            // A new day, or another bet to open on: a fresh form.
+            key={`${day.date}|${day.edit?.id ?? ''}|${day.edit?.as ?? ''}`}
+            date={day.date}
             bets={modalBets}
+            edit={day.edit}
             oddsFormat={settings.oddsFormat}
             suggestions={suggestions}
             bankroll={bankroll.known ? bankroll.current : null}
+            drafts={dayDrafts}
             onAdd={handleAdd}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
-            onClose={() => setModalDate(null)}
+            onClose={(kept) => {
+              setDay(null)
+              if (kept) setToast({ kind: 'ok', text: t('draft.kept') })
+            }}
           />
         )}
 
@@ -557,7 +690,39 @@ export default function App() {
             suggestions={suggestions}
             bankroll={bankroll.known ? bankroll.current : null}
             onAdd={handleAdd}
-            onClose={() => setQuickOpen(false)}
+            draft={quickStart}
+            onDraft={(draft) => {
+              quickDraft.current = draft
+              if (activeUserId) saveQuickDraft(activeUserId, draft)
+            }}
+            onMore={(draft) => {
+              // The full form for today, with what was typed.
+              const today = todayStr()
+              if (activeUserId) {
+                saveDayDraft(activeUserId, dayDraftId(today, null), {
+                  savedAt: new Date().toISOString(),
+                  date: today,
+                  editingId: null,
+                  status: 'won',
+                  amount: draft.profit,
+                  stake: draft.stake,
+                  odds: draft.odds,
+                  closing: '',
+                  note: '',
+                  sport: draft.sport,
+                  book: draft.book,
+                  betType: draft.betType
+                })
+                saveQuickDraft(activeUserId, null)
+              }
+              quickDraft.current = null
+              setQuickOpen(false)
+              openDay(today)
+            }}
+            onClose={() => {
+              setQuickOpen(false)
+              if (quickDraft.current) setToast({ kind: 'ok', text: t('draft.kept') })
+            }}
           />
         )}
 
@@ -590,26 +755,45 @@ export default function App() {
           />
         )}
 
+        {dataOpen && activeUserId && (
+          <DataDialog
+            bets={shownBets}
+            moves={moves.moves}
+            settings={settings}
+            account={{ id: activeUserId, email: activeEmail }}
+            oddsFormat={settings.oddsFormat}
+            complete={moves.loaded && settingsLoaded}
+            batches={batches}
+            importing={sync.importing}
+            onExportCsv={handleExport}
+            onDownloadBackup={handleBackup}
+            onImport={handleImport}
+            onRestore={handleRestore}
+            onUndoBatch={(b) => void undoBatch(b)}
+            onClose={() => setDataOpen(false)}
+          />
+        )}
+
         {pendingOpen && (
           <PendingPanel
             open={openList}
             oddsFormat={settings.oddsFormat}
             onSettle={(bet, next, amount) => {
-              // A win with no odds opens the day to type the profit; get out of its way.
-              if (next === 'won' && amount === null) setPendingOpen(false)
+              // A win whose profit can't be worked out opens the bet to type it; get out of its way.
+              if (next === 'won' && (amount === null || amount === 0)) setPendingOpen(false)
               handleSettle(bet, next, amount)
             }}
-            onOpenDay={(date) => {
+            onEdit={(bet) => {
               setPendingOpen(false)
-              setModalDate(date)
+              setDay({ date: bet.date, edit: { id: bet.id } })
             }}
             onClose={() => setPendingOpen(false)}
           />
         )}
 
         {/* Out of the way while a dialog is open: it sits above them, and would open another on top. */}
-        {modalDate === null && !quickOpen && !settingsOpen && !pendingOpen && !bankrollOpen && (
-          <button type="button" className="fab" aria-label={t('quick.fab')} title={`${t('quick.fab')} (T)`} onClick={() => setQuickOpen(true)}>
+        {day === null && !quickOpen && !settingsOpen && !pendingOpen && !bankrollOpen && !dataOpen && (
+          <button type="button" className="fab" aria-label={t('header.addBet')} title={t('header.addBetTitle')} onClick={openQuick}>
             <PlusIcon size={22} />
           </button>
         )}

@@ -3,7 +3,7 @@
 -- It creates the tables (the bets, per-user settings, deposits and
 -- withdrawals), locks them down so each user only sees their own rows, and
 -- turns on realtime so devices stay in sync. It is safe to run again, and on
--- an older install it does what migrations 001..005 do.
+-- an older install it does what migrations 001..006 do.
 
 create table if not exists public.entries (
   id         uuid primary key default gen_random_uuid(),
@@ -62,8 +62,9 @@ alter table public.entries add column if not exists status   text;
 -- update that changes the amount but keeps a status that no longer fits it
 -- (an older app editing a won bet into a loss) gets it worked out the same
 -- way, except that a pending bet sent back as $0 stays pending (an older app
--- shows it that way). "Fits" is the app's rule: won nets more than 0, lost less than 0,
--- push and void exactly 0, pending nothing. The current app always sends a
+-- shows it that way). "Fits" is the app's rule: won nets more than 0, lost less than 0
+-- (or exactly 0 for a free bet, a stake of 0: migration 006), push and void
+-- exactly 0, pending nothing. The current app always sends a
 -- status that fits, so this never changes its writes. Created before the
 -- backfill, so a row written while this file runs is covered too.
 create or replace function public.entries_status_from_amount()
@@ -83,7 +84,7 @@ begin
          and not coalesce(
            (new.status = 'pending' and new.amount is null)
            or (new.status = 'won' and new.amount > 0)
-           or (new.status = 'lost' and new.amount < 0)
+           or (new.status = 'lost' and (new.amount < 0 or (new.amount = 0 and new.stake = 0)))
            or (new.status in ('push', 'void') and new.amount = 0),
            false)) then
     new.status := case when new.amount is null then 'pending'

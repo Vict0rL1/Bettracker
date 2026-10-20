@@ -9,7 +9,7 @@ const storedBets = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as unknown[]).length)
 
 async function addLoss(page: Page, stake: string): Promise<void> {
-  await page.click('.fab')
+  await page.click('.add-bet-btn')
   const sheet = page.locator('.quick-modal')
   await sheet.locator('.field input').first().fill(stake)
   await sheet.locator('.seg-btn.loss').click()
@@ -20,7 +20,7 @@ test.describe('demo', () => {
   test('opens signed in with nothing in it, and keeps what you add across reloads', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('.demo-banner')).toContainText('everything is kept in this browser only')
-    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('—')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('—')
     await expect(page.locator('.history-card tbody tr')).toHaveCount(0)
 
     await addLoss(page, '20')
@@ -151,7 +151,7 @@ test.describe('demo', () => {
 
   test('starts as an up-to-date database: a deposit syncs', async ({ page }) => {
     await page.goto('/')
-    await page.locator('.mini-bankroll').click()
+    await page.locator('.bankroll-card').click()
     const dialog = page.locator('.bank-modal')
     await dialog.locator('.move-amount').fill('500')
     await dialog.locator('.move-save').click()

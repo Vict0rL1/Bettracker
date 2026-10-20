@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ODDS_FORMATS, type OddsFormat, type Settings, type SettingsPatch } from '../../../shared/types'
 import type { Bankroll } from '../lib/bankroll'
 import { fmtStake, moneyFormat } from '../lib/format'
@@ -6,6 +6,7 @@ import { useLang } from '../lib/i18n'
 import { formatOdds } from '../lib/odds'
 import { useBox } from '../lib/useBox'
 import { parseMoneyBox, unitSizePatch } from '../lib/validate'
+import FieldError, { describedBy } from './FieldError'
 import { CloseIcon } from './icons'
 
 interface Props {
@@ -42,6 +43,10 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
   const stake = useBox(settings.defaultStake)
   const loss = useBox(settings.lossLimit)
   const unit = useBox(settings.unitSize)
+  // What was typed and refused, per box: said under it (the box goes back to the saved value).
+  const [refused, setRefused] = useState<Partial<Record<'stake' | 'loss' | 'unit', string>>>({})
+  const refuse = (box: 'stake' | 'loss' | 'unit', text: string | null): void => setRefused((r) => ({ ...r, [box]: text ?? undefined }))
+  const refusal = (box: 'stake' | 'loss' | 'unit') => (refused[box] === undefined ? null : { key: 'field.boxRefused' as const, vars: { value: refused[box] as string } })
 
   const pickFormat = (f: OddsFormat): void => {
     if (f !== settings.oddsFormat) onChange({ oddsFormat: f })
@@ -57,9 +62,11 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
     if (text === null) return
     const parsed = parseMoneyBox(text, { allowZero: true })
     if (parsed === 'invalid') {
+      refuse('stake', text.trim())
       stake.settle(settings.defaultStake)
       return
     }
+    refuse('stake', null)
     stake.settle(parsed)
     if (parsed !== settings.defaultStake) onChange({ defaultStake: parsed })
   }
@@ -70,9 +77,11 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
     if (text === null) return
     const parsed = parseMoneyBox(text, { allowZero: true })
     if (parsed === 'invalid') {
+      refuse('loss', text.trim())
       loss.settle(settings.lossLimit)
       return
     }
+    refuse('loss', null)
     const next = parsed === 0 ? null : parsed
     loss.settle(next)
     if (next !== settings.lossLimit) onChange({ lossLimit: next })
@@ -83,6 +92,7 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
     const text = unit.pending()
     if (text === null) return
     const patch = unitSizePatch(text, settings)
+    refuse('unit', patch === 'revert' ? text.trim() : null)
     if (patch === 'revert' || patch === null) {
       unit.settle(settings.unitSize)
       return
@@ -165,7 +175,12 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
                 step="0.01"
                 placeholder="0.00"
                 value={unit.text}
-                onChange={(e) => unit.edit(e.target.value)}
+                aria-invalid={refused.unit !== undefined}
+                aria-describedby={describedBy(refused.unit !== undefined && `${unitId}-err`)}
+                onChange={(e) => {
+                  refuse('unit', null)
+                  unit.edit(e.target.value)
+                }}
                 onBlur={commitUnit}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -176,6 +191,7 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
               />
             </div>
           </label>
+          <FieldError id={`${unitId}-err`} problem={refusal('unit')} />
           <p className="hint">{t('settings.unitSizeHint')}</p>
         </div>
 
@@ -235,7 +251,12 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
                 step="0.01"
                 placeholder="0.00"
                 value={stake.text}
-                onChange={(e) => stake.edit(e.target.value)}
+                aria-invalid={refused.stake !== undefined}
+                aria-describedby={describedBy(refused.stake !== undefined && `${stakeId}-err`)}
+                onChange={(e) => {
+                  refuse('stake', null)
+                  stake.edit(e.target.value)
+                }}
                 onBlur={commitStake}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -246,6 +267,7 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
               />
             </div>
           </label>
+          <FieldError id={`${stakeId}-err`} problem={refusal('stake')} />
           <p className="hint">{t('settings.defaultStakeHint')}</p>
         </div>
 
@@ -264,7 +286,12 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
                 step="1"
                 placeholder="0"
                 value={loss.text}
-                onChange={(e) => loss.edit(e.target.value)}
+                aria-invalid={refused.loss !== undefined}
+                aria-describedby={describedBy(refused.loss !== undefined && `${lossId}-err`)}
+                onChange={(e) => {
+                  refuse('loss', null)
+                  loss.edit(e.target.value)
+                }}
                 onBlur={commitLoss}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -275,6 +302,7 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
               />
             </div>
           </label>
+          <FieldError id={`${lossId}-err`} problem={refusal('loss')} />
           <p className="hint">{t('settings.lossLimitHint')}</p>
         </div>
 

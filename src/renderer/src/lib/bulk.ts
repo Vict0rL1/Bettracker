@@ -51,7 +51,10 @@ export function retagPlan(bets: readonly Bet[], patch: TagPatch): Plan {
 }
 
 export interface SettlePlan extends Plan {
-  /** Pending wins without odds: their profit can't be worked out, so they are left alone. */
+  /**
+   * Pending wins whose profit can't be worked out (no odds, a free bet, a
+   * profit that rounds to $0.00): left alone, to settle one by one.
+   */
   skipped: number
 }
 
@@ -63,7 +66,7 @@ export function settlePlan(bets: readonly Bet[], status: Exclude<BetStatus, 'pen
   for (const b of bets) {
     if (b.status !== 'pending') continue
     const amount = suggestedAmount(status, b.stake, b.odds)
-    if (status === 'won' && amount === null) {
+    if (status === 'won' && (amount === null || amount === 0)) {
       skipped++
       continue
     }
