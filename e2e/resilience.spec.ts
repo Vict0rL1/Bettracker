@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { boot, entry, importCsv, install, move, reload, USER, type SeedEntry } from './harness'
+import { boot, entry, importCsv, install, menu, move, reload, USER, type SeedEntry } from './harness'
 import { DEV_URL } from './urls'
 
 // The sync engine where real servers and real devices misbehave: several
@@ -184,10 +184,10 @@ test.describe('several windows of the app', () => {
     const other = await secondWindow(context)
     await setDown(page, true)
 
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-modal .settings-seg .seg-btn', { hasText: 'Decimal' }).click()
     await page.keyboard.press('Escape')
-    await other.click('.settings-btn')
+    await menu(other, '.settings-btn')
     const stake = other.locator('.settings-modal .settings-stake input')
     await stake.fill('35')
     await stake.press('Enter')
@@ -511,7 +511,7 @@ test.describe('a server that fails', () => {
     await logLoss(page, '66')
     await expect(page.locator('.refused-notice')).toBeVisible()
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
-    await page.locator('.btn-signout').click()
+    await menu(page, '.btn-signout')
     await expect(page.locator('.btn-signout')).toHaveText('Sign out anyway?')
     expect(await page.evaluate((uid) => localStorage.getItem(`bettracker:refused:${uid}`), USER.id)).not.toBeNull()
   })
@@ -521,7 +521,7 @@ test.describe('a server that fails', () => {
   test('a settings change the server keeps failing for now shows on the badge', async ({ page }) => {
     await boot(page, { backend: 'live', settings: { oddsFormat: 'american' } })
     await failNext(page, { status: 503, message: 'Service Unavailable', times: 50 })
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-modal .settings-seg .seg-btn', { hasText: 'Decimal' }).click()
     await page.keyboard.press('Escape')
     await expect(page.locator('.sync-badge')).toHaveText('Retrying')
@@ -565,7 +565,7 @@ test.describe('a server that fails', () => {
     test.setTimeout(60_000)
     await boot(page, { backend: 'live', settings: { oddsFormat: 'american' } })
     await failNext(page, { status: 503, message: 'Service Unavailable', times: 500 })
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-modal .settings-seg .seg-btn', { hasText: 'Decimal' }).click()
     await page.keyboard.press('Escape')
     await expect(page.locator('.sync-badge')).toHaveText('Retrying')
@@ -741,7 +741,7 @@ test.describe('settings changed while a save is out', () => {
     await boot(page, { backend: 'live', settings: { oddsFormat: 'american', defaultStake: 10 } })
     await page.evaluate(() => localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'violates check constraint', code: '23514', times: 1 })))
     await hold(page, true)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     await dialog.locator('.settings-seg .seg-btn', { hasText: 'Decimal' }).click()
     // While that save is out (and about to be refused), another setting changes.
@@ -768,7 +768,7 @@ test.describe('settings changed while a save is out', () => {
   test('a field set again to the value that went, while it was out, still wins over the other device', async ({ page }) => {
     await boot(page, { backend: 'live', settings: { oddsFormat: 'american', defaultStake: 10 } })
     await hold(page, true)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const stake = page.locator('.settings-modal .settings-stake input')
     await stake.fill('25')
     await stake.press('Enter')
@@ -798,7 +798,7 @@ test.describe('signing out in another window', () => {
   test('signs this window out too, and it works again once signed in', async ({ page, context }) => {
     await boot(page, { backend: 'live' })
     const other = await secondWindow(context)
-    await page.locator('.btn-signout').click()
+    await menu(page, '.btn-signout')
     await expect(page.locator('.auth-card')).toBeVisible()
     await expect(other.locator('.auth-card')).toBeVisible()
     await expect(other.locator('.history-card')).toHaveCount(0)
@@ -822,8 +822,8 @@ test.describe('signing out while a change is on its way', () => {
     await hold(page, true)
     await logLoss(page, '31')
     await expect.poll(() => writesStarted(page)).toBe(1)
-    await page.locator('.btn-signout').click()
-    await page.locator('.btn-signout').click()
+    await menu(page, '.btn-signout')
+    await menu(page, '.btn-signout')
     await expect(page.locator('.auth-card')).toBeVisible()
     const kept = () => page.evaluate((uid) => Object.keys(localStorage).filter((k) => k.startsWith('bettracker:') && k.endsWith(uid)), USER.id)
     expect(await kept()).toEqual([])
@@ -841,8 +841,8 @@ test.describe('signing out while a change is on its way', () => {
     await hold(page, true)
     await logLoss(other, '32')
     await expect.poll(() => writesStarted(page)).toBe(1)
-    await page.locator('.btn-signout').click()
-    await page.locator('.btn-signout').click()
+    await menu(page, '.btn-signout')
+    await menu(page, '.btn-signout')
     await expect(page.locator('.auth-card')).toBeVisible()
 
     await hold(page, false)

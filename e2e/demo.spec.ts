@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
+import { menu } from './harness'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
@@ -37,7 +38,7 @@ test.describe('demo', () => {
     await addLoss(page, '20')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
 
-    await page.locator('.btn-signout').click()
+    await menu(page, '.btn-signout')
     const form = page.locator('.auth-card')
     await expect(form).toBeVisible()
     // Still signed out after a reload: the fake server remembers it.

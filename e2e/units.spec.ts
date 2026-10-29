@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, reload, USER } from './harness'
+import { boot, menu, reload, USER } from './harness'
 
 // The usual seed: +200 (no stake), −50 on 50, +30 on 60. At $20 a unit:
 // lifetime +$180 is +9.00u, and ROI is −$20 on $110 staked: −1.00u on 5.5u.
@@ -26,7 +26,7 @@ test.describe('units', () => {
     await page.keyboard.press('Escape')
 
     // Back to dollars: everything follows at once, and the choice survives a reload.
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-units .seg-btn', { hasText: 'Dollars' }).click()
     await page.keyboard.press('Escape')
     await expect(lifetime.locator('.life-value')).toHaveText('+$180.00')
@@ -36,7 +36,7 @@ test.describe('units', () => {
 
   test('units need a unit size; clearing it turns units off with it', async ({ page }) => {
     await boot(page)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     const unitsBtn = dialog.locator('.settings-units .seg-btn', { hasText: 'Units' })
     await expect(unitsBtn).toBeDisabled()
@@ -61,7 +61,7 @@ test.describe('units', () => {
 
   test('closing Settings sends back no box nobody typed in, even after the settings changed elsewhere', async ({ page }) => {
     await boot(page, { backend: 'live', settings: { lossLimit: 100, unitSize: 20 } })
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     await expect(dialog.locator('.settings-loss input')).toHaveValue('100')
     // Another device raises the limit and changes the unit while this dialog is open.
@@ -82,11 +82,11 @@ test.describe('units', () => {
 
   test('a value typed into a settings box is kept when the dialog is closed with Escape', async ({ page }) => {
     await boot(page)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-modal .settings-unit input').fill('10')
     await page.keyboard.press('Escape')
     await expect(page.locator('.settings-modal')).toHaveCount(0)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await expect(page.locator('.settings-modal .settings-unit input')).toHaveValue('10')
     await expect(page.locator('.settings-units .seg-btn', { hasText: 'Units' })).toBeEnabled()
   })

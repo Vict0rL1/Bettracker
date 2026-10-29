@@ -122,10 +122,10 @@ export default function BankrollDialog({
     return () => {
       if (timer.current) clearTimeout(timer.current)
       // Opened from Settings, the button that opened it was gone by the time
-      // this mounted (focus had fallen to the page): land on the settings
-      // button instead.
+      // this mounted (focus had fallen to the page): land on the menu button,
+      // where Settings is, instead.
       if (previouslyFocused && previouslyFocused !== document.body && previouslyFocused.isConnected) previouslyFocused.focus()
-      else document.querySelector<HTMLElement>('.settings-btn')?.focus()
+      else document.querySelector<HTMLElement>('.menu-btn')?.focus()
     }
   }, [])
 

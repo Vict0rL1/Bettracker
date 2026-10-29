@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, move, reload, SEED, USER } from './harness'
+import { boot, entry, menu, move, reload, SEED, USER } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const now = new Date()
@@ -131,7 +131,7 @@ test.describe('bankroll', () => {
     await expect(page.locator('.bank-modal')).toHaveCount(1)
     await page.keyboard.press('Escape')
 
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await expect(page.locator('.settings-bankroll-value')).toHaveText('Not set')
     await page.locator('.settings-bankroll .btn').click()
     // One dialog at a time.
@@ -164,7 +164,7 @@ test.describe('bankroll', () => {
 
     // Signing out now would delete it from this device: the first click says so.
     const signOut = page.locator('.btn-signout')
-    await signOut.click()
+    await menu(page, '.btn-signout')
     await expect(signOut).toHaveText('Sign out anyway?')
     await expect(page.locator('.history-card')).toHaveCount(1)
 
@@ -187,7 +187,7 @@ test.describe('bankroll', () => {
     await expect(mini.locator('.key-value')).toHaveText('$1,180')
     await expect(mini.locator('.key-sub')).toHaveText('$40.00 riding')
     // Settled as a loss from the pending panel: now it counts.
-    await page.locator('.pending-btn').click()
+    await menu(page, '.pending-btn')
     await page.locator('.pend-item .settle-btn.loss').first().click()
     await expect(mini.locator('.key-value')).toHaveText('$1,140')
   })

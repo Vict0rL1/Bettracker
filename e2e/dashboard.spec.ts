@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, openAdvanced, reload, SEED } from './harness'
+import { boot, entry, menu, openAdvanced, reload, SEED } from './harness'
 
 test.describe('the dashboard', () => {
   test('a new account gets three first steps, each done in place, and the guide goes once they are', async ({ page }) => {
@@ -110,7 +110,7 @@ test.describe('the dashboard', () => {
 test.describe('settings and bankroll say why a value was not taken', () => {
   test('a refused setting is named under its box, which goes back to the saved value', async ({ page }) => {
     await boot(page, { settings: { unitSize: 25 } })
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const modal = page.locator('.settings-modal')
     const unit = modal.locator('.settings-unit input')
     await unit.fill('-5')
@@ -134,5 +134,50 @@ test.describe('settings and bankroll say why a value was not taken', () => {
     await bank.locator('.move-amount').fill('50')
     await bank.locator('.move-date').fill('2099-01-01')
     await expect(bank.locator('.field-error')).toHaveText('A deposit or withdrawal can’t be dated in the future.')
+  })
+})
+
+test.describe('the top bar', () => {
+  test('holds only Add bet; the rest is in the menu, which the keyboard works', async ({ page }) => {
+    await boot(page, { theme: 'dark' })
+    const bar = page.locator('.topbar-actions')
+    await expect(bar.locator('button:visible')).toHaveCount(2)
+    await expect(bar.locator('.add-bet-btn')).toHaveText('Add bet')
+    const toggle = page.locator('.menu-btn')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('.app-menu')).toHaveCount(0)
+
+    // Opened from the keyboard: focus on the first item, arrows move, Escape closes back to the button.
+    await toggle.focus()
+    await page.keyboard.press('Enter')
+    const items = page.locator('.app-menu [role="menuitem"]')
+    await expect(items).toHaveText(['Import & export', 'Pending bets', 'Settings', 'Switch to light theme', 'Español', 'Sign out'])
+    await expect(items.first()).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(items.nth(1)).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('ArrowUp')
+    await expect(items.last()).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.app-menu')).toHaveCount(0)
+    await expect(toggle).toBeFocused()
+
+    // An item that opens a dialog closes the menu; closing the dialog lands back on the menu button.
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect(page.locator('.settings-modal')).toBeVisible()
+    await expect(page.locator('.app-menu')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expect(toggle).toBeFocused()
+
+    // A click outside closes it; the theme toggle keeps it open.
+    await toggle.click()
+    await page.locator('.app-menu .theme-btn').click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    await expect(page.locator('.app-menu')).toBeVisible()
+    await page.locator('.history-card h2').click()
+    await expect(page.locator('.app-menu')).toHaveCount(0)
   })
 })

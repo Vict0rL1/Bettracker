@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, reload } from './harness'
+import { boot, menu, reload } from './harness'
 
 test.describe('changes made while a request is out', () => {
   test('settling a bet while its insert is still on the wire reaches the server', async ({ page }) => {
@@ -13,7 +13,7 @@ test.describe('changes made while a request is out', () => {
     await page.locator('.quick-modal .seg-btn.pending').click()
     await expect(badge).toHaveText('Syncing 1…')
 
-    await page.locator('.pending-btn').click()
+    await menu(page, '.pending-btn')
     const panel = page.locator('.pending-modal')
     await panel.locator('.pend-item').first().locator('.settle-btn.loss').click()
     await expect(page.locator('.toast')).toContainText('Settled as lost')
@@ -26,7 +26,7 @@ test.describe('changes made while a request is out', () => {
 
     // What the server holds is what the app shows after a fresh load.
     await reload(page)
-    await expect(page.locator('.pending-btn .pending-badge')).toHaveCount(0)
+    await expect(page.locator('.menu-btn .pending-badge')).toHaveCount(0)
     await expect(page.locator('.history-card tbody tr').first().locator('.pill')).toHaveText('LOST')
   })
 })

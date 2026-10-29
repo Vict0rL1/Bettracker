@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, reload, SEED } from './harness'
+import { boot, entry, menu, reload, SEED } from './harness'
 
 const HINT = 'Your database is behind the app'
 
@@ -115,7 +115,7 @@ test.describe('a database behind the app', () => {
   test('a setting changed meanwhile waits for the migration too, and says so', async ({ page }) => {
     await boot(page, { backend: 'behind' })
     const badge = page.locator('.sync-badge')
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     await dialog.locator('.settings-seg .seg-btn', { hasText: 'Decimal' }).click()
     await expect(dialog.locator('.settings-sync')).toHaveText('Saved on this device — syncs once your database is updated.')
@@ -150,5 +150,5 @@ test('an edit queued by the version deployed before this one reaches the server 
   expect(p).toMatchObject({ note: 'note fixed', stake: 25, odds: 2.1, closing_odds: 2 })
   expect(p?.status).not.toBe('push')
   await expect(page.locator('.history-card tbody')).toContainText('edited offline')
-  await expect(page.locator('.pending-btn .pending-badge')).toHaveText('1')
+  await expect(page.locator('.menu-btn .pending-badge')).toHaveText('1')
 })

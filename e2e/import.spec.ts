@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { boot, importCsv, reload } from './harness'
+import { boot, importCsv, menu, reload } from './harness'
 
 const CSV = [
   'date,stake,amount,sport,book,bet_type,note',
@@ -10,7 +10,7 @@ const CSV = [
 
 /** Open Import & export and pick a CSV: the review step, before anything is added. */
 async function review(page: Page, csv: string, name = 'bets.csv') {
-  await page.locator('.data-btn').click()
+  await menu(page, '.data-btn')
   await page.setInputFiles('.data-csv-input', { name, mimeType: 'text/csv', buffer: Buffer.from(csv) })
   const dialog = page.locator('.data-modal')
   await expect(dialog.locator('.imp-summary')).toBeVisible()
@@ -56,7 +56,7 @@ test('CSV import reads American and fractional odds, and a whole number by the f
 test('CSV import reads a bare whole number by the odds format the user has just chosen', async ({ page }) => {
   await boot(page, { entries: [], settings: { oddsFormat: 'decimal' } })
   // Switch to American in the settings dialog: the import must use the new choice.
-  await page.click('.settings-btn')
+  await menu(page, '.settings-btn')
   await page.locator('.settings-modal .settings-seg .seg-btn', { hasText: 'American' }).click()
   await page.keyboard.press('Escape')
   const csv = ['date,stake,amount,odds', '2026-08-10,10,15,150', '2026-08-11,10,20,200'].join('\r\n')
@@ -136,7 +136,7 @@ test.describe('the review step', () => {
     await one.locator('.btn-icon.danger').click()
     await expect(rows(page)).toHaveCount(4)
 
-    await page.locator('.data-btn').click()
+    await menu(page, '.data-btn')
     const batch = page.locator('.data-batch', { hasText: 'august.csv' })
     await expect(batch).toContainText('2 bets')
     await batch.locator('.data-undo').click()

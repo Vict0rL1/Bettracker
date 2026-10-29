@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
+import { menu } from './harness'
 
 // The production build (playwright.config.ts) without the harness: the real
 // supabase-js, signing in against https://example.supabase.co — which these
@@ -166,7 +167,7 @@ test.describe('a forgotten password', () => {
 
   test('the demo says it sends no email', async ({ page }) => {
     await page.goto(DEMO_URL)
-    await page.locator('.btn-signout').click()
+    await menu(page, '.btn-signout')
     const form = page.locator('.auth-card')
     await form.locator('.login-forgot').click()
     await form.locator('input[type=email]').fill('you@example.com')

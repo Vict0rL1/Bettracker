@@ -151,7 +151,7 @@ npm ci
 npm test            # 655 tests unitarios (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 170 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 171 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 ```
 
@@ -233,6 +233,10 @@ estaban en este contenedor; se trabajó con la lista de hallazgos):
 - **Panel**: P/L, bankroll y pendientes primero; analítica avanzada
   plegable; guía de primeros pasos para cuentas nuevas; **Añadir apuesta**
   y el **+** del móvil abren la misma hoja.
+- **Cabecera**: solo **Añadir apuesta** (y la insignia de sincronización);
+  lo demás (cuenta, Importar y exportar, Pendientes, Ajustes, tema, idioma
+  y Salir) está en el menú ☰ (`Header.tsx`), que cuenta las pendientes y se
+  maneja con el teclado.
 
 ### Fase 1 · red de seguridad
 - Workflow de CI con jobs `calidad` (ci/test/build) y `e2e`; hoy es
@@ -292,7 +296,8 @@ estaban en este contenedor; se trabajó con la lista de hallazgos):
    (por defecto), decimal o fraccionaria; se guarda siempre decimal; la caja
    de cuota entiende `+150`, `1.91` y `3/2` siempre; al editar sin tocar la
    caja se conserva el valor exacto.
-3. **Panel de pendientes** (`PendingPanel.tsx`): contador en la cabecera,
+3. **Panel de pendientes** (`PendingPanel.tsx`): contador en el botón del
+   menú (☰) y en la tarjeta del panel,
    lista de más antigua a más reciente, un toque resuelve, fecha pasada en
    ámbar.
 4. **Unidades y bankroll** (`lib/bankroll.ts`, `BankrollDialog.tsx`,
@@ -698,7 +703,7 @@ src/renderer/src/components/
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
   BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       170 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       171 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo)

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, reload, SEED } from './harness'
+import { boot, entry, menu, reload, SEED } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const now = new Date()
@@ -32,14 +32,14 @@ test.describe('monthly loss limit', () => {
   test('the limit is set in settings and the banner follows it at once', async ({ page }) => {
     await boot(page, { entries: DOWN_85 })
     await expect(page.locator('.loss-banner')).toHaveCount(0)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const box = page.locator('.settings-modal .settings-loss input')
     await box.fill('100')
     await box.press('Enter')
     await page.keyboard.press('Escape')
     await expect(page.locator('.loss-banner')).toHaveClass(/near/)
     // Raising the limit clears it; the change is queued for the server like any setting.
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await box.fill('1000')
     await box.press('Enter')
     await expect(page.locator('.loss-banner')).toHaveCount(0)

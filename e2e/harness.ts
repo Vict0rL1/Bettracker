@@ -223,7 +223,7 @@ export async function reload(page: Page): Promise<void> {
  * would skip.
  */
 export async function importCsv(page: Page, csv: string, opts: { name?: string; keepDuplicates?: boolean } = {}): Promise<void> {
-  await page.locator('.data-btn').click()
+  await menu(page, '.data-btn')
   const dialog = page.locator('.data-modal')
   await page.setInputFiles('.data-csv-input', { name: opts.name ?? 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
   await dialog.locator('.imp-summary').waitFor()
@@ -237,4 +237,15 @@ export async function openAdvanced(page: Page): Promise<void> {
   const toggle = page.locator('.advanced-toggle')
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
+/**
+ * One of the top bar's menu items (`.data-btn`, `.pending-btn`,
+ * `.settings-btn`, `.theme-btn`, `.lang-btn`, `.btn-signout`): the menu is
+ * opened if it is closed, then the item clicked.
+ */
+export async function menu(page: Page, item: string): Promise<void> {
+  const toggle = page.locator('.menu-btn')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await page.locator(`.app-menu ${item}`).click()
 }

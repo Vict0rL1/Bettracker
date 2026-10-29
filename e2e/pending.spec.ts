@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, SEED } from './harness'
+import { boot, entry, menu, SEED } from './harness'
 
 // Two open bets on top of the usual seed: one with odds (settles in one tap)
 // and one without (the result can't be worked out, so the day opens instead).
@@ -57,9 +57,11 @@ test.describe('pending bets', () => {
   test('the header counts open bets and the panel settles them in one tap, flagging past dates', async ({ page }) => {
     const soon = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)
     await boot(page, { entries: [...WITH_PENDING, entry({ id: 'p3', date: soon, amount: 0, status: 'pending', stake: 10, odds: 3 })] })
-    const btn = page.locator('.pending-btn')
+    // The menu button carries the count, closed; the menu's item opens the panel.
+    const btn = page.locator('.menu-btn')
     await expect(btn.locator('.pending-badge')).toHaveText('3')
-    await btn.click()
+    await expect(btn).toHaveAttribute('aria-label', 'Menu · 3 pending bets')
+    await menu(page, '.pending-btn')
     const panel = page.locator('.pending-modal')
     await expect(panel.locator('.pend-item')).toHaveCount(3)
     // Oldest first; the two August bets are past due, the one three days out is not.

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { boot, entry, SEED } from './harness'
+import { boot, entry, menu, SEED } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const daysAgo = (n: number): string => {
@@ -42,9 +42,9 @@ for (const width of [320, 390]) {
 
       const dialogs: [string, () => Promise<unknown>][] = [
         ['.quick-modal', () => page.click('.fab')],
-        ['.settings-modal', () => page.click('.settings-btn')],
+        ['.settings-modal', () => menu(page, '.settings-btn')],
         ['.bank-modal', () => page.click('.bankroll-card')],
-        ['.pending-modal', () => page.click('.pending-btn')],
+        ['.pending-modal', () => menu(page, '.pending-btn')],
         ['.day-modal', () => editFirstCard(page)]
       ]
       for (const [modal, show] of dialogs) {

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, reload, USER } from './harness'
+import { boot, entry, menu, reload, USER } from './harness'
 
 /** Two bets with the two prices everyone recognises: +150 (2.50, 3/2) and −110 (1.91, 10/11). */
 const WITH_ODDS = [
@@ -14,7 +14,7 @@ test.describe('settings', () => {
     const odds = page.locator('.history-card tbody tr').first().locator('.td-odds')
     await expect(odds).toHaveText('-110')
 
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     await expect(dialog).toHaveAttribute('aria-modal', 'true')
     await dialog.locator('.settings-seg .seg-btn', { hasText: 'Decimal' }).click()
@@ -41,7 +41,7 @@ test.describe('settings', () => {
 
   test('a default stake set here is what quick add opens with', async ({ page }) => {
     await boot(page)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const stake = page.locator('.settings-modal .settings-stake input')
     await stake.fill('30')
     await stake.press('Enter')

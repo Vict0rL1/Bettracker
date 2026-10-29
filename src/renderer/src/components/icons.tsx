@@ -65,6 +65,26 @@ export const ArchiveIcon = ({ size = 14 }: IconProps) => (
   </svg>
 )
 
+/** Three lines: the header's menu. */
+export const MenuIcon = ({ size = 18 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+)
+
+export const GlobeIcon = ({ size = 15 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+  </svg>
+)
+
+export const SignOutIcon = ({ size = 15 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+  </svg>
+)
+
 export const CloseIcon = ({ size = 16 }: IconProps) => (
   <svg {...svgProps(size)}>
     <path d="M18 6 6 18M6 6l12 12" />

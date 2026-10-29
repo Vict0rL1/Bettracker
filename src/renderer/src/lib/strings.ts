@@ -315,7 +315,6 @@ export const en = {
   'odds.fractional': 'Fractional',
 
   // Pending panel
-  'header.pending': 'Pending',
   'header.pendingTitle': '{n} waiting for a result',
   'pend.title': 'Pending bets',
   'pend.sub': '{bets} · {amount} riding',
@@ -675,6 +674,11 @@ export const en = {
   'field.dateInvalid': 'Enter a valid date.',
   'field.dateFuture': 'A deposit or withdrawal can’t be dated in the future.',
   'field.boxRefused': '“{value}” isn’t an amount this box takes, so the saved value was kept.',
+  // The top bar's menu
+  'menu.label': 'Menu',
+  'menu.labelPending': 'Menu · {n} pending bets',
+  'menu.signedInAs': 'Signed in as',
+  'menu.pending': 'Pending bets',
   // What is wrong with .env (src/shared/supabaseEnv.ts, where the build reads them too)
   ...envStrings.en
 } as const
@@ -970,7 +974,6 @@ export const es: Record<StringKey, string> = {
   'odds.decimal': 'Decimal',
   'odds.fractional': 'Fraccionaria',
 
-  'header.pending': 'Pendientes',
   'header.pendingTitle': '{n} esperando resultado',
   'pend.title': 'Apuestas pendientes',
   'pend.sub': '{bets} · {amount} en juego',
@@ -1324,5 +1327,10 @@ export const es: Record<StringKey, string> = {
   'field.dateInvalid': 'Escribe una fecha válida.',
   'field.dateFuture': 'Un ingreso o una retirada no puede tener fecha futura.',
   'field.boxRefused': '«{value}» no es un importe válido aquí, así que se mantiene el valor guardado.',
+  // The top bar's menu
+  'menu.label': 'Menú',
+  'menu.labelPending': 'Menú · {n} apuestas pendientes',
+  'menu.signedInAs': 'Sesión iniciada como',
+  'menu.pending': 'Apuestas pendientes',
   ...envStrings.es
 }

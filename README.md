@@ -86,14 +86,20 @@ version kept in IndexedDB, and the next window waits until its copy has it
 before reading. Over plain http on your local network (`npm run dev` on the
 phone) the browser has no such lock, and windows there don't coordinate.
 
-Small things that add up: a **light theme** (☀️ in the header — it follows your
+Small things that add up: a **light theme** (in the menu ☰ — it follows your
 OS until you pick one, then stays put), **search and filters** over your history
 with paging, a balance chart you can flip between **all time and the selected
-month**, the interface in **English or Spanish** (the header button switches;
+month**, the interface in **English or Spanish** (the menu switches it;
 it follows your browser until you pick one, then stays put; validation and
 sync error messages stay in English), and
 keyboard shortcuts — `←`/`→` to change month, `T` to log today, `Esc` to
 close a dialog.
+
+The top bar holds only **Add bet**, next to the sync badge. Everything else
+is in the menu (☰): the account, **Import & export**, **Pending bets**,
+**Settings**, the theme, the language and **Sign out**. The menu button
+shows how many bets are waiting for a result; the menu works from the
+keyboard (arrows, Home/End, Escape back to the button).
 
 ## What you'll need
 
@@ -304,7 +310,7 @@ checks against Postgres, and the e2e suite.
 
 ## Settings
 
-The sliders button in the header opens per-user settings, stored in the
+**Settings** in the menu (☰) opens per-user settings, stored in the
 `user_settings` table (migration 004) and cached on the device so they work
 offline and follow you to other devices:
 
@@ -434,8 +440,9 @@ and syncs like any other change; a restored bet keeps its id but gets a new
 
 ## Pending bets
 
-**Pending** in the header shows how many bets are still waiting for a result
-and opens a panel listing them, oldest first. Each settles in one tap
+The menu button (☰), and the **Pending bets** card on the dashboard, show how
+many bets are still waiting for a result; **Pending bets** in the menu (or a
+click on the card) opens a panel listing them, oldest first. Each settles in one tap
 (WON / LOST / PUSH / VOID — the result is worked out from the stake and odds),
 and a bet whose date has passed is flagged so it is not forgotten. Settling
 works offline like any other edit.
@@ -592,7 +599,7 @@ bet almost always costs exactly what was risked.
 
 ## Import and export
 
-Everything that goes in or out is under **Import & export** in the header.
+Everything that goes in or out is under **Import & export** in the menu (☰).
 
 **Full backup** downloads one JSON file with every bet, deposit and
 withdrawal, and the settings:

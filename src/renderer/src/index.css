@@ -353,26 +353,127 @@ h2 {
   margin-left: auto;
 }
 
-.account {
+/* The rest of the top bar's actions, behind one button. */
+.menu-wrap {
+  position: relative;
+}
+
+.menu-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--tint-1);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.menu-btn:hover,
+.menu-btn.is-open {
+  background: var(--tint-2);
+  color: var(--text);
+}
+
+.menu-btn:focus-visible,
+.menu-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The bets still waiting for a result, on the closed menu. */
+.menu-btn .pending-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  margin: 0;
+  background: var(--card-solid);
+}
+
+.app-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  width: 260px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-left: 4px;
-  padding-left: 16px;
-  border-left: 1px solid var(--border);
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: var(--shadow);
+}
+
+.menu-account {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  min-width: 0;
+}
+
+.menu-account-label {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
 }
 
 .account-email {
-  font-size: var(--fs-sm);
-  color: var(--text-3);
-  max-width: 180px;
+  font-size: var(--fs-md);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.btn-signout {
-  padding: 8px 12px;
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.menu-item > span:not(.pending-badge) {
+  flex: 1;
+  min-width: 0;
+}
+
+.menu-item:hover,
+.menu-item:focus {
+  background: var(--tint-2);
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+.menu-item.btn-signout.confirming,
+.menu-item.btn-signout.confirming svg {
+  color: var(--amber);
 }
 
 /* ---------- auth / setup screens ---------- */
@@ -827,12 +928,6 @@ h2 {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* Wrapped onto its own row, the account needs no divider before it. */
-  .account {
-    margin-left: 0;
-    padding-left: 0;
-    border-left: none;
-  }
 }
 
 /* ---------- calendar ---------- */
@@ -1470,9 +1565,19 @@ tbody tr:hover {
     gap: 12px;
   }
 
+  /* The name and the menu button on one row, Add bet across the next. */
   .topbar-actions {
-    width: 100%;
-    flex-wrap: wrap;
+    display: contents;
+  }
+
+  .brand {
+    flex: 1;
+    order: 1;
+  }
+
+  .menu-wrap {
+    order: 2;
+    align-self: flex-start;
   }
 
   .btn {
@@ -1480,15 +1585,10 @@ tbody tr:hover {
     justify-content: center;
   }
 
-  /* "Sign out" sits next to "Log today" rather than alone on a divided row. */
-  .account {
-    margin-left: auto;
-    padding-left: 0;
-    border-left: none;
-  }
-
-  .account .btn {
-    flex: none;
+  .topbar-actions .add-bet-btn {
+    order: 3;
+    flex: 1 1 100%;
+    min-height: 44px;
   }
 
   .hero {
@@ -1559,9 +1659,6 @@ tbody tr:hover {
     width: 100%;
   }
 
-  .account-email {
-    display: none;
-  }
 
   .bet-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1647,14 +1744,6 @@ tbody tr:hover {
 .chip-static {
   cursor: default;
   pointer-events: none;
-}
-
-.theme-btn {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
 }
 
 .scope-toggle {
@@ -2115,19 +2204,6 @@ tr.is-pending td {
 
 .bonus {
   color: var(--text-2);
-}
-
-/* Language toggle, next to the theme switch: the name of the other language. */
-.lang-btn {
-  width: auto; /* .btn-icon is a 28px square; the name needs its own width */
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 /* ---------- quick add ---------- */
@@ -2894,7 +2970,6 @@ tbody tr.is-selected {
 
 .btn-signout.confirming {
   color: var(--amber);
-  border-color: var(--amber);
 }
 
 @media (max-width: 640px) {

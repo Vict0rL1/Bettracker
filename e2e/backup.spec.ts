@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
-import { boot, entry, move, reload } from './harness'
+import { boot, entry, menu, move, reload } from './harness'
 
 // Ids as the database gives them: a backup refuses anything else.
 const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -15,7 +15,7 @@ const SETTINGS = { startingBankroll: 1000, oddsFormat: 'decimal', unitSize: 10 }
 const rows = (page: Page) => page.locator('.history-card tbody tr')
 
 async function download(page: Page): Promise<Record<string, unknown>> {
-  await page.locator('.data-btn').click()
+  await menu(page, '.data-btn')
   const [file] = await Promise.all([page.waitForEvent('download'), page.locator('.data-backup').click()])
   expect(file.suggestedFilename()).toMatch(/^bettracker-backup-\d{4}-\d{2}-\d{2}\.json$/)
   const json = JSON.parse(fs.readFileSync((await file.path()) as string, 'utf8')) as Record<string, unknown>
@@ -24,7 +24,7 @@ async function download(page: Page): Promise<Record<string, unknown>> {
 }
 
 async function pickBackup(page: Page, content: string, name = 'backup.json') {
-  await page.locator('.data-btn').click()
+  await menu(page, '.data-btn')
   await page.setInputFiles('.data-backup-input', { name, mimeType: 'application/json', buffer: Buffer.from(content) })
   return page.locator('.data-modal')
 }
@@ -32,7 +32,7 @@ async function pickBackup(page: Page, content: string, name = 'backup.json') {
 test.describe('full backup', () => {
   test('the CSV action says what it is', async ({ page }) => {
     await boot(page)
-    await page.locator('.data-btn').click()
+    await menu(page, '.data-btn')
     await expect(page.locator('.data-export')).toHaveText('Export bets CSV')
   })
 
