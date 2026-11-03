@@ -16,7 +16,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../lib/supabase', () => {
   const chain: Record<string, unknown> = {}
-  for (const m of ['from', 'select', 'insert', 'update', 'upsert', 'delete', 'eq', 'lte', 'order', 'range', 'single', 'maybeSingle']) {
+  for (const m of ['from', 'select', 'insert', 'update', 'upsert', 'delete', 'eq', 'is', 'in', 'lte', 'order', 'range', 'single', 'maybeSingle']) {
     chain[m] = (...args: unknown[]) => {
       state.calls.push({ method: m, args })
       return chain
@@ -31,7 +31,7 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { addBet, addBets, getBets, sendOp, updateBet, updateBetLegacy } from './bets'
+import { addBet, addBets, deleteBet, getBets, sendOp, updateBet, updateBetLegacy } from './bets'
 import { classifySyncError, MigrationNeededError, SignedOutError } from './errors'
 import type { PendingOp } from './offline'
 
@@ -146,6 +146,47 @@ describe('sendOp — one queued op, as it goes out', () => {
   })
 })
 
+describe('the Undo of a batch: a delete only of what it wrote', () => {
+  it('removes the row only where it still carries the stamp, in the same statement', async () => {
+    state.result = { data: null, error: null, count: 1 }
+    expect(await deleteBet('a', 'S')).toBeNull()
+    expect(state.calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([
+      ['id', 'a'],
+      ['updated_at', 'S']
+    ])
+  })
+
+  it('leaves a row that changed since (or that it never made), and answers with it as it is', async () => {
+    state.queued = [
+      { data: null, error: null, count: 0 },
+      { data: { id: 'a', date: '2026-03-01', amount: '9', status: 'won', note: 'edited elsewhere', created_at: 'c', updated_at: 'T' }, error: null, count: null }
+    ]
+    const kept = await deleteBet('a', 'S')
+    expect(kept?.note).toBe('edited elsewhere')
+  })
+
+  it('answers no row when the row is already gone', async () => {
+    state.queued = [
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: null }
+    ]
+    expect(await deleteBet('a', 'S')).toBeNull()
+  })
+
+  it('goes through sendOp with the op’s stamp', async () => {
+    state.result = { data: null, error: null, count: 1 }
+    await sendOp({ opId: 'o', kind: 'delete', id: 'a', ifStamp: 'S', batch: 'b' })
+    expect(state.calls.filter((c) => c.method === 'eq').map((c) => c.args)).toContainEqual(['updated_at', 'S'])
+  })
+})
+
+describe('addBet — an insert the server lets go (migration 007)', () => {
+  it('answers no row: the bet was made by an earlier attempt and deleted since, and must not come back', async () => {
+    state.result = { data: [], error: null, count: null }
+    expect(await addBet({ date: '2026-03-01', amount: 5 }, 'id-1', 'Q')).toBeNull()
+  })
+})
+
 describe('reading every row, page by page', () => {
   const rows = (n: number, from = 0) =>
     Array.from({ length: n }, (_, i) => ({ id: `r${from + i}`, date: '2026-03-01', amount: '1', status: 'won', note: '', created_at: 'c', updated_at: 'u' }))
@@ -248,7 +289,7 @@ describe('missing migration', () => {
     state.result = { data: { id: 'id-1', date: '2026-03-01', amount: null, stake: '30', odds: '2.1', status: 'pending', note: '', created_at: 'c', updated_at: 'u' }, error: null, count: null }
     const out = await addBet({ date: '2026-03-01', stake: 30, odds: 2.1, status: 'pending' }, 'id-1')
     expect(call('insert')?.args[0]).toMatchObject({ id: 'id-1', user_id: 'user-1', amount: null, stake: 30, odds: 2.1, status: 'pending' })
-    expect(out.status).toBe('pending')
+    expect(out?.status).toBe('pending')
   })
 })
 
@@ -312,7 +353,20 @@ describe('addBets — an import sent again after an interruption', () => {
   it('never overwrites a row that is already there: it inserts only the missing ones', async () => {
     state.result = { data: null, error: null, count: 250 }
     await addBets(entries(10), 'Q')
-    expect(upserts()[0].args[1]).toEqual({ count: 'exact', onConflict: 'id', ignoreDuplicates: true })
+    expect(upserts()[0].args[1]).toEqual({ onConflict: 'id', ignoreDuplicates: true })
+  })
+
+  it('says which rows this batch made: the ones the insert returned, and the ones an earlier attempt made (its stamp)', async () => {
+    state.queued = [
+      // r0 and r1 go in now; r2 and r3 were there already.
+      { data: [{ id: 'r0' }, { id: 'r1' }], error: null, count: null },
+      // Read back: r2 carries this batch's stamp (an attempt whose answer was lost), r3 another one.
+      { data: [{ id: 'r2', updated_at: '2026-03-01T10:00:00.000+00:00' }, { id: 'r3', updated_at: '2026-02-01T10:00:00+00:00' }], error: null, count: null }
+    ]
+    const made: string[][] = []
+    await addBets(entries(4), '2026-03-01T10:00:00.000Z', 0, async (_n, ids) => void made.push(ids))
+    expect(made).toEqual([['r0', 'r1', 'r2']])
+    expect(call('in')?.args).toEqual(['id', ['r2', 'r3']])
   })
 
   it('reports each chunk the server confirmed, and starts after the confirmed ones next time', async () => {
@@ -330,7 +384,7 @@ describe('addBets — an import sent again after an interruption', () => {
 
   it('stops at a failed chunk, having reported only the ones before it', async () => {
     state.queued = [
-      { data: null, error: null, count: 250 },
+      { data: entries(250).map((e) => ({ id: e.id })), error: null, count: 250 },
       { data: null, error: { message: 'TypeError: Failed to fetch' }, count: null }
     ]
     const progress: number[] = []

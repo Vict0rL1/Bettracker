@@ -52,6 +52,13 @@ function parseParts(dateStr: string): Date {
   return new Date(y, m - 1, d)
 }
 
+/** The date `n` days after `dateStr` (before, for a negative `n`), on the local calendar: DST days have 23 or 25 hours. */
+export function addDays(dateStr: string, n: number): string {
+  const d = parseParts(dateStr)
+  d.setDate(d.getDate() + n)
+  return toDateStr(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
 /** Weekday of a date string, 0 = Sunday. */
 export const weekdayOf = (dateStr: string): number => parseParts(dateStr).getDay()
 

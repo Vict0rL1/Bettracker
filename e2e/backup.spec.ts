@@ -61,7 +61,14 @@ test.describe('full backup', () => {
     await expect(dialog.locator('.restore-counts')).toContainText('0 deposits/withdrawals to add')
     await expect(dialog).toContainText('A restore only adds')
     await dialog.locator('.restore-go').click()
-    await expect(page.locator('.toast')).toContainText('Restored 1 bet and 0 deposits/withdrawals')
+    // No connection here: queued on this device, and said so — never "added".
+    await expect(dialog.locator('.result-bets')).toContainText('Saved on this device: 1 bet. Will sync when you’re back online.')
+    await expect(dialog.locator('.result-bets')).toContainText('Already here, left as they are: 2.')
+    await expect(dialog.locator('.result-moves')).toContainText('Nothing to add.')
+    await expect(dialog.locator('.result-settings')).toContainText('Not changed.')
+    await expect(dialog.locator('.result-overall')).toHaveText('Not finished yet: part of it is still waiting (see above).')
+    await dialog.locator('.result-done').click()
+    await page.keyboard.press('Escape')
     await expect(rows(page)).toHaveCount(3)
     await expect(rows(page).filter({ hasText: 'second' })).toHaveCount(1)
 
@@ -83,11 +90,14 @@ test.describe('full backup', () => {
     await expect(box).not.toBeChecked()
     await box.check()
     await dialog.locator('.restore-go').click()
+    await expect(dialog.locator('.result-settings')).toContainText('odds format')
     await expect(rows(page).filter({ hasText: 'only in the backup' })).toHaveCount(1)
     // American now: the backup's odds format was taken.
     await expect(rows(page).filter({ hasText: 'only in the backup' }).locator('.td-odds')).toHaveText('+200')
-    await page.locator('.toast-action').click()
+    await dialog.locator('.result-undo-go').click()
     await expect(rows(page).filter({ hasText: 'only in the backup' })).toHaveCount(0)
+    // And the odds format it replaced is back.
+    await expect(rows(page).filter({ hasText: 'first' }).locator('.td-odds')).toHaveText('3.00')
   })
 
   test('a file that is not a backup, or from a newer version, is refused before anything changes', async ({ page }) => {

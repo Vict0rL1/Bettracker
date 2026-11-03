@@ -13,7 +13,10 @@ import {
 import { backoff, migrationNotice, pushSettings, retryPlan, syncStatus, type SettingsPushResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
+import { journalEntry, journalRemove, newerSettings, replayJournals, type JournalEdit, type SettingsSaveState } from './settingsJournal'
 import { queueStore, withLock } from './store'
+
+export type { SettingsSaveState }
 
 export interface SettingsSync {
   /** Last-known row with any pending edit applied; defaults until the first load. */
@@ -33,8 +36,20 @@ export interface SettingsSync {
   unsaved: boolean
   /** For the badge, while a change is pending: on its way, or what holds it back. */
   status: SyncStatus
-  /** Resolves once the change is pending: true when this device's storage holds it. */
-  update: (patch: SettingsPatch) => Promise<boolean>
+  /**
+   * Where the last changes are: 'saving' (on screen, not yet stored on this
+   * device), 'local' (stored here, waiting for the cloud), 'unsaved' (storage
+   * refused them: only in this window), 'synced'.
+   */
+  saveState: SettingsSaveState
+  /** The edits waiting to reach the server, field by field (null: none). */
+  pendingPatch: SettingsPatch | null
+  /**
+   * Resolves once the change is pending: true when this device's storage
+   * holds it. `guard`: fields that apply only where the server still holds
+   * that value (see PendingSettings.guard).
+   */
+  update: (patch: SettingsPatch, opts?: { guard?: SettingsPatch }) => Promise<boolean>
   saveAgain: () => Promise<boolean>
 }
 
@@ -59,7 +74,14 @@ export function useSettings(
   const [held, setHeld] = useState(false)
   // Edits on their way to storage: on screen at once, before the lock and the
   // write (see store.ts) are through, so what reads the settings next sees them.
-  const [storing, setStoring] = useState<SettingsPatch[]>([])
+  // `journaled`: written to this window's journal meanwhile (see
+  // settingsJournal.ts), so stored on this device even before the lock.
+  const [storing, setStoring] = useState<{ patch: SettingsPatch; journaled: boolean }[]>([])
+  // An edit storage refused that the journal did not take either.
+  const [journalFailed, setJournalFailed] = useState(false)
+  // Journal entries of edits the queue's storage refused (held in this
+  // window): out of the journal once the queue is stored.
+  const heldJournalRef = useRef<JournalEdit[]>([])
   const [blocked, setBlockedState] = useState(false)
   // What stopped the last push short of an answer: the connection, the
   // session or key, or a server failure that passes. Cleared by an answer.
@@ -99,9 +121,13 @@ export function useSettings(
     [userId]
   )
 
+  // Only ever forward: a read answered before a save landed (or before the
+  // row existed, as none) must not put back what the save replaced, here or
+  // in the cache other windows show (see newerSettings).
   const setServer = useCallback(
     (s: Settings) => {
       if (userRef.current !== userId) return
+      if (!newerSettings(serverRef.current, s)) return
       serverRef.current = s
       setServerState(s)
       if (userId) saveSettingsCache(userId, s)
@@ -175,7 +201,7 @@ export function useSettings(
         pushSettings({
           pending: () => store.fresh(),
           settle: async (sent) => void (await change((current) => afterSettingsAnswer(current, sent))),
-          save: (p) => saveSettings(p.patch, p.editedAt, userId)
+          save: (p) => saveSettings(p.patch, p.editedAt, userId, p.guard)
         })
       )
     } finally {
@@ -218,6 +244,8 @@ export function useSettings(
     setPendingState(null)
     setHeld(false)
     setStoring([])
+    setJournalFailed(false)
+    heldJournalRef.current = []
     setStopped(null)
     if (!userId) return
     const cached = loadSettingsCache(userId)
@@ -226,11 +254,22 @@ export function useSettings(
     pendingRef.current = queued
     if (cached) setServerState(cached)
     setPendingState(queued)
+    // Edits a window closed (or reloaded) before it could queue them, kept in
+    // its journal: queued now, then out of the journal.
+    let live = true
+    void replayJournals(userId, async (edits) => {
+      if (!live || !store) return false
+      const r = await store.update((current) => edits.reduce<PendingSettings | null>((acc, e) => editSettings(acc, e.patch, e.editedAt, e.guard), current))
+      if (live) mirror(r.value)
+      if (r.saved) setTimeout(() => void syncNowRef.current(), 0)
+      return r.saved
+    })
     return () => {
+      live = false
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
       retryTimerRef.current = null
     }
-  }, [userId, setBlocked])
+  }, [userId, setBlocked, store, mirror])
 
   // Another window changed the pending patch, or refreshed the cached row.
   useEffect(() => {
@@ -240,7 +279,8 @@ export function useSettings(
       if ((e.key === keys.settings || e.key === null) && !store.held) mirror(store.read())
       if (e.key === keys.settingsCache) {
         const cached = loadSettingsCache(userId)
-        if (cached) {
+        // Another window's copy, unless this one already knows a newer row.
+        if (cached && newerSettings(serverRef.current, cached)) {
           serverRef.current = cached
           setServerState(cached)
         }
@@ -283,32 +323,63 @@ export function useSettings(
   }, [userId, syncNow, refresh])
 
   const update = useCallback(
-    async (patch: SettingsPatch): Promise<boolean> => {
+    async (patch: SettingsPatch, opts: { guard?: SettingsPatch } = {}): Promise<boolean> => {
+      if (!userId) return false
       const editedAt = new Date().toISOString()
-      setStoring((xs) => [...xs, patch])
+      // Into this window's journal first, at once: the queue waits for a lock
+      // other windows share, and a reload or a closed window meanwhile must
+      // not lose the edit (the next start queues it, see replayJournals).
+      const entry = journalEntry(userId, { patch, editedAt, ...(opts.guard ? { guard: opts.guard } : {}) })
+      const item = { patch, journaled: entry !== null }
+      setStoring((xs) => [...xs, item])
       try {
         // Merged into what is pending now, other windows' edits included,
         // field by field by edit time (see editSettings).
-        const saved = await change((current) => editSettings(current, patch, editedAt))
+        const saved = await change((current) => editSettings(current, patch, editedAt, opts.guard))
+        // In the queue's storage now (with any edit held before it): out of
+        // the journal. Storage refused the queue: the journal keeps it on
+        // this device until the queue is stored.
+        if (saved) {
+          journalRemove(userId, [...(entry ? [entry] : []), ...heldJournalRef.current])
+          heldJournalRef.current = []
+          setJournalFailed(false)
+        } else if (entry) heldJournalRef.current = [...heldJournalRef.current, entry]
+        else setJournalFailed(true)
         setTimeout(() => void syncNowRef.current(), 0)
-        return saved
+        return saved || entry !== null
       } finally {
-        setStoring((xs) => xs.filter((x) => x !== patch))
+        setStoring((xs) => xs.filter((x) => x !== item))
       }
     },
-    [change]
+    [userId, change]
   )
 
   const saveAgain = useCallback(async (): Promise<boolean> => {
     const saved = await change((current) => current)
-    if (saved) setTimeout(() => void syncNowRef.current(), 0)
+    if (saved) {
+      setJournalFailed(false)
+      // What the journal kept while storage refused the queue is in it now.
+      if (userId) journalRemove(userId, heldJournalRef.current)
+      heldJournalRef.current = []
+      setTimeout(() => void syncNowRef.current(), 0)
+    }
     return saved
-  }, [change])
+  }, [change, userId])
 
-  const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}), ...Object.assign({}, ...storing) }
+  const settings: Settings = { ...DEFAULT_SETTINGS, ...(server ?? {}), ...(pending?.patch ?? {}), ...Object.assign({}, ...storing.map((x) => x.patch)) }
 
   const dirty = pending !== null || storing.length > 0
   const status = syncStatus({ canSync, offline: stopped === 'offline', queued: dirty ? 1 : 0, behind: blocked, paused: stopped === 'paused', retrying: stopped === 'retrying' })
+  const unsaved = held && pending !== null && journalFailed
+  const saveState: SettingsSaveState = unsaved
+    ? 'unsaved'
+    : storing.some((x) => !x.journaled)
+      ? 'saving'
+      : dirty
+        ? 'local'
+        : 'synced'
 
-  return { settings, dirty, blocked, loaded: server !== null || blocked, unsaved: held && pending !== null, status, update, saveAgain }
+  const pendingPatch = pending || storing.length > 0 ? { ...(pending?.patch ?? {}), ...Object.assign({}, ...storing.map((x) => x.patch)) } : null
+
+  return { settings, dirty, blocked, loaded: server !== null || blocked, unsaved, status, saveState, pendingPatch, update, saveAgain }
 }

@@ -53,14 +53,13 @@ export async function getMoves(asUser?: string): Promise<BankrollMove[]> {
  * device time of its content (insertStamp), written as `updated_at` for the
  * same reason as addBet's.
  */
-export async function addMove(input: MoveInput, id: string, stamp: string, asUser?: string): Promise<BankrollMove> {
+export async function addMove(input: MoveInput, id: string, stamp: string, asUser?: string): Promise<BankrollMove | null> {
   const clean = normalizeMove(input)
   const user_id = await signedInUserId(asUser)
   const { data, error, status } = await supabase
     .from(TABLE)
     .insert({ id, user_id, date: clean.date, amount: clean.amount, note: clean.note, updated_at: stamp })
     .select()
-    .single()
   if (error) {
     if (error.code === '23505') {
       // Already inserted by an earlier attempt whose response we never saw.
@@ -72,7 +71,9 @@ export async function addMove(input: MoveInput, id: string, stamp: string, asUse
     }
     throw describeError(error, status)
   }
-  return toMove(data as Row)
+  // No row: deleted since an earlier attempt made it (see addBet).
+  const rows = (Array.isArray(data) ? data : data ? [data] : []) as Row[]
+  return rows.length > 0 ? toMove(rows[0]) : null
 }
 
 /**
@@ -93,10 +94,15 @@ export async function updateMove(id: string, input: MoveInput, editedAt: string)
   return data ? toMove(data as Row) : null
 }
 
-export async function deleteMove(id: string): Promise<boolean> {
-  const { error, count, status } = await supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
+/** As deleteBet: with `ifStamp`, only the row a batch wrote and nobody changed since. */
+export async function deleteMove(id: string, ifStamp?: string): Promise<BankrollMove | null> {
+  const query = supabase.from(TABLE).delete({ count: 'exact' }).eq('id', id)
+  const { error, count, status } = await (ifStamp ? query.eq('updated_at', ifStamp) : query)
   if (error) throw describeError(error, status)
-  return (count ?? 0) > 0
+  if (!ifStamp || (count ?? 0) > 0) return null
+  const back = await supabase.from(TABLE).select('*').eq('id', id).maybeSingle()
+  if (back.error) throw describeError(back.error, back.status)
+  return back.data ? toMove(back.data as Row) : null
 }
 
 /**
@@ -109,10 +115,7 @@ export async function sendMoveOp(op: MoveOp, asUser?: string): Promise<BankrollM
   await signedInUserId(asUser)
   if (op.kind === 'add') return addMove(op.input, op.id, insertStamp(op), asUser)
   if (op.kind === 'update') return updateMove(op.id, op.input, op.editedAt)
-  if (op.kind === 'delete') {
-    await deleteMove(op.id)
-    return null
-  }
+  if (op.kind === 'delete') return deleteMove(op.id, op.ifStamp)
   throw new Error('Deposits and withdrawals are never imported')
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ODDS_FORMATS, type OddsFormat, type Settings, type SettingsPatch } from '../../../shared/types'
 import type { Bankroll } from '../lib/bankroll'
 import { fmtStake, moneyFormat } from '../lib/format'
+import type { SettingsSaveState } from '../data/useSettings'
 import { useLang } from '../lib/i18n'
 import { formatOdds } from '../lib/odds'
 import { useBox } from '../lib/useBox'
@@ -15,6 +16,10 @@ interface Props {
   dirty: boolean
   /** True when what it waits for is a database migration, not the connection. */
   blocked: boolean
+  /** Where the last change is: saving here, stored here and waiting, only in this window, or synced. */
+  saveState: SettingsSaveState
+  /** No connection: a stored change waits for it. */
+  offline: boolean
   bankroll: Bankroll
   onChange: (patch: SettingsPatch) => void
   /** Closes Settings and opens the Bankroll dialog (dialogs never stack). */
@@ -30,7 +35,7 @@ const SAMPLE = 1.9091
  * is no save button — and the change is queued for the server the same way a
  * bet is, so it works offline and follows the user to their other devices.
  */
-export default function SettingsDialog({ settings, dirty, blocked, bankroll, onChange, onOpenBankroll, onClose }: Props) {
+export default function SettingsDialog({ settings, dirty, blocked, saveState, offline, bankroll, onChange, onOpenBankroll, onClose }: Props) {
   const { t } = useLang()
   const titleId = useId()
   const stakeId = useId()
@@ -308,7 +313,13 @@ export default function SettingsDialog({ settings, dirty, blocked, bankroll, onC
 
         <footer className="modal-actions">
           <span className={`settings-sync ${dirty ? 'is-dirty' : ''}`} aria-live="polite">
-            {dirty ? t(blocked ? 'settings.blocked' : 'settings.pending') : ''}
+            {saveState === 'saving'
+              ? t('settings.saving')
+              : saveState === 'unsaved'
+                ? t('settings.unsaved')
+                : dirty
+                  ? t(blocked ? 'settings.blocked' : offline ? 'settings.pending' : 'settings.syncing')
+                  : ''}
           </span>
           <span className="spacer" />
           <button type="button" className="btn btn-ghost" onClick={close}>

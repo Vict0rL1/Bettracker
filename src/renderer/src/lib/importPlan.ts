@@ -7,6 +7,8 @@ export interface PlannedRow {
   /** Its line in the file (the header is line 1). */
   line: number
   input: BetInput
+  /** A possible duplicate: the bet already here it looks like, to compare them. */
+  match?: Bet
 }
 
 /**
@@ -26,6 +28,12 @@ export interface ImportPlan {
   /** Rows identical to an earlier row of the same file: kept, and said. */
   sameInFile: number
   noStake: number
+  /**
+   * Which rows look like which bets here, the same whenever the plan is made
+   * from the same file and the same bets: made again before the import, a
+   * different one means the bets changed during the review.
+   */
+  signature: string
 }
 
 const money = (n: number | null): string => (n === null ? '-' : n.toFixed(2))
@@ -44,10 +52,13 @@ export function duplicateKey(b: Pick<CleanBet, 'date' | 'status' | 'amount' | 's
 
 /** Sort a parsed file against the bets already here. */
 export function planImport(parsed: Pick<ImportResult, 'rows' | 'lines' | 'rejected' | 'noStake'>, existing: readonly Bet[]): ImportPlan {
-  const here = new Map<string, number>()
+  // Each bet here is matched at most once, oldest first.
+  const here = new Map<string, Bet[]>()
   for (const b of existing) {
     const key = duplicateKey(b)
-    here.set(key, (here.get(key) ?? 0) + 1)
+    const same = here.get(key)
+    if (same) same.push(b)
+    else here.set(key, [b])
   }
   const seen = new Set<string>()
   const fresh: PlannedRow[] = []
@@ -55,16 +66,15 @@ export function planImport(parsed: Pick<ImportResult, 'rows' | 'lines' | 'reject
   let sameInFile = 0
   parsed.rows.forEach((input, i) => {
     const key = duplicateKey(normalizeInput(input))
-    const row = { line: parsed.lines[i], input }
+    const row: PlannedRow = { line: parsed.lines[i], input }
     if (seen.has(key)) sameInFile++
     seen.add(key)
-    const left = here.get(key) ?? 0
-    if (left > 0) {
-      here.set(key, left - 1)
-      duplicates.push(row)
-    } else fresh.push(row)
+    const match = here.get(key)?.shift()
+    if (match) duplicates.push({ ...row, match })
+    else fresh.push(row)
   })
-  return { fresh, duplicates, rejected: parsed.rejected, sameInFile, noStake: parsed.noStake }
+  const signature = JSON.stringify(duplicates.map((d) => [d.line, d.match?.id]))
+  return { fresh, duplicates, rejected: parsed.rejected, sameInFile, noStake: parsed.noStake, signature }
 }
 
 /**

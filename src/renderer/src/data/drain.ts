@@ -19,13 +19,16 @@ import type { PendingOp, PendingSettings } from './offline'
  *               take), the rest waits for a sign-in or the right key;
  *  - 'retry':   the server failed for now (a 5xx, a rate limit), the rest
  *               waits for the next try, after a growing wait;
- *  - 'behind':  the database is missing a migration, the rest waits for it.
+ *  - 'behind':  the database is missing a migration, the rest waits for it;
+ *  - 'storage': the server refused a change for good, and this device has no
+ *               room to set it aside (see `rejected`): it stays where it is,
+ *               in the queue, until there is.
  * `processed` counts the ops that reached the server.
  */
 export type DrainResult =
   | { stop: 'done'; processed: number }
   | { stop: 'offline'; processed: number }
-  | { stop: 'paused' | 'retry' | 'behind'; processed: number; error: unknown }
+  | { stop: 'paused' | 'retry' | 'behind' | 'storage'; processed: number; error: unknown }
 
 export interface DrainHooks<I = BetInput, R = Bet> {
   /** The queue as it is now, other windows' changes included. Read before every op: it can grow while a request is out. */
@@ -46,15 +49,17 @@ export interface DrainHooks<I = BetInput, R = Bet> {
    * still queued behind it, so a refused update is not the last word on
    * that bet (no "newer edit elsewhere" notice for it).
    */
-  applied: (op: PendingOp<I>, result: R | null, superseded: boolean) => void
+  applied: (op: PendingOp<I>, result: R | null, superseded: boolean) => void | Promise<void>
   /**
    * The server refused these for good: the op, with what was queued after
    * it for a bet it never made. Keep them where the user can send them
-   * again; they leave the queue once this resolves. Called once more with
-   * `revised` when they changed before they left (an edit folded in): the
-   * entry of the same refused op (the first) is written again with them.
+   * again. Called again with `revised` when they changed before they could
+   * leave (an edit folded in): the entry of the same refused op (the first)
+   * is written again with them. Resolves false when this device could not
+   * store them: they stay in the queue, the only copy that is stored, and
+   * the drain stops ('storage').
    */
-  rejected: (ops: PendingOp<I>[], err: unknown, revised?: boolean) => void | Promise<void>
+  rejected: (ops: PendingOp<I>[], err: unknown, revised?: boolean) => void | boolean | Promise<void | boolean>
 }
 
 /** What was queued for an add's bet after it, up to the next add of that bet (an Undo, which starts it anew). */
@@ -117,7 +122,7 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
     }
     try {
       const result = await h.send(op, progress)
-      h.applied(op, result, (await h.outbox()).some((o) => o.opId !== op.opId && forBet(o, op)))
+      await h.applied(op, result, (await h.outbox()).some((o) => o.opId !== op.opId && forBet(o, op)))
       await h.update((q) => q.filter((o) => o.opId !== op.opId))
       processed++
     } catch (err) {
@@ -144,30 +149,49 @@ export async function drainOutbox<I = BetInput, R = Bet>(h: DrainHooks<I, R>): P
       // sending them again does what the user did (an add then a delete is
       // nothing). Not for an import: earlier chunks may have landed.
       const neverMade = op.kind === 'add' && !/duplicate key/i.test(err instanceof Error ? err.message : String(err))
-      const read = await h.outbox()
-      const kept = [read.find((o) => o.opId === op.opId) ?? op, ...(neverMade ? queuedAfter(read, op) : [])]
+      const story = (q: readonly PendingOp<I>[]): PendingOp<I>[] => {
+        const now = q.find((o) => o.opId === op.opId)
+        return now ? [now, ...(neverMade ? queuedAfter(q, op) : [])] : []
+      }
+      const read = story(await h.outbox())
+      let kept = read.length > 0 ? read : [op]
       // Kept apart before it leaves the queue: a window closed in between
-      // leaves it in both (sent twice at worst), never in neither.
-      await h.rejected(kept, err)
-      // Then out of the queue, as the ops are now: an edit folded into one
-      // since, or queued for the bet since, goes too, and the entry is
-      // written again with them. Decided once, so a replay takes the same.
-      const taken: { ops: PendingOp<I>[] | null } = { ops: null }
-      await h.update((q) => {
-        if (taken.ops === null) {
-          const ids = new Set([...kept.map((o) => o.opId), ...(neverMade ? queuedAfter(q, op).map((o) => o.opId) : [])])
-          taken.ops = q.filter((o) => ids.has(o.opId))
-        }
-        const gone = taken.ops
-        return q.filter((o) => !gone.some((g) => g.opId === o.opId))
-      })
-      const gone = taken.ops ?? []
-      const same = gone.length === kept.length && gone.every((o, i) => JSON.stringify(o) === JSON.stringify(kept[i]))
-      if (gone[0]?.opId === op.opId && !same) await h.rejected(gone, err, true)
+      // leaves it in both (sent twice at worst), never in neither. And it
+      // leaves only once that is stored: without room for it, the queue is
+      // still its only stored copy, so it stays there and the queue waits.
+      if ((await h.rejected(kept, err)) === false) return { stop: 'storage', processed, error: err }
+      // Then out of the queue, only as it was set apart: an edit folded into
+      // one of them since, or queued for the bet since, is set apart too
+      // first, and then they leave. Decided once, so a replay takes the same.
+      for (let round = 0; ; round++) {
+        const decided: { gone: Set<string> | null; now: PendingOp<I>[] } = { gone: null, now: [] }
+        await h.update((q) => {
+          if (decided.gone === null) {
+            decided.now = story(q)
+            const unchanged = decided.now.length === kept.length && decided.now.every((o, i) => JSON.stringify(o) === JSON.stringify(kept[i]))
+            // Changed too often to catch (another window folding edits in
+            // without pause): out as it is now, and set apart once more after.
+            decided.gone = unchanged || round >= MAX_REVISIONS ? new Set(decided.now.map((o) => o.opId)) : new Set()
+          }
+          const gone = decided.gone
+          return q.filter((o) => !gone.has(o.opId))
+        })
+        const now = decided.now
+        const unchanged = now.length === kept.length && now.every((o, i) => JSON.stringify(o) === JSON.stringify(kept[i]))
+        if (now.length === 0 || unchanged) break
+        if (now[0]?.opId !== op.opId) break
+        const stored = await h.rejected(now, err, true)
+        if (round >= MAX_REVISIONS) break
+        if (stored === false) return { stop: 'storage', processed, error: err }
+        kept = now
+      }
     }
   }
   return { stop: 'done', processed }
 }
+
+/** How many times a refused op is set apart again because its story changed before it could leave the queue. */
+const MAX_REVISIONS = 5
 
 /**
  * How a settings push ended. 'conflict' means a newer edit from another

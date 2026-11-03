@@ -123,6 +123,8 @@ export interface BootOptions {
   latencyMs?: number
   /** A queue of changes waiting to sync, as the app (or an older version of it) stored it. */
   outbox?: unknown[]
+  /** With the 'live' backend: false for a database without migration 007 (no tombstones). */
+  migrated007?: boolean
 }
 
 /** Cached settings (camelCase, as the app stores them) as the user_settings row a migrated server holds. */
@@ -159,6 +161,7 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
           rows: entries.map(toRow),
           migrated: has004,
           migrated005: backend === 'live',
+          migrated007: backend === 'live' && opts.migrated007 !== false,
           latencyMs: opts.latencyMs ?? 0,
           // A migrated server holds the settings the device has cached.
           settingsRow: has004 && opts.settings ? toSettingsRow(opts.settings) : null,
@@ -183,6 +186,7 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
         localStorage.setItem('e2e:moves', JSON.stringify(server.moveRows))
         if (server.migrated) localStorage.setItem('e2e:migrated', '1')
         if (server.migrated005) localStorage.setItem('e2e:migrated-005', '1')
+        if (server.migrated007) localStorage.setItem('e2e:migrated-007', '1')
         localStorage.setItem('e2e:latency', String(server.latencyMs))
         if (server.settingsRow) localStorage.setItem('e2e:settings', JSON.stringify(server.settingsRow))
       }
@@ -227,7 +231,7 @@ export async function importCsv(page: Page, csv: string, opts: { name?: string; 
   const dialog = page.locator('.data-modal')
   await page.setInputFiles('.data-csv-input', { name: opts.name ?? 'bets.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
   await dialog.locator('.imp-summary').waitFor()
-  if (opts.keepDuplicates) await dialog.getByLabel(/Import them too/).check()
+  if (opts.keepDuplicates && (await dialog.locator('.imp-dup-all').count()) > 0) await dialog.locator('.imp-dup-all').click()
   await dialog.locator('.imp-go, .imp-again').click()
   await dialog.waitFor({ state: 'detached' })
 }

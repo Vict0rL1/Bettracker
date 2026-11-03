@@ -275,8 +275,9 @@ test.describe('a device whose storage is full', () => {
   })
 
   // A change refused for good while storage was full was kept only in this
-  // window, and nothing said so: closing the window lost it.
-  test('a change refused for good with no room to keep it says so, and is kept once there is room', async ({ page }) => {
+  // window, and nothing said so: closing the window lost it. Now it stays
+  // where it is stored (the queue) until its record can be stored too.
+  test('a change refused for good with no room to set it aside stays queued, says so, and is set aside once there is room', async ({ page }) => {
     await boot(page, { backend: 'live' })
     await page.evaluate(() => localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'violates check constraint', code: '23514', times: 1 })))
     // Room for the queue, none for the list of refused changes.
@@ -289,12 +290,17 @@ test.describe('a device whose storage is full', () => {
       }
     })
     await logLoss(page, '44')
-    await expect(page.locator('.refused-notice')).toBeVisible()
-    await expect(page.locator('.unsaved-notice')).toContainText('1 change couldn’t be saved on this device')
+    await expect(page.locator('.refusal-blocked-notice')).toBeVisible()
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+    expect(await queuedBets(page)).toBe(1)
 
     await makeRoom(page)
-    await page.locator('.notice-save-again').click()
-    await expect(page.locator('.unsaved-notice')).toHaveCount(0)
+    // Sent again, the server refuses it again, as it would.
+    await page.evaluate(() => localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'violates check constraint', code: '23514', times: 1 })))
+    await page.locator('.refusal-blocked-notice .notice-save-again').click()
+    await expect(page.locator('.refused-notice')).toBeVisible()
+    await expect(page.locator('.refusal-blocked-notice')).toHaveCount(0)
+    expect(await queuedBets(page)).toBe(0)
     expect(await page.evaluate((uid) => localStorage.getItem(`bettracker:refused:${uid}`), USER.id)).not.toBeNull()
     await reload(page)
     await expect(page.locator('.refused-notice')).toBeVisible()

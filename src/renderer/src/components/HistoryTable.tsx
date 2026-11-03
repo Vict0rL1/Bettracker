@@ -443,11 +443,12 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                                 </div>
                               </dl>
                               <div className="hcard-actions">
-                                <button type="button" className="btn btn-ghost hcard-edit" onClick={() => onEdit(b)}>
-                                  <PencilIcon /> {t('hist.editBet')}
+                                {/* Short words to fit a phone; the names say which bet and which day. */}
+                                <button type="button" className="btn btn-ghost hcard-edit" aria-label={t('hist.editAria', { date: when })} onClick={() => onEdit(b)}>
+                                  <PencilIcon /> {t('hist.editShort')}
                                 </button>
-                                <button type="button" className="btn btn-ghost hcard-day" onClick={() => onOpenDay(b.date)}>
-                                  {t('hist.openDay')}
+                                <button type="button" className="btn btn-ghost hcard-day" aria-label={t('hist.openDayAria', { date: when })} onClick={() => onOpenDay(b.date)}>
+                                  {t('hist.viewDay')}
                                 </button>
                                 <button
                                   type="button"

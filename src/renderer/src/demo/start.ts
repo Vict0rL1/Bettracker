@@ -8,6 +8,7 @@ import { installFakeSupabase } from './fakeSupabase'
 try {
   localStorage.setItem(`${DEMO_PREFIX}migrated`, '1')
   localStorage.setItem(`${DEMO_PREFIX}migrated-005`, '1')
+  localStorage.setItem(`${DEMO_PREFIX}migrated-007`, '1')
 } catch {
   // storage unavailable — the fake answers as a database missing migrations
 }

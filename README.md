@@ -132,11 +132,18 @@ keyboard (arrows, Home/End, Escape back to the button).
      in either order) and
      [`006_lost_free_bets.sql`](supabase/migrations/006_lost_free_bets.sql)
      (a free bet that loses stays lost when edited later; it only replaces
-     003's trigger, so it runs after 003). Your existing bets are untouched —
+     003's trigger, so it runs after 003) and
+     [`007_deleted_rows.sql`](supabase/migrations/007_deleted_rows.sql)
+     (a deleted bet, deposit or withdrawal stays deleted: an insert sent
+     again after its answer was lost can no longer bring it back; it runs
+     after 005). Your existing bets are untouched —
      old ones simply have no stake or odds recorded, and 003 gives each the
      status its result implies. Without 006 everything works, except that
      editing a lost free bet ($0 stake, $0 result) turns it into a push (its
-     P/L stays $0).
+     P/L stays $0). Without 007 everything works too, except that a bet
+     deleted on one device can come back when another device sends again an
+     insert of it whose answer was lost (an import, a restore, a quick add on
+     a bad connection).
    - *Upgrading an install people are using?* Run the migrations **before**
      you deploy the new version. Devices still on the old version keep
      working in between: their writes carry no status, and 003 gives them the
@@ -458,7 +465,7 @@ Bettracker/
 ├── .github/workflows/ci.yml    # CI: secrets scan, tests, build, schema, e2e
 ├── supabase/
 │   ├── schema.sql              # run once in your Supabase project
-│   ├── migrations/             # 001–005, for installs made before each change
+│   ├── migrations/             # 001–007, for installs made before each change
 │   └── tests/                  # runs the two above against a real Postgres
 ├── build/make-icon.mjs         # regenerates all app/PWA icons
 ├── e2e/                        # Playwright specs + the harness that boots the app on a fake Supabase

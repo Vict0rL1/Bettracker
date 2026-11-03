@@ -199,7 +199,7 @@ export class StorageWriteError extends Error {
 }
 
 /** What the server holds anyway: the cached bets, deposits and withdrawals, and settings. Never a queue. */
-const EXPENDABLE = /^bettracker:(?:cache|moves|settings):/
+const EXPENDABLE = /^bettracker:(?:cache|moves|settings|confirmed-bets|confirmed-moves):/
 
 /** Store something that can be fetched again. Failing to is fine. */
 export function writeExpendable(key: string, value: unknown): void {
@@ -274,9 +274,11 @@ export interface QueueStore<T> {
   /**
    * Change the queue: `fn` gets it as it is now, other windows' changes
    * included, and nothing else changes it until it is stored. Resolves with
-   * the queue and whether storage now holds it.
+   * the queue and whether storage now holds it. With `hold: false` a change
+   * storage refuses is not held either: it is dropped, and the queue stays
+   * as it was (for a change that must be stored or not made at all).
    */
-  update(fn: (current: T) => T): Promise<{ value: T; saved: boolean }>
+  update(fn: (current: T) => T, opts?: { hold?: boolean }): Promise<{ value: T; saved: boolean }>
   /** True while storage refuses this window's queue. */
   readonly held: boolean
 }
@@ -297,7 +299,7 @@ export function queueStore<T>(opts: {
     },
     read: () => (held ? held.value : opts.load()),
     fresh: () => underLock(opts.lock, versions, () => (held ? held.value : opts.load())),
-    update: (fn) =>
+    update: (fn, how) =>
       underLock(opts.lock, versions, async (wrote) => {
         const changes = [...(held?.changes ?? []), fn]
         const value = changes.reduce((current, change) => change(current), opts.load())
@@ -305,6 +307,7 @@ export function queueStore<T>(opts: {
           opts.save(value)
         } catch (err) {
           if (!(err instanceof StorageWriteError)) throw err
+          if (how?.hold === false) return { value: held ? held.value : opts.load(), saved: false }
           held = { changes, value }
           return { value, saved: false }
         }

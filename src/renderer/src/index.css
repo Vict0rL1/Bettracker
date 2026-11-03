@@ -3291,14 +3291,28 @@ tbody tr.is-selected {
   white-space: pre-wrap;
 }
 
+/* Three actions side by side, each a full tap target, on one line even at 320px. */
 .hcard-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .hcard-actions .btn {
-  min-height: 36px;
+  min-height: 44px;
+  justify-content: center;
+  gap: 4px;
+  padding-inline: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The narrowest phones: the words alone, so "Eliminar" fits as well as "Edit". */
+@media (max-width: 360px) {
+  .hcard-actions .btn svg {
+    display: none;
+  }
 }
 
 .hcard-actions .danger {
@@ -3480,6 +3494,232 @@ tbody tr.is-selected {
   position: absolute;
   left: 2px;
   color: var(--text-3);
+}
+
+/* The import review's possible duplicates: each next to the bet it looks like. */
+.imp-dup-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.imp-dup-bulk .btn {
+  min-height: 40px;
+}
+
+.imp-dup-count {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.imp-dup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.imp-dup {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--tint-1);
+}
+
+.imp-dup.is-kept {
+  border-color: var(--green);
+}
+
+.imp-dup-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.imp-dup-pick input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--green);
+  flex-shrink: 0;
+}
+
+.imp-cmp {
+  width: 100%;
+  /* Not the history table's minimum on a phone: this one wraps. */
+  min-width: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.imp-cmp th,
+.imp-cmp td {
+  text-align: left;
+  padding: 3px 6px 3px 0;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.imp-cmp thead th {
+  position: static;
+  background: none;
+  padding: 3px 6px 3px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.imp-cmp tbody th {
+  width: 30%;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.imp-cmp tr.is-diff td:first-of-type {
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: underline dotted var(--text-3);
+  text-underline-offset: 3px;
+}
+
+.imp-show-more {
+  min-height: 40px;
+}
+
+.data-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* A restore's result: what was added, what waits, what failed and what to do. */
+.result-parts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-part {
+  display: grid;
+  grid-template-columns: minmax(0, 9em) minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--tint-1);
+  border-left: 3px solid var(--border);
+}
+
+.result-part dt {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.result-part dd {
+  margin: 0;
+}
+
+.result-part.is-done {
+  border-left-color: var(--green);
+}
+
+.result-part.is-waiting {
+  border-left-color: var(--amber, var(--text-3));
+}
+
+.result-part.is-failed,
+.result-part.is-held,
+.result-part.is-refused {
+  border-left-color: var(--red);
+}
+
+.result-overall {
+  margin: 0;
+  font-weight: 600;
+}
+
+.result-recover {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-undo-go {
+  align-self: flex-start;
+}
+
+@media (max-width: 420px) {
+  .result-part {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The quick add's day: a date box, and Today / Yesterday a tap away. */
+.quick-date {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-date-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+
+.quick-date-field {
+  flex: 1 1 10em;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-date-input {
+  width: 100%;
+  min-height: 40px;
+  background: var(--input-bg);
+  border: 1px solid var(--tint-3);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  padding: 8px 12px;
+  color-scheme: light dark;
+}
+
+.quick-date-input:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.quick-date-chips {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+
+.quick-date-chips .chip {
+  min-height: 40px;
+  padding: 4px 12px;
+}
+
+.chip.active,
+.chip[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--tint-3);
+  border-color: var(--focus);
 }
 
 /* ---------- dashboard: key numbers first, the rest on demand ---------- */

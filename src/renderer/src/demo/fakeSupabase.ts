@@ -54,7 +54,19 @@ export interface FakeSupabaseConfig {
  *  - `e2e:hold-reads`  a table: each read of it is answered at once, as the
  *                    database is then, but handed over only once this is
  *                    cleared, after whatever writes land meanwhile (a read
- *                    that comes back late); `e2e:reads-held` counts them.
+ *                    that comes back late); `e2e:reads-held` counts them,
+ *                    and `e2e:reads-delivered` the ones handed over since
+ *                    (each also as `…@<window>`, that window's alone: see
+ *                    `__win`);
+ *                    `table:list` holds only the reads of the whole list
+ *                    (the app's refresh), not a lookup of some rows;
+ *  - `e2e:migrated-007`  set: the database has migration 007: a deleted bet
+ *                    or move leaves its last `updated_at` behind
+ *                    (`e2e:tombstones`), and an insert of that id that is not
+ *                    newer is let go (no row, no error), as an old insert
+ *                    sent again would be;
+ *  - `e2e:lose-answers`  that many more write answers are lost: the write
+ *                    lands, and the app hears a failed fetch.
  * A row written without `updated_at` gets the time it was answered, as the
  * server's now() would. Answers carry the HTTP status PostgREST would give.
  *
@@ -80,6 +92,8 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     range: [number, number] | null
     /** upsert's `ignoreDuplicates`: ON CONFLICT DO NOTHING. */
     ignoreDuplicates: boolean
+    /** `.in(column, values)`. */
+    within: Record<string, unknown[]>
   }
   interface Answer {
     data: unknown
@@ -95,6 +109,13 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     return raw === null ? fallback : (JSON.parse(raw) as T)
   }
   const write = (name: string, value: unknown): void => localStorage.setItem(key(name), JSON.stringify(value))
+  // This window, for the counters only it writes: two windows counting up one
+  // key at once can lose a count (localStorage is not coherent across the
+  // browser's processes), so each also counts under its own name.
+  const win = Math.random().toString(36).slice(2, 10)
+  const count = (name: string): void => {
+    for (const k of [key(name), key(`${name}@${win}`)]) localStorage.setItem(k, String(Number(localStorage.getItem(k) || 0) + 1))
+  }
   const flag = (name: string): boolean => localStorage.getItem(key(name)) === '1'
 
   const session = { access_token: cfg.prefix + 'session', user: { id: cfg.user.id, email: cfg.user.email } }
@@ -107,11 +128,22 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       check()
     })
   /** A read of the table `hold-reads` names, already answered, is handed over once that is cleared. */
-  const late = (q: { action: string; table: string }, out: Answer): Promise<Answer> =>
+  const late = (q: { action: string; table: string; eq: Record<string, unknown>; within: Record<string, unknown[]> }, out: Answer): Promise<Answer> =>
     new Promise((resolve) => {
-      const holding = (): boolean => q.action === 'select' && localStorage.getItem(key('hold-reads')) === q.table
-      if (holding()) localStorage.setItem(key('reads-held'), String(Number(localStorage.getItem(key('reads-held')) || 0) + 1))
-      const check = (): void => void (holding() ? setTimeout(check, 20) : resolve(out))
+      // `table:list`: only the reads of the whole list (no filter), not a lookup of some rows.
+      const listRead = Object.keys(q.eq).length === 0 && Object.keys(q.within).length === 0
+      const holding = (): boolean => {
+        const v = localStorage.getItem(key('hold-reads'))
+        return q.action === 'select' && (v === q.table || (v === `${q.table}:list` && listRead))
+      }
+      const held = holding()
+      if (held) count('reads-held')
+      const check = (): void => {
+        if (holding()) return void setTimeout(check, 20)
+        // Handed over now: a test waits for this before it looks.
+        if (held) count('reads-delivered')
+        resolve(out)
+      }
       check()
     })
   const down = (): boolean => flag('down') || (cfg.demo && typeof navigator !== 'undefined' && navigator.onLine === false)
@@ -123,12 +155,40 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   const duplicate = (constraint: string) => ({ message: `duplicate key value violates unique constraint "${constraint}"`, code: '23505' })
   const unmodelled = (what: string) => ({ message: `fake Supabase: ${what} is not modelled`, code: 'FAKE' })
 
+  /** Every `.eq`/`.is` of the query holds for the row (timestamps compared as times). */
+  const matches = (row: Row, q: Query): boolean =>
+    Object.entries(q.eq).every(([col, want]) => {
+      const have = row[col]
+      if (want === null) return have === null || have === undefined
+      if (col === 'updated_at' || col === 'created_at') return Date.parse(String(have)) === Date.parse(String(want))
+      // PostgREST compares a number column with the text of the filter.
+      return String(have) === String(want)
+    }) && Object.entries(q.within).every(([col, list]) => list.map(String).includes(String(row[col])))
+  const after = (a: unknown, b: unknown): boolean => Date.parse(String(a)) > Date.parse(String(b))
+  /** Migration 007: an insert of a deleted id that is not newer than what was deleted is let go. */
+  const buried = (table: string, row: Row): boolean => {
+    if (!flag('migrated-007')) return false
+    const stones = read<Record<string, string>>('tombstones', {})
+    const stone = stones[`${table}:${String(row.id)}`]
+    return stone !== undefined && !after(row.updated_at ?? new Date().toISOString(), stone)
+  }
+  const bury = (table: string, gone: Row[]): void => {
+    if (!flag('migrated-007') || gone.length === 0) return
+    const stones = read<Record<string, string>>('tombstones', {})
+    for (const r of gone) {
+      const k = `${table}:${String(r.id)}`
+      if (stones[k] === undefined || after(r.updated_at, stones[k])) stones[k] = String(r.updated_at)
+    }
+    write('tombstones', stones)
+  }
+
   function settings(q: Query): Answer {
     if (!migrated()) return { data: null, error: NO_TABLE }
     const row = read<Row | null>('settings', null)
     if (q.action === 'select') return { data: row, error: null }
     if (q.action === 'update') {
       if (!row || (q.lte !== undefined && String(row.updated_at) > String(q.lte))) return { data: null, error: null }
+      if (!matches(row, { ...q, eq: Object.fromEntries(Object.entries(q.eq).filter(([k]) => k !== 'user_id')) })) return { data: null, error: null }
       const next = { ...row, ...(q.payload as Row) }
       write('settings', next)
       return { data: next, error: null }
@@ -147,6 +207,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     const all = read<Row[]>(name, [])
     if (q.action === 'select') {
       if (q.eq.id !== undefined) return { data: all.find((r) => r.id === q.eq.id) ?? null, error: null }
+      if (Object.keys(q.within).length > 0) return { data: all.filter((r) => matches(r, q)), error: null }
       // A list is read page by page (data/readAll.ts): one page, and the count
       // of them all. Never more rows than max-rows, whatever was asked.
       const cap = maxRows()
@@ -155,8 +216,9 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       return { data: page, error: null, count: all.length }
     }
     if (q.action === 'delete') {
-      const kept = all.filter((r) => r.id !== q.eq.id)
+      const kept = all.filter((r) => !matches(r, q))
       write(name, kept)
+      bury(name, all.filter((r) => matches(r, q)))
       return { data: null, error: null, count: all.length - kept.length }
     }
     if (name === 'rows' && !migrated()) return { data: null, error: NO_COLUMN }
@@ -164,6 +226,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       const payload = q.payload as Row
       if (all.some((r) => r.id === payload.id)) return { data: null, error: duplicate(constraint) }
       const row = stamp(payload)
+      if (buried(name, row)) return { data: [], error: null }
       write(name, [...all, row])
       return { data: row, error: null }
     }
@@ -177,15 +240,18 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     if (q.action === 'upsert' && name === 'rows') {
       const payload = q.payload as Row[]
       const byId = new Map(all.map((r) => [r.id, r]))
-      let written = 0
+      const written: Row[] = []
       for (const r of payload) {
         // ignoreDuplicates: a row already there stays as it is.
         if (q.ignoreDuplicates && byId.has(r.id)) continue
-        byId.set(r.id, { ...(byId.get(r.id) ?? {}), ...stamp(r) })
-        written++
+        const row = { ...(byId.get(r.id) ?? {}), ...stamp(r) }
+        if (!byId.has(r.id) && buried(name, row)) continue
+        byId.set(r.id, row)
+        written.push(row)
       }
       write(name, [...byId.values()])
-      return { data: null, error: null, count: written }
+      // The rows written, as `.select()` asks for.
+      return { data: written, error: null, count: written.length }
     }
     return { data: null, error: unmodelled(name + ' ' + q.action) }
   }
@@ -211,6 +277,16 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
         return { data: null, error: { message: fail.message, code: '' }, status: fail.status }
       }
     }
+    if (q.action !== 'select' && Number(localStorage.getItem(key('lose-answers')) || 0) > 0) {
+      // The write lands; its answer never comes back.
+      localStorage.setItem(key('lose-answers'), String(Number(localStorage.getItem(key('lose-answers'))) - 1))
+      localStorage.setItem(key('writes'), String(Number(localStorage.getItem(key('writes')) || 0) + 1))
+      if (q.table === 'user_settings') settings(q)
+      else if (q.table === 'bankroll_moves') {
+        if (flag('migrated-005')) table('moves', 'bankroll_moves_pkey', q)
+      } else table('rows', 'entries_pkey', q)
+      return lost
+    }
     if (q.action !== 'select') {
       const left = localStorage.getItem(key('writes-left'))
       if (left !== null) {
@@ -234,7 +310,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   }
 
   function from(tableName: string) {
-    const q: Query = { table: tableName, action: 'select', payload: null, eq: {}, lte: undefined, lteSet: false, range: null, ignoreDuplicates: false }
+    const q: Query = { table: tableName, action: 'select', payload: null, eq: {}, lte: undefined, lteSet: false, range: null, ignoreDuplicates: false, within: {} }
     const chain = {
       select: () => chain,
       order: () => chain,
@@ -246,6 +322,14 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       maybeSingle: () => chain,
       eq(column: string, value: unknown) {
         q.eq[column] = value
+        return chain
+      },
+      is(column: string, value: unknown) {
+        q.eq[column] = value
+        return chain
+      },
+      in(column: string, values: unknown[]) {
+        q.within[column] = values
         return chain
       },
       lte(_column: string, value: unknown) {
@@ -327,6 +411,8 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       }
     },
     from,
+    /** This window's name in the per-window counters (`e2e:reads-held@<win>`). */
+    __win: win,
     __endSession() {
       localStorage.setItem(key('signed-out'), '1')
       for (const fn of listeners) fn('SIGNED_OUT', null)

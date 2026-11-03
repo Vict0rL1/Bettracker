@@ -96,7 +96,7 @@ describe('addMove', () => {
     state.replies = [{ data: ROW, error: null }]
     const out = await addMove({ date: '2026-03-01', amount: -120.499, note: '  rent ' }, 'm1', 'Q')
     expect(call('insert')?.args[0]).toEqual({ id: 'm1', user_id: 'user-1', date: '2026-03-01', amount: -120.5, note: 'rent', updated_at: 'Q' })
-    expect(out.amount).toBe(-120.5)
+    expect(out?.amount).toBe(-120.5)
   })
 
   it('returns the row already there when an earlier attempt landed (23505), never overwriting it', async () => {
@@ -105,7 +105,7 @@ describe('addMove', () => {
       { data: { ...ROW, note: 'edited elsewhere' }, error: null }
     ]
     const out = await addMove({ date: '2026-03-01', amount: -120.5 }, 'm1', 'Q')
-    expect(out.note).toBe('edited elsewhere')
+    expect(out?.note).toBe('edited elsewhere')
     expect(calls('eq').at(-1)?.args).toEqual(['id', 'm1'])
     expect(calls('insert')).toHaveLength(1)
     expect(calls('update')).toHaveLength(0)
@@ -146,13 +146,23 @@ describe('updateMove — last write wins by edit time', () => {
 })
 
 describe('deleteMove', () => {
-  it('deletes by id and says whether a row went', async () => {
+  it('deletes by id, and answers no row', async () => {
     state.replies = [{ data: null, error: null, count: 1 }]
-    expect(await deleteMove('m1')).toBe(true)
+    expect(await deleteMove('m1')).toBeNull()
     expect(call('delete')?.args).toEqual([{ count: 'exact' }])
     expect(call('eq')?.args).toEqual(['id', 'm1'])
-    state.replies = [{ data: null, error: null, count: 0 }]
-    expect(await deleteMove('m1')).toBe(false)
+  })
+
+  it('with a stamp (an Undo), removes it only while it carries it, and answers a row it left with that row', async () => {
+    state.replies = [
+      { data: null, error: null, count: 0 },
+      { data: { ...ROW, note: 'edited since' }, error: null }
+    ]
+    expect((await deleteMove('m1', 'S'))?.note).toBe('edited since')
+    expect(calls('eq').slice(0, 2).map((c) => c.args)).toEqual([
+      ['id', 'm1'],
+      ['updated_at', 'S']
+    ])
   })
 })
 

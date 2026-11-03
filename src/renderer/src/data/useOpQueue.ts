@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { drainOutbox, type DrainHooks, type DrainResult } from './drain'
 import { enqueueOp, headAsSent, keepRefused, markHeadSent, requeueRefused, type PendingOp, type Refused } from './offline'
+import type { BatchEvent } from './imports'
 import { queueStore, withLock } from './store'
 
 export interface OpQueueOptions<I> {
@@ -28,6 +29,11 @@ export interface OpQueue<I> {
   refused: Refused<I>[]
   /** Storage refused that list: it is only in this window until storage takes it. */
   refusedHeld: boolean
+  /**
+   * A change the server refused for good could not be set apart for lack of
+   * room: it stays in the queue, which waits, until saveAgain finds room.
+   */
+  refusalBlocked: boolean
   /** Queue ops (see enqueueOp). Resolves with whether storage holds them. */
   enqueue: (ops: readonly PendingOp<I>[]) => Promise<boolean>
   /** Send the queue, holding the lock that lets one window at a time do it. Null with no user. */
@@ -36,8 +42,52 @@ export interface OpQueue<I> {
   retryRefused: () => Promise<boolean>
   /** Let the refused changes go. */
   discardRefused: () => Promise<void>
-  /** Try storage again for a held queue and refused list (after room was made). */
+  /** Try storage again for a held queue and refused list (after room was made), and a refusal that found no room. */
   saveAgain: () => Promise<boolean>
+}
+
+/** Rows still to reach the server, by the batch they belong to (an import's op counts the rows not yet confirmed). */
+export function queuedByBatch<I>(outbox: readonly PendingOp<I>[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const op of outbox) {
+    const batch = op.kind === 'bulk-add' ? (op.batch ?? op.opId) : op.kind === 'update' ? undefined : op.batch
+    if (!batch) continue
+    const n = op.kind === 'bulk-add' ? op.entries.length - (op.done ?? 0) : 1
+    out.set(batch, (out.get(batch) ?? 0) + n)
+  }
+  return out
+}
+
+/**
+ * An Undo's deletes that never needed the server: the batch's add of that
+ * row had not gone out yet, so queueing the delete cancelled it (removed), or
+ * a change queued since kept it (see enqueueOp). Told to the batch now, as the
+ * server's answer is for the rest.
+ */
+export async function settledHere<I>(
+  queue: readonly PendingOp<I>[],
+  targets: readonly { id: string }[],
+  batch: string,
+  table: 'bets' | 'moves',
+  tell: (e: BatchEvent) => Promise<void>
+): Promise<void> {
+  for (const { id } of targets) {
+    const forRow = queue.filter((o) => o.kind !== 'bulk-add' && o.id === id)
+    if (forRow.some((o) => o.kind === 'delete' && o.batch === batch)) continue
+    // In an import still queued, the delete goes after it: it is in the queue.
+    if (queue.some((o) => o.kind === 'bulk-add' && o.entries.some((e) => e.id === id))) continue
+    await tell({ kind: 'undo', batch, table, id, removed: !forRow.some((o) => o.kind === 'add') })
+  }
+}
+
+/** The batches with a change the server refused for good. */
+export function refusedBatches<I>(list: readonly Refused<I>[]): Set<string> {
+  const out = new Set<string>()
+  for (const r of list) for (const op of r.ops) {
+    const batch = op.kind === 'bulk-add' ? (op.batch ?? op.opId) : op.kind === 'update' ? undefined : op.batch
+    if (batch) out.add(batch)
+  }
+  return out
 }
 
 const sameRefused = <I>(a: Refused<I>, b: Refused<I>): boolean => a.at === b.at && a.ops[0]?.opId === b.ops[0]?.opId
@@ -84,6 +134,9 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   const [held, setHeld] = useState(false)
   const [refused, setRefusedState] = useState<Refused<I>[]>([])
   const [refusedHeld, setRefusedHeld] = useState(false)
+  // The server refused a change for good and storage had no room to set it
+  // apart: it waits at the head of the queue, and so does the rest.
+  const [refusalBlocked, setRefusalBlocked] = useState(false)
   const outboxRef = useRef<PendingOp<I>[]>([])
   // The user this render is for: a drain of an earlier one may still end, and
   // its queue must not show as this user's (see useBetSync).
@@ -141,6 +194,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     setHeld(false)
     setRefusedState([])
     setRefusedHeld(false)
+    setRefusalBlocked(false)
     resentRef.current = []
     if (!userId || !stores) return
     const stored = optsRef.current.read(userId)
@@ -200,9 +254,16 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
           rejected: async (ops, err, revised) => {
             const reason = err instanceof Error ? err.message : String(err)
             const at = new Date().toISOString()
-            const r = await stores.refused.update((list) => keepRefused(list, ops, reason, at, revised))
+            // Stored, or not made: never kept in this window alone, since the
+            // queue lets it go only once it is stored (see drainOutbox).
+            const r = await stores.refused.update((list) => keepRefused(list, ops, reason, at, revised), { hold: false })
             showRefused(r.value)
+            if (!r.saved) {
+              if (userRef.current === userId) setRefusalBlocked(true)
+              return false
+            }
             if (!revised && userRef.current === userId) optsRef.current.onRefused(err)
+            return true
           }
         })
       )
@@ -246,6 +307,8 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   }, [stores, showRefused, shownRefused])
 
   const saveAgain = useCallback(async (): Promise<boolean> => {
+    // The next drain tries to set the refused change apart again.
+    setRefusalBlocked(false)
     const saved = (await update((q) => q)).saved
     if (!stores?.refused.held) return saved
     const r = await stores.refused.update((list) => list)
@@ -253,5 +316,5 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     return saved && r.saved
   }, [update, stores, showRefused])
 
-  return { outbox, outboxRef, held, refused, refusedHeld, enqueue, drain, retryRefused, discardRefused, saveAgain }
+  return { outbox, outboxRef, held, refused, refusedHeld, refusalBlocked, enqueue, drain, retryRefused, discardRefused, saveAgain }
 }

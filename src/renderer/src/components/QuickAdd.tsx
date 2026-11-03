@@ -2,11 +2,11 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { Bet, BetInput, BetStatus, Settings } from '../../../shared/types'
 import type { QuickDraft } from '../data/drafts'
 import { isFreeStake, moneyOf, oddsProblem, refusalText, resultProblem, stakeProblem, type Problem } from '../lib/betForm'
-import { humanDate, todayStr } from '../lib/dates'
+import { addDays, humanDate, todayStr } from '../lib/dates'
 import { useLang } from '../lib/i18n'
 import { ODDS_PLACEHOLDER, oddsInputMode, parseOdds } from '../lib/odds'
 import { quickDefaults } from '../lib/quick'
-import { round2, suggestedAmount } from '../lib/validate'
+import { isValidDate, round2, suggestedAmount } from '../lib/validate'
 import { toneOf, type TagSuggestions } from './DayModal'
 import FieldError, { describedBy } from './FieldError'
 import { CloseIcon } from './icons'
@@ -24,8 +24,8 @@ interface Props {
   draft: QuickDraft | null
   /** What is typed, kept as it changes (null: nothing worth keeping). */
   onDraft: (draft: QuickDraft | null) => void
-  /** Carry what is typed over to the full form for today. */
-  onMore: (draft: QuickDraft) => void
+  /** Carry what is typed over to the full form for its date. */
+  onMore: (draft: QuickDraft & { date: string }) => void
   onClose: () => void
 }
 
@@ -35,7 +35,9 @@ const RESULTS: readonly BetStatus[] = ['won', 'lost', 'push', 'pending']
 type ProfitWhy = 'noOdds' | 'freeBet' | 'roundsZero'
 
 const sameDraft = (a: QuickDraft, b: QuickDraft): boolean =>
-  a.stake === b.stake && a.odds === b.odds && a.sport === b.sport && a.book === b.book && a.betType === b.betType && a.profit === b.profit
+  a.date === b.date && a.stake === b.stake && a.odds === b.odds && a.sport === b.sport && a.book === b.book && a.betType === b.betType && a.profit === b.profit
+
+type Field = 'date' | 'stake' | 'odds' | 'profit'
 
 /**
  * The fast path: stake, odds, tap a result. Everything else is prefilled —
@@ -51,7 +53,12 @@ const sameDraft = (a: QuickDraft, b: QuickDraft): boolean =>
 export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd, draft, onDraft, onMore, onClose }: Props) {
   const { t } = useLang()
   const defaults = quickDefaults(bets, settings)
+  // Today as the sheet opened, on this device's clock: the default date, and
+  // what the shortcuts mean while it is open (a sheet left open past
+  // midnight keeps the day it showed).
+  const [today] = useState(todayStr)
   const blank: QuickDraft = {
+    date: today,
     stake: defaults.stake === null ? '' : String(defaults.stake),
     odds: '',
     sport: defaults.sport,
@@ -62,6 +69,7 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
   // The defaults as the sheet opened: what counts as nothing typed.
   const blankRef = useRef(blank)
   const start = draft ?? blank
+  const [date, setDate] = useState(start.date || today)
   const [stakeStr, setStakeStr] = useState(start.stake)
   const [oddsStr, setOddsStr] = useState(start.odds)
   const [sport, setSport] = useState(start.sport)
@@ -72,9 +80,10 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
   const [needProfit, setNeedProfit] = useState<ProfitWhy | null>(null)
   // Boxes whose problem is shown: once a result was tapped (not as a box is
   // left: a problem appearing then would move the buttons under the click).
-  const [shown, setShown] = useState<ReadonlySet<'stake' | 'odds' | 'profit'>>(new Set())
+  const [shown, setShown] = useState<ReadonlySet<Field>>(new Set())
   const [refusal, setRefusal] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const dateRef = useRef<HTMLInputElement>(null)
   const stakeRef = useRef<HTMLInputElement>(null)
   const oddsRef = useRef<HTMLInputElement>(null)
   const profitRef = useRef<HTMLInputElement>(null)
@@ -101,7 +110,7 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
     if (needProfit) profitRef.current?.focus()
   }, [needProfit])
 
-  const current: QuickDraft = { stake: stakeStr, odds: oddsStr, sport, book, betType, profit: profitStr }
+  const current: QuickDraft & { date: string } = { date, stake: stakeStr, odds: oddsStr, sport, book, betType, profit: profitStr }
   const onDraftRef = useRef(onDraft)
   onDraftRef.current = onDraft
   const draftText = JSON.stringify(current)
@@ -113,18 +122,19 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
   const stake = moneyOf(stakeStr)
   const odds = parseOdds(oddsStr, settings.oddsFormat)
   const freeBet = isFreeStake(stake)
-  const problems = {
+  const problems: Record<Field, Problem | null> = {
+    date: isValidDate(date) ? null : { key: 'field.dateInvalid' },
     stake: stakeProblem(stakeStr),
     odds: oddsProblem(oddsStr, odds, settings.oddsFormat),
     profit: needProfit ? resultProblem(profitStr) : null
   }
-  const showing = (field: 'stake' | 'odds' | 'profit'): Problem | null => (shown.has(field) ? problems[field] : null)
-  const reveal = (...fields: ('stake' | 'odds' | 'profit')[]): void => setShown((s) => new Set([...s, ...fields]))
+  const showing = (field: Field): Problem | null => (shown.has(field) ? problems[field] : null)
+  const reveal = (...fields: Field[]): void => setShown((s) => new Set([...s, ...fields]))
 
   /** Every problem shown, focus on the first: false when there is one. */
-  const check = (fields: ('stake' | 'odds' | 'profit')[]): boolean => {
+  const check = (fields: Field[]): boolean => {
     reveal(...fields)
-    const refs = { stake: stakeRef, odds: oddsRef, profit: profitRef }
+    const refs = { date: dateRef, stake: stakeRef, odds: oddsRef, profit: profitRef }
     const first = fields.find((f) => problems[f] !== null)
     if (first) refs[first].current?.focus()
     return first === undefined
@@ -135,7 +145,8 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
     setBusy(true)
     setRefusal(null)
     try {
-      await onAdd({ date: todayStr(), status, amount, stake, odds, sport, book, betType, note: '' })
+      // The day shown, chosen or not: never the clock's at the time of the tap.
+      await onAdd({ date, status, amount, stake, odds, sport, book, betType, note: '' })
       onDraft(null)
       onClose()
     } catch (err) {
@@ -146,7 +157,7 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
   }
 
   const tap = (status: BetStatus): void => {
-    if (!check(['stake', 'odds'])) return
+    if (!check(['date', 'stake', 'odds'])) return
     const hint = suggestedAmount(status, stake, odds)
     if (status === 'won') {
       // The profit can't be worked out: ask for it instead of guessing.
@@ -161,12 +172,13 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
   }
 
   const saveWon = (): void => {
-    if (!check(['stake', 'odds', 'profit'])) return
+    if (!check(['date', 'stake', 'odds', 'profit'])) return
     void log('won', round2(moneyOf(profitStr) ?? 0))
   }
 
   const discard = (): void => {
     const b = blankRef.current
+    setDate(b.date ?? today)
     setStakeStr(b.stake)
     setOddsStr(b.odds)
     setSport(b.sport)
@@ -181,6 +193,7 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
     stakeRef.current?.focus()
   }
 
+  const yesterday = addDays(today, -1)
   const profitHint = needProfit === 'freeBet' ? t('quick.hintFreeBet') : needProfit === 'roundsZero' ? t('quick.hintRoundsZero') : t('quick.hintProfit')
 
   return (
@@ -194,7 +207,15 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
         <header className="modal-head">
           <div>
             <h2 id={titleId}>{t('quick.title')}</h2>
-            <span className="day-sub">{t('quick.forDate', { date: humanDate(todayStr()) })}</span>
+            <span className="day-sub quick-for" aria-live="polite">
+              {!isValidDate(date)
+                ? ''
+                : date === today
+                  ? t('quick.forDateRel', { date: humanDate(date), rel: t('quick.relToday') })
+                  : date === yesterday
+                    ? t('quick.forDateRel', { date: humanDate(date), rel: t('quick.relYesterday') })
+                    : t('quick.forDate', { date: humanDate(date) })}
+            </span>
           </div>
           <button type="button" className="btn-icon" aria-label={t('common.close')} onClick={onClose}>
             <CloseIcon />
@@ -209,6 +230,37 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
             </button>
           </div>
         )}
+
+        <div className="quick-date">
+          <div className="quick-date-row">
+            {/* Not a `.field`: the stake stays the sheet's first box, as it is the first to check. */}
+            <label className="quick-date-field">
+              <span className="field-label">{t('quick.date')}</span>
+              <input
+                ref={dateRef}
+                type="date"
+                className="quick-date-input"
+                value={date}
+                required
+                aria-invalid={showing('date') !== null}
+                aria-describedby={describedBy(showing('date') && `${errId}-date`)}
+                onChange={(e) => {
+                  setDate(e.target.value)
+                  if (e.target.value === '') reveal('date')
+                }}
+              />
+            </label>
+            <div className="quick-date-chips" role="group" aria-label={t('quick.dateShortcuts')}>
+              <button type="button" className={`chip quick-today ${date === today ? 'active' : ''}`} aria-pressed={date === today} onClick={() => setDate(today)}>
+                {t('quick.today')}
+              </button>
+              <button type="button" className={`chip quick-yesterday ${date === yesterday ? 'active' : ''}`} aria-pressed={date === yesterday} onClick={() => setDate(yesterday)}>
+                {t('quick.yesterday')}
+              </button>
+            </div>
+          </div>
+          <FieldError id={`${errId}-date`} problem={showing('date')} />
+        </div>
 
         <div className="quick-row">
           <label className="field">
@@ -251,13 +303,13 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
           </label>
         </div>
 
-        {/* Quick add is always today, so the share of the bankroll always applies. */}
+        {/* The share of the bankroll applies to a bet from today on (the full form's rule). */}
         {freeBet ? (
           <p className="stake-note free-bet-note" id={noteId}>
             {t('quick.freeBetNote')}
           </p>
         ) : (
-          <StakeNote id={noteId} stake={problems.stake === null ? stake : null} current={bankroll} applies />
+          <StakeNote id={noteId} stake={problems.stake === null ? stake : null} current={bankroll} applies={date >= today} />
         )}
 
         <div className="quick-tags">
@@ -338,7 +390,7 @@ export default function QuickAdd({ bets, settings, suggestions, bankroll, onAdd,
         <p className="hint" id={`${errId}-why`}>
           {needProfit ? profitHint : t('quick.hint')}
         </p>
-        <button type="button" className="auth-toggle quick-more" onClick={() => onMore(current)}>
+        <button type="button" className="auth-toggle quick-more" onClick={() => onMore({ ...current, date: isValidDate(date) ? date : today })}>
           {t('quick.more')}
         </button>
       </div>

@@ -55,7 +55,10 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    cualquier orden) → `006_lost_free_bets.sql` (después de la 003: solo
    sustituye su trigger para que una apuesta gratis perdida, stake 0 y
    resultado 0, siga perdida al editarla; sin ella todo funciona, pero esa
-   edición la convierte en push). Todas son aditivas y re-ejecutables (`if not exists`,
+   edición la convierte en push) → `007_deleted_rows.sql` (después de la
+   005: una fila borrada ya no vuelve cuando otro dispositivo reenvía un alta
+   cuya respuesta se perdió; sin ella todo funciona, pero ese reintento la
+   resucita). Todas son aditivas y re-ejecutables (`if not exists`,
    `drop … if exists` antes de cada constraint, policy y trigger).
    `supabase/schema.sql` contiene lo mismo acumulado por si prefieres
    ejecutar un solo archivo. La 001 ya estaba aplicada antes de este
@@ -134,6 +137,22 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
   ejemplo, solo cambia la nota), sigue pendiente, así que un push de una
   pendiente solo se puede registrar desde una versión actualizada. Por eso,
   actualizar todos los dispositivos pronto.
+- **La 007 tampoco hace falta para arrancar, y conviene aplicarla antes.**
+  Sin ella la app nueva funciona igual (Deshacer de una importación o
+  restauración ya borra solo lo que escribió, comprobando el sello en el
+  mismo `delete`), pero un reintento de un alta cuya respuesta se perdió
+  puede devolver una fila borrada en otro dispositivo. La 007 crea
+  `public.deleted_rows` (sin políticas: ningún cliente la lee ni la
+  escribe), un trigger `after delete` que guarda el último `updated_at` de
+  cada fila borrada y un trigger `before insert` que deja pasar en silencio
+  (sin fila, sin error) un alta de ese id que no sea más nueva. Un Deshacer
+  de un borrado sella su alta justo después (`readdStamp`) y entra. Las
+  versiones antiguas no envían `updated_at` en el alta: reciben `now()` y
+  entran como antes. Borrar una cuenta borra también sus registros.
+  Reversión, si hiciera falta: `drop trigger entries_skip_deleted on
+  public.entries; drop trigger bankroll_moves_skip_deleted on
+  public.bankroll_moves;` (y los dos `*_remember_deleted`); la tabla puede
+  quedarse o borrarse después, no la usa nada más.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
 
@@ -195,6 +214,58 @@ cargado). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Auditoría del 2 de noviembre (base df13583)
+
+Los informes de auditoría no estaban en este contenedor (están en el Mac del
+usuario); se trabajó con la lista de hallazgos del encargo. El informe
+actualizado está en `docs/audit-2026-11-03.md`.
+
+- **Restaurar y Deshacer seguros**: cada importación o restauración escribe
+  todas sus filas con el mismo `updated_at` (su *sello*, `ImportBatch.stamp`),
+  que en el servidor es su recibo. El servidor dice qué filas hizo el lote
+  (`addBets` devuelve las insertadas y relee el sello de las demás: una
+  respuesta perdida cuenta), y Deshacer borra solo con
+  `delete … where id = … and updated_at = sello` (`deleteBet`/`deleteMove`
+  con `ifStamp`): nunca una fila que ya estaba, la de otro dispositivo con el
+  mismo id ni una editada después, sepa lo que sepa este dispositivo. El plan
+  se rehace antes de aplicar (`RestorePlan.signature`) y la revisión se
+  actualiza sola si los datos cambian. Los ajustes reemplazados se guardan
+  (antes/después) y su Deshacer los devuelve campo a campo, con guarda en el
+  servidor (`PendingSettings.guard`, `saveGuarded`): un cambio posterior se
+  queda. El historial (`data/imports.ts`) es ahora un almacén con candado que
+  registra lo que hizo el servidor (`BatchEvent`) y qué no se pudo encolar.
+- **Resultado de la restauración** (`RestoreResult` en `DataDialog`,
+  `lib/batchStatus.ts`): añadidos (confirmados por el servidor), ya
+  presentes, duplicados omitidos, ajustes, pendientes de sincronizar (nunca
+  «añadidos»), fallos y qué hacer (Guardar de nuevo, Volver a enviar, Elegir
+  la copia otra vez), y luego qué hizo Deshacer.
+- **Rechazadas**: una operación rechazada no sale de la cola hasta que su
+  registro está guardado (`queueStore.update(…, { hold: false })`,
+  `drainOutbox` → `stop: 'storage'`); el aviso `refusal-blocked-notice` lo
+  dice.
+- **Reintentos de importación**: migración 007 (lápidas, ver "Orden de
+  despliegue seguro").
+- **Lecturas de ajustes tardías**: solo hacia delante en `updated_at`
+  (`newerSettings`); "sin fila" nunca sustituye a una fila.
+- **Lecturas entre pestañas**: las confirmaciones se publican en
+  `localStorage` (`data/confirmed.ts`) y cada lectura les superpone las de
+  otras ventanas confirmadas mientras estaba fuera (apuestas y movimientos).
+- **Ajustes guardándose / guardados aquí**: cada edición va primero a un
+  diario de la ventana (`data/settingsJournal.ts`), sin candado; al arrancar
+  se encolan los diarios de ventanas cerradas. El diálogo distingue
+  «Guardando en este dispositivo…», «Guardado en este dispositivo:
+  sincronizando…» y «…se sincronizará al volver la conexión».
+- **Duplicados por fila** en la revisión de importación (y de restauración
+  de otra cuenta): cada uno junto a la apuesta a la que se parece (fecha,
+  resultado, stake, beneficio, cuota, cierre, etiquetas, nota), omitido por
+  defecto, con «Importar las N» / «Omitir todas», totales exactos y listas
+  largas paginadas.
+- **Alta rápida con fecha**: hoy por defecto, Hoy/Ayer y un selector; el
+  borrador guarda la fecha; una hoja abierta al pasar la medianoche registra
+  el día que mostraba.
+- **Acciones en móvil**: «Editar» / «Ver día» / «Eliminar» en una línea,
+  con nombres accesibles completos.
 
 ### Revisión de funciones y auditoría (octubre 2026)
 

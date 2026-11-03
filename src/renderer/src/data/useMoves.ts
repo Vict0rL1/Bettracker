@@ -2,11 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { newId } from '../lib/uuid'
 import { normalizeMove } from '../lib/validate'
+import { sharedLog } from './confirmed'
 import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { SignedOutError } from './errors'
+import type { BatchEvent } from './imports'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
   applyMoveOutbox,
+  confirmedKey,
+  insertStamp,
+  readdStamp,
+  sameStamp,
   loadMoveCache,
   loadMovesRefused,
   queueKeys,
@@ -18,7 +24,7 @@ import {
   type MoveOp,
   type Refused
 } from './offline'
-import { useOpQueue } from './useOpQueue'
+import { queuedByBatch, refusedBatches, settledHere, useOpQueue } from './useOpQueue'
 
 export interface MoveSync {
   /**
@@ -40,12 +46,24 @@ export interface MoveSync {
   refused: Refused<MoveInput>[]
   /** Storage refused the list of refused changes: they are only in this window. */
   refusedUnsaved: boolean
+  /** As useBetSync's: a refused change waits in the queue for room to be set apart. */
+  refusalBlocked: boolean
   /** Each resolves once queued: true when this device's storage holds it (see useBetSync). */
   addMove: (input: MoveInput) => Promise<boolean>
   updateMove: (id: string, input: MoveInput) => Promise<boolean>
   deleteMove: (id: string) => Promise<boolean>
-  /** Undo of a delete: an add with the same id and a fresh queuedAt. */
+  /** Undo of a delete: an add with the same id, stamped just after it (see readdStamp). */
   restoreMove: (m: BankrollMove) => Promise<boolean>
+  /**
+   * Add these moves with their own ids, all stamped `stamp` (a restored
+   * backup, or its Undo undone), telling `batch` what the server made.
+   */
+  restoreMoves: (ms: readonly BankrollMove[], opts: { batch: string; stamp: string }) => Promise<boolean>
+  /** The Undo of a restore: remove these moves only where they still carry their stamp (see useBetSync.undoBets). */
+  undoMoves: (targets: readonly { id: string; stamp: string }[], batch: string) => Promise<boolean>
+  /** As useBetSync's. */
+  batchQueued: ReadonlyMap<string, number>
+  batchRefused: ReadonlySet<string>
   retryRefused: () => Promise<boolean>
   discardRefused: () => Promise<void>
   saveAgain: () => Promise<boolean>
@@ -71,7 +89,8 @@ export function useMoves(
   userId: string | null,
   canSync: boolean,
   onError: (err: unknown) => void,
-  onNotice?: (code: 'conflict') => void
+  onNotice?: (code: 'conflict') => void,
+  onBatch?: (event: BatchEvent) => void | Promise<void>
 ): MoveSync {
   const [server, setServerState] = useState<BankrollMove[] | null>(null)
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
@@ -108,6 +127,20 @@ export function useMoves(
   onErrorRef.current = onError
   const onNoticeRef = useRef(onNotice)
   onNoticeRef.current = onNotice
+  const onBatchRef = useRef(onBatch)
+  onBatchRef.current = onBatch
+  // What the server made of a batch, into its history. Never in the way of
+  // the sync: an entry that could not be written loses an Undo's detail, and
+  // must not fail the op (a failed op could be taken for a refused one).
+  const tell = useCallback(async (e: BatchEvent): Promise<void> => {
+    try {
+      await onBatchRef.current?.(e)
+    } catch {
+      // see above
+    }
+  }, [])
+  // As useBetSync: confirmations for reads in other windows (see confirmed.ts).
+  const shared = useMemo(() => (userId ? sharedLog<{ op: MoveOp; row: BankrollMove | null }>(confirmedKey(userId, 'moves')) : null), [userId])
 
   const queue = useOpQueue<MoveInput>({
     userId,
@@ -121,7 +154,9 @@ export function useMoves(
     newId
   })
   // Each of these keeps its identity from render to render (the queue object itself does not).
-  const { outbox, outboxRef, enqueue, drain, discardRefused } = queue
+  const { outbox, outboxRef, enqueue, drain, discardRefused, refusalBlocked } = queue
+  const refusalBlockedRef = useRef(refusalBlocked)
+  refusalBlockedRef.current = refusalBlocked
   const retryQueued = queue.retryRefused
   const saveQueued = queue.saveAgain
 
@@ -162,8 +197,10 @@ export function useMoves(
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     const read = confirmedRef.current.read()
+    const elsewhere = shared?.read()
     try {
-      const rows = read.over(await getMoves(userId))
+      const got = await getMoves(userId)
+      const rows = read.over(elsewhere ? elsewhere.over(got, (acc, c) => reconcileMove(acc, c.op, c.row)) : got)
       if (userRef.current !== userId) return
       setServer(rows)
       setOffline(false)
@@ -181,27 +218,36 @@ export function useMoves(
     } finally {
       read.end()
     }
-  }, [userId, setServer, setBehind])
+  }, [userId, setServer, setBehind, shared])
 
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
   const syncNow = useCallback(async (): Promise<void> => {
     if (syncingRef.current === userId || !canSyncRef.current || !userId) return
-    if (backoffRef.current.waiting) return
+    if (backoffRef.current.waiting || refusalBlockedRef.current) return
     syncingRef.current = userId
     let result: DrainResult | null
     try {
       result = await drain<BankrollMove>({
         send: (op) => sendMoveOp(op, userId),
-        applied: (op, row, superseded) => {
+        applied: async (op, row, superseded) => {
           if (userRef.current !== userId) return
           // A refused edit lost to a newer one elsewhere, unless a later change
           // of this device to the same move is still queued (see useBetSync).
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
+          // What a restore's adds and its Undo came to (see useBetSync).
+          if (op.kind === 'add' && op.batch && row && sameStamp(row.updatedAt, insertStamp(op))) {
+            await tell({ kind: 'made', batch: op.batch, table: 'moves', ids: [op.id] })
+          }
+          if (op.kind === 'delete' && op.batch && op.ifStamp) {
+            await tell({ kind: 'undo', batch: op.batch, table: 'moves', id: op.id, removed: row === null })
+          }
+          if (userRef.current !== userId) return
           // Folded only into a snapshot this device has (see foldApplied).
           // The refresh after the drain brings the whole list.
           const change = (rows: readonly BankrollMove[]): BankrollMove[] => reconcileMove(rows, op, row)
           confirmedRef.current.confirmed(change)
+          shared?.record({ op, row })
           const next = foldApplied(serverRef.current, landedRef.current, change)
           if (next.server !== null) setServer(next.server)
           else {
@@ -249,12 +295,14 @@ export function useMoves(
       setBehind(true, result.error)
       return
     }
+    // A refused change waits for room (see refusalBlocked).
+    if (result.stop === 'storage') return
     setBehind(false)
     setPaused(false)
     setRetrying(false)
     // True-up after a drain so the bankroll can never drift from the server.
     if (result.processed > 0 && outboxRef.current.length === 0) await refresh()
-  }, [userId, drain, outboxRef, setServer, setBehind, setPaused, setRetrying, refresh])
+  }, [userId, drain, outboxRef, setServer, setBehind, setPaused, setRetrying, refresh, shared])
   syncNowRef.current = syncNow
 
   // Boot: hydrate this user's cache synchronously for instant paint (the
@@ -351,14 +399,16 @@ export function useMoves(
     }
   }, [userId, outboxRef, syncNow, refresh])
 
-  const mutate = useCallback(
-    async (op: MoveOp): Promise<boolean> => {
-      const saved = await enqueue([op])
+  const mutateMany = useCallback(
+    async (ops: readonly MoveOp[]): Promise<boolean> => {
+      if (ops.length === 0) return true
+      const saved = await enqueue(ops)
       setTimeout(() => void syncNowRef.current(), 0)
       return saved
     },
     [enqueue]
   )
+  const mutate = useCallback((op: MoveOp) => mutateMany([op]), [mutateMany])
 
   const add = useCallback(
     async (input: MoveInput): Promise<boolean> => {
@@ -381,10 +431,37 @@ export function useMoves(
   const restore = useCallback(
     async (m: BankrollMove): Promise<boolean> => {
       const clean = normalizeMove({ date: m.date, amount: m.amount, note: m.note })
-      return mutate({ opId: newId(), kind: 'add', id: m.id, input: clean, queuedAt: new Date().toISOString() })
+      return mutate({ opId: newId(), kind: 'add', id: m.id, input: clean, queuedAt: readdStamp([m]) })
     },
     [mutate]
   )
+
+  const restoreMoves = useCallback(
+    async (ms: readonly BankrollMove[], opts: { batch: string; stamp: string }): Promise<boolean> => {
+      // All checked before any is queued.
+      const ops: MoveOp[] = ms.map((m) => ({
+        opId: newId(),
+        kind: 'add',
+        id: m.id,
+        input: normalizeMove({ date: m.date, amount: m.amount, note: m.note }),
+        queuedAt: opts.stamp,
+        batch: opts.batch
+      }))
+      return mutateMany(ops)
+    },
+    [mutateMany]
+  )
+
+  const undoMoves = useCallback(
+    async (targets: readonly { id: string; stamp: string }[], batch: string): Promise<boolean> => {
+      const saved = await mutateMany(targets.map(({ id, stamp }) => ({ opId: newId(), kind: 'delete', id, ifStamp: stamp, batch })))
+      await settledHere(outboxRef.current, targets, batch, 'moves', tell)
+      return saved
+    },
+    [mutateMany, outboxRef, tell]
+  )
+  const batchQueued = useMemo(() => queuedByBatch(outbox), [outbox])
+  const batchRefused = useMemo(() => refusedBatches(queue.refused), [queue.refused])
 
   const retryRefused = useCallback(async (): Promise<boolean> => {
     const saved = await retryQueued()
@@ -413,10 +490,15 @@ export function useMoves(
     unsaved: queue.held && outbox.length > 0,
     refused: queue.refused,
     refusedUnsaved: queue.refusedHeld && queue.refused.length > 0,
+    refusalBlocked,
     addMove: add,
     updateMove: update,
     deleteMove: remove,
     restoreMove: restore,
+    restoreMoves,
+    undoMoves,
+    batchQueued,
+    batchRefused,
     retryRefused,
     discardRefused,
     saveAgain

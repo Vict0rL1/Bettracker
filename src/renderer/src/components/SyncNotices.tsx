@@ -5,6 +5,8 @@ interface Props {
   signedOut: number | null
   /** Changes storage refused, only in this window until they sync. */
   unsaved: number
+  /** A change the server refused found no room on this device to be set apart: it waits in the queue (see useOpQueue). */
+  refusalBlocked: boolean
   /** Changes the server refused for good, and the first reason it gave. */
   refused: { count: number; reason: string } | null
   onSignIn: () => void
@@ -18,7 +20,7 @@ interface Props {
  * act: a sign-in, room on the device, or a change the server refused. Each
  * stays until it is sorted out (no dismissing what would lose data).
  */
-export default function SyncNotices({ signedOut, unsaved, refused, onSignIn, onSaveAgain, onRetryRefused, onDiscardRefused }: Props) {
+export default function SyncNotices({ signedOut, unsaved, refusalBlocked, refused, onSignIn, onSaveAgain, onRetryRefused, onDiscardRefused }: Props) {
   const { t, tn } = useLang()
   return (
     <>
@@ -35,6 +37,16 @@ export default function SyncNotices({ signedOut, unsaved, refused, onSignIn, onS
       {unsaved > 0 && (
         <div className="sync-notice unsaved-notice" role="alert">
           <span className="sync-notice-text">{t('notice.unsaved', { changes: tn('change', unsaved) })}</span>
+          <div className="sync-notice-actions">
+            <button type="button" className="btn btn-ghost notice-save-again" onClick={onSaveAgain}>
+              {t('notice.saveAgain')}
+            </button>
+          </div>
+        </div>
+      )}
+      {refusalBlocked && (
+        <div className="sync-notice unsaved-notice refusal-blocked-notice" role="alert">
+          <span className="sync-notice-text">{t('notice.refusalBlocked')}</span>
           <div className="sync-notice-actions">
             <button type="button" className="btn btn-ghost notice-save-again" onClick={onSaveAgain}>
               {t('notice.saveAgain')}

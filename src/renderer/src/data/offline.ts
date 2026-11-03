@@ -27,8 +27,12 @@ import { removeDurable, writeDurable, writeExpendable } from './store'
  * drainOutbox); a version from before has none.
  */
 export type PendingOp<I = BetInput> = (
-  /** `editedAt`, when present, is the last edit folded into a not-yet-sent add. */
-  | { opId: string; kind: 'add'; id: string; input: I; queuedAt: string; editedAt?: string; sent?: true }
+  /**
+   * `editedAt`, when present, is the last edit folded into a not-yet-sent add.
+   * `batch` names the import or restore it belongs to (see data/imports.ts),
+   * which hears what the server made of it.
+   */
+  | { opId: string; kind: 'add'; id: string; input: I; queuedAt: string; editedAt?: string; batch?: string; sent?: true }
   /**
    * `editedAt` is when the user made the edit — the conflict key, see data/bets.ts.
    * `legacy` marks an edit queued by a version from before migration 003: its
@@ -36,13 +40,21 @@ export type PendingOp<I = BetInput> = (
    * version sent it (see loadOutbox).
    */
   | { opId: string; kind: 'update'; id: string; input: I; editedAt: string; legacy?: true; sent?: true }
-  | { opId: string; kind: 'delete'; id: string; sent?: true }
   /**
-   * A CSV import: many rows in one op so it syncs as a few chunked requests.
-   * `done` counts the leading entries the server has confirmed, so a retry
-   * after an interruption sends only the rest (see addBets).
+   * `ifStamp`: the Undo of an import or restore. It removes the row only if
+   * the server's `updated_at` is exactly that: the stamp the batch wrote, so
+   * a row the batch did not make (one that was there already, or another
+   * device's) or one edited since is never removed (see deleteBet). `batch`
+   * names the batch being undone.
    */
-  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; done?: number; sent?: true }
+  | { opId: string; kind: 'delete'; id: string; ifStamp?: string; batch?: string; sent?: true }
+  /**
+   * A CSV import or a restored backup: many rows in one op so it syncs as a
+   * few chunked requests. `done` counts the leading entries the server has
+   * confirmed, so a retry after an interruption sends only the rest (see
+   * addBets). `batch` as for an add.
+   */
+  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; done?: number; batch?: string; sent?: true }
 ) & { sentBy?: string }
 
 /**
@@ -58,6 +70,28 @@ export type MoveOp = PendingOp<MoveInput>
  */
 export const insertStamp = <I>(op: Extract<PendingOp<I>, { kind: 'add' | 'bulk-add' }>): string =>
   op.kind === 'add' ? (op.editedAt ?? op.queuedAt) : op.queuedAt
+
+/**
+ * Whether two `updated_at` values are the same moment. The server writes them
+ * back in its own format ("…+00:00", microseconds), the device in ISO ("…Z").
+ */
+export function sameStamp(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  const x = Date.parse(a)
+  return Number.isFinite(x) && x === Date.parse(b)
+}
+
+/**
+ * A stamp for a re-add (an Undo of a delete): now, or just after the newest
+ * of the rows it brings back when a clock has run ahead. The server keeps a
+ * deleted row's last stamp (migration 007) and takes no insert of that id
+ * that is not newer: an old insert sent again after its answer was lost must
+ * not bring a deleted row back, but an Undo must.
+ */
+export function readdStamp(rows: readonly { updatedAt: string }[], now: Date = new Date()): string {
+  const newest = rows.reduce((max, r) => Math.max(max, Date.parse(r.updatedAt) || 0), 0)
+  return new Date(Math.max(now.getTime(), newest + 1)).toISOString()
+}
 
 export interface OfflineUser {
   id: string
@@ -106,6 +140,10 @@ const LAST_USER_KEY = 'bettracker:last-user'
 export const draftKey = (userId: string, slot: 'quick' | 'day'): string => `bettracker:draft-${slot}:${userId}`
 /** The imports made on this device, for their Undo (see data/imports.ts). */
 export const importsKey = (userId: string): string => `bettracker:imports:${userId}`
+/** Changes the server confirmed lately, for reads in other windows to lay over what they got (see data/confirmed.ts). */
+export const confirmedKey = (userId: string, name: string): string => `bettracker:confirmed-${name}:${userId}`
+/** Settings edits on their way into the queue, one list per window (see useSettings). */
+export const settingsJournalPrefix = (userId: string): string => `bettracker:settings-journal:${userId}:`
 
 /** The storage keys of a user's queues, which other windows watch for (see the hooks' storage listeners). */
 export const queueKeys = (userId: string) => ({
@@ -254,6 +292,13 @@ export interface PendingSettings {
   editedAt: string
   /** When each field was last set. A patch stored by an older version has none. */
   fieldEditedAt?: Partial<Record<keyof SettingsPatch, string>>
+  /**
+   * Fields that apply only where the server still holds this value (the
+   * Undo of a restore putting a setting back: a change made since, here or
+   * on another device, stays). See saveSettings. A later edit of a field
+   * here drops its guard: the user's own choice applies as it is.
+   */
+  guard?: SettingsPatch
 }
 export const loadSettingsOutbox = (userId: string): PendingSettings | null => readJson<PendingSettings>(settingsOutboxKey(userId))
 /** Throws StorageWriteError when the patch can't be stored. */
@@ -267,14 +312,20 @@ export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): v
  * a newer one made there. A patch stored by an older version has no times
  * per field: its fields count as edited when the patch was.
  */
-export function editSettings(current: PendingSettings | null, patch: SettingsPatch, editedAt: string): PendingSettings {
+export function editSettings(current: PendingSettings | null, patch: SettingsPatch, editedAt: string, guard?: SettingsPatch): PendingSettings {
   const times = current?.fieldEditedAt as Record<string, string | undefined> | undefined
   const at = (k: string): string => (times ? (times[k] ?? '') : current && k in current.patch ? current.editedAt : '')
   const fresh = Object.entries(patch).filter(([k]) => at(k) <= editedAt)
+  const guards: Record<string, unknown> = { ...(current?.guard ?? {}) }
+  for (const [k] of fresh) {
+    if (guard && k in guard) guards[k] = (guard as Record<string, unknown>)[k]
+    else delete guards[k]
+  }
   return {
     patch: { ...(current?.patch ?? {}), ...Object.fromEntries(fresh) },
     editedAt: current && current.editedAt > editedAt ? current.editedAt : editedAt,
-    fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...Object.fromEntries(fresh.map(([k]) => [k, editedAt])) }
+    fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...Object.fromEntries(fresh.map(([k]) => [k, editedAt])) },
+    ...(Object.keys(guards).length > 0 ? { guard: guards as SettingsPatch } : {})
   }
 }
 
@@ -295,7 +346,8 @@ export function afterSettingsAnswer(current: PendingSettings | null, sent: Pendi
   )
   if (Object.keys(left).length === 0) return null
   const fieldEditedAt = current.fieldEditedAt ? { fieldEditedAt: Object.fromEntries(Object.entries(current.fieldEditedAt).filter(([k]) => k in left)) } : {}
-  return { patch: left as SettingsPatch, editedAt: current.editedAt, ...fieldEditedAt }
+  const guards = Object.entries(current.guard ?? {}).filter(([k]) => k in left)
+  return { patch: left as SettingsPatch, editedAt: current.editedAt, ...fieldEditedAt, ...(guards.length > 0 ? { guard: Object.fromEntries(guards) as SettingsPatch } : {}) }
 }
 
 export const loadLastUser = (): OfflineUser | null => readJson<OfflineUser>(LAST_USER_KEY)
@@ -348,6 +400,14 @@ export function clearUserData(userId: string): void {
     localStorage.removeItem(draftKey(userId, 'quick'))
     localStorage.removeItem(draftKey(userId, 'day'))
     localStorage.removeItem(importsKey(userId))
+    localStorage.removeItem(confirmedKey(userId, 'bets'))
+    localStorage.removeItem(confirmedKey(userId, 'moves'))
+    const journals: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k?.startsWith(settingsJournalPrefix(userId))) journals.push(k)
+    }
+    for (const k of journals) localStorage.removeItem(k)
     localStorage.removeItem(LAST_USER_KEY)
   } catch {
     // best effort
@@ -403,11 +463,19 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
       const current = map.get(op.id)
       if (current && op.legacy) map.set(op.id, { ...applyLegacyEdit(current, op.input), updatedAt: op.editedAt })
       else if (current) map.set(op.id, { ...current, ...fieldsFrom(op.input), updatedAt: op.editedAt })
-    } else {
+    } else if (removes(map.get(op.id), op)) {
       map.delete(op.id)
     }
   }
   return sortBets([...map.values()])
+}
+
+/**
+ * Whether a delete takes `row` away: always, unless it is an Undo's, which
+ * takes only the row its batch wrote and nobody changed since (see ifStamp).
+ */
+function removes(row: { updatedAt: string } | undefined, op: Extract<PendingOp<unknown>, { kind: 'delete' }>): boolean {
+  return !op.ifStamp || (row !== undefined && sameStamp(row.updatedAt, op.ifStamp))
 }
 
 /**
@@ -445,6 +513,11 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
   }
   if (op.kind === 'delete') {
     const mine = outbox.filter((o) => forBet(o, op.id))
+    // An Undo's delete (ifStamp) takes only what its batch wrote, unchanged:
+    // anything else queued for the row since (an edit, a delete, a re-add)
+    // is a change the Undo leaves alone, and so is an add of its own that an
+    // edit was folded into. The server would refuse it the same way.
+    if (op.ifStamp && mine.some((o) => o.kind !== 'add' || insertStamp(o) !== op.ifStamp || o.batch !== op.batch)) return [...outbox]
     // Only an add that never went out can be cancelled outright, and only if
     // no delete is queued before it: then the row exists on the server and a
     // later add is an Undo re-adding it, so deleting again must reach it.
@@ -496,7 +569,9 @@ export function requeueRefused<I = BetInput>(outbox: readonly PendingOp<I>[], st
  * had it, and the refresh that follows a drain brings the winning version.
  */
 export function reconcile(server: readonly Bet[], op: PendingOp, result: Bet | null): Bet[] {
-  if (op.kind === 'delete') return server.filter((b) => b.id !== op.id)
+  // A delete the server answered with a row left it there (an Undo's, see
+  // ifStamp): the row as it is now.
+  if (op.kind === 'delete') return result ? sortBets([...server.filter((b) => b.id !== result.id), result]) : server.filter((b) => b.id !== op.id)
   // What this attempt sent: the rows an earlier one had confirmed are
   // already the server's (see landImport).
   if (op.kind === 'bulk-add') return landImport(server, op, op.done ?? 0, op.entries.length)
@@ -581,7 +656,7 @@ export function applyMoveOutbox(server: readonly BankrollMove[], outbox: readonl
     } else if (op.kind === 'update') {
       const current = map.get(op.id)
       if (current) map.set(op.id, { ...current, date: op.input.date, amount: op.input.amount, note: op.input.note ?? '', updatedAt: op.editedAt })
-    } else if (op.kind === 'delete') {
+    } else if (op.kind === 'delete' && removes(map.get(op.id), op)) {
       map.delete(op.id)
     }
   }
@@ -595,7 +670,7 @@ export function applyMoveOutbox(server: readonly BankrollMove[], outbox: readonl
  * conflict check, or the row is gone) leaves the state as the server had it.
  */
 export function reconcileMove(server: readonly BankrollMove[], op: MoveOp, row: BankrollMove | null): BankrollMove[] {
-  if (op.kind === 'delete') return server.filter((m) => m.id !== op.id)
+  if (op.kind === 'delete') return row ? sortMoves([...server.filter((m) => m.id !== row.id), row]) : server.filter((m) => m.id !== op.id)
   if (!row) return [...server]
   return sortMoves([...server.filter((m) => m.id !== row.id), row])
 }

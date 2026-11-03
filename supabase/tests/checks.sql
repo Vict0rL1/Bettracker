@@ -286,4 +286,110 @@ do $$ begin
 end $$;
 rollback;
 
+-- 10. Migration 007: a deleted row stays deleted. As the signed-in user, the
+-- way the app sends it: an insert, its delete (from another device), then the
+-- same insert again (its answer was lost) is let go — no row, no error, also
+-- in an import's ON CONFLICT DO NOTHING; a re-add stamped later (an Undo of
+-- the delete) goes in. The record is out of the user's reach. Rolled back.
+begin;
+set local role authenticated;
+do $$
+declare n int;
+begin
+  insert into public.entries (id, user_id, date, amount, stake, note, updated_at)
+  values ('60000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 10, 'landed', '2026-07-01 10:00:00+00');
+  delete from public.entries where id = '60000000-0000-4000-8000-000000000001';
+  insert into public.entries (id, user_id, date, amount, stake, note, updated_at)
+  values ('60000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 10, 'landed', '2026-07-01 10:00:00+00');
+  get diagnostics n = row_count;
+  assert n = 0, 'an old insert sent again after its row was deleted is let go';
+  insert into public.entries (id, user_id, date, amount, stake, note, updated_at)
+  values ('60000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 10, 'landed', '2026-07-01 09:00:00+00')
+  on conflict (id) do nothing;
+  get diagnostics n = row_count;
+  assert n = 0, 'an older one too, in an import';
+  assert not exists (select 1 from public.entries where id = '60000000-0000-4000-8000-000000000001'), 'the deleted bet did not come back';
+  insert into public.entries (id, user_id, date, amount, stake, note, updated_at)
+  values ('60000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 10, 'undo', '2026-07-01 10:00:00.001+00');
+  get diagnostics n = row_count;
+  assert n = 1, 'a re-add stamped after the delete goes in';
+  -- The same for a deposit.
+  insert into public.bankroll_moves (id, user_id, date, amount, updated_at)
+  values ('60000000-0000-4000-8000-000000000002', auth.uid(), '2026-07-01', 50, '2026-07-01 10:00:00+00');
+  delete from public.bankroll_moves where id = '60000000-0000-4000-8000-000000000002';
+  insert into public.bankroll_moves (id, user_id, date, amount, updated_at)
+  values ('60000000-0000-4000-8000-000000000002', auth.uid(), '2026-07-01', 50, '2026-07-01 10:00:00+00');
+  get diagnostics n = row_count;
+  assert n = 0, 'an old deposit insert sent again is let go';
+  -- An app from before 007 sends no updated_at: now() is newer, it goes in.
+  delete from public.entries where id = '60000000-0000-4000-8000-000000000001';
+  insert into public.entries (id, user_id, date, amount, note)
+  values ('60000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-01', 5, 'old app');
+  get diagnostics n = row_count;
+  assert n = 1, 'an insert with no stamp from an older app goes in';
+  -- Out of reach: the user can't read the record, or forge one.
+  begin
+    perform 1 from public.deleted_rows;
+    raise exception 'the user could read deleted_rows';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    insert into public.deleted_rows (table_name, id, user_id, stamp) values ('entries', gen_random_uuid(), auth.uid(), now());
+    raise exception 'the user could write deleted_rows';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+rollback;
+
+-- 10b. The Undo of an import or restore: a delete only of the row that still
+-- carries the batch's stamp, in one statement (data/bets.ts, deleteBet). A
+-- row edited since, or one the batch never wrote, stays. Rolled back.
+begin;
+set local role authenticated;
+do $$
+declare n int;
+begin
+  insert into public.entries (id, user_id, date, amount, stake, note, updated_at) values
+    ('61000000-0000-4000-8000-000000000001', auth.uid(), '2026-07-02', 5, 10, 'restored', '2026-07-02 10:00:00.123+00'),
+    ('61000000-0000-4000-8000-000000000002', auth.uid(), '2026-07-02', 5, 10, 'restored, then edited', '2026-07-02 10:00:00.123+00'),
+    ('61000000-0000-4000-8000-000000000003', auth.uid(), '2026-07-02', 5, 10, 'there before', '2026-06-30 08:00:00+00');
+  update public.entries set note = 'edited', updated_at = '2026-07-02 11:00:00+00'
+   where id = '61000000-0000-4000-8000-000000000002' and updated_at <= '2026-07-02 11:00:00+00';
+  delete from public.entries where id = '61000000-0000-4000-8000-000000000001' and updated_at = '2026-07-02T10:00:00.123Z';
+  get diagnostics n = row_count;
+  assert n = 1, 'the row the batch wrote, unchanged, is removed';
+  delete from public.entries where id = '61000000-0000-4000-8000-000000000002' and updated_at = '2026-07-02T10:00:00.123Z';
+  get diagnostics n = row_count;
+  assert n = 0, 'a row edited since stays';
+  delete from public.entries where id = '61000000-0000-4000-8000-000000000003' and updated_at = '2026-07-02T10:00:00.123Z';
+  get diagnostics n = row_count;
+  assert n = 0, 'a row the batch never wrote stays';
+end $$;
+rollback;
+
+-- 10c. Another user's deleted row is no business of this one's: their
+-- tombstone does not stop this user's insert of the same id... which the
+-- primary key refuses anyway; and the record holds no content.
+do $$ begin
+  assert (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'deleted_rows') = 5, 'deleted_rows holds ids and times only';
+  assert (select relrowsecurity from pg_class where oid = 'public.deleted_rows'::regclass), 'deleted_rows has row-level security';
+  assert (select count(*) from pg_policies where schemaname = 'public' and tablename = 'deleted_rows') = 0, 'and no policy: no client reaches it';
+end $$;
+
+-- 10d. Deleting an account deletes its rows and keeps no record of them, or
+-- of the ones it deleted before.
+insert into auth.users values ('00000000-0000-0000-0000-000000000004') on conflict do nothing;
+insert into public.entries (id, user_id, date, amount, note, updated_at) values
+  ('62000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000004', '2026-07-03', 5, 'to delete', '2026-07-03 10:00:00+00'),
+  ('62000000-0000-4000-8000-000000000002', '00000000-0000-0000-0000-000000000004', '2026-07-03', 6, 'goes with the account', '2026-07-03 10:00:00+00');
+delete from public.entries where id = '62000000-0000-4000-8000-000000000001';
+do $$ begin
+  assert exists (select 1 from public.deleted_rows where id = '62000000-0000-4000-8000-000000000001'), 'a deleted bet is remembered';
+end $$;
+delete from auth.users where id = '00000000-0000-0000-0000-000000000004';
+do $$ begin
+  assert not exists (select 1 from public.entries where user_id = '00000000-0000-0000-0000-000000000004'), 'the account''s bets went with it';
+  assert not exists (select 1 from public.deleted_rows where user_id = '00000000-0000-0000-0000-000000000004'), 'and no record of its rows is left';
+end $$;
+
 select 'checks passed' as result;

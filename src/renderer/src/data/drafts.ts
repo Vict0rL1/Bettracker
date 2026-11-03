@@ -15,6 +15,12 @@ import { draftKey } from './offline'
 
 /** The quick add, as typed. */
 export interface QuickDraft {
+  /**
+   * The day it is for, as chosen (today when the sheet opened, unless
+   * changed): kept with the draft, so a draft reopened after midnight is still
+   * for the day it was typed for. A draft from before dates has none: today.
+   */
+  date?: string
   stake: string
   odds: string
   sport: string
@@ -52,7 +58,8 @@ const hasStrings = (r: Record<string, unknown>, fields: readonly string[]): bool
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** What storage holds, if it is a quick draft: an older or hand-edited value is none. */
-const validQuick = (raw: unknown): QuickDraft | null => (isRecord(raw) && hasStrings(raw, QUICK_FIELDS) ? (raw as unknown as QuickDraft) : null)
+const validQuick = (raw: unknown): QuickDraft | null =>
+  isRecord(raw) && hasStrings(raw, QUICK_FIELDS) && (raw.date === undefined || typeof raw.date === 'string') ? (raw as unknown as QuickDraft) : null
 
 const validDay = (raw: unknown): raw is DayDraft =>
   isRecord(raw) && hasStrings(raw, DAY_FIELDS) && isBetStatus(raw.status) && (raw.editingId === null || typeof raw.editingId === 'string')

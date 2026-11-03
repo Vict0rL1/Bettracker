@@ -222,6 +222,13 @@ export interface RestorePlan {
   newBets: Bet[]
   /** Another account's bets that look like bets here. */
   duplicateBets: Bet[]
+  /**
+   * For each of `duplicateBets`, the bet here it looks like (to compare
+   * them) and its id in the backup (stable when the plan is made again: the
+   * copy's own id is new each time).
+   */
+  duplicateOf: Bet[]
+  duplicateSources: string[]
   sameBets: number
   /** Here with the same id but different now: kept as they are now. */
   changedBets: number
@@ -230,6 +237,13 @@ export interface RestorePlan {
   changedMoves: number
   settingsDiffer: boolean
   settings: SettingsPatch
+  /**
+   * What the plan would do, the same whenever it is made from the same data:
+   * made again just before it is applied, a different one means the data
+   * changed since the review (another device, another window), and the user
+   * reviews the new plan first.
+   */
+  signature: string
 }
 
 const sameBet = (a: Bet, b: Bet): boolean => duplicateKey(a) === duplicateKey(b) && a.note === b.note && a.closingOdds === b.closingOdds
@@ -247,26 +261,39 @@ export function planRestore(
     otherAccount,
     newBets: [],
     duplicateBets: [],
+    duplicateOf: [],
+    duplicateSources: [],
     sameBets: 0,
     changedBets: 0,
     newMoves: [],
     sameMoves: 0,
     changedMoves: 0,
     settingsDiffer: false,
-    settings: backup.settings
+    settings: backup.settings,
+    signature: ''
   }
+  // Where each planned row comes from in the backup, for the signature.
+  const sources = { newBets: [] as string[], newMoves: [] as string[] }
 
   if (otherAccount) {
-    const counts = new Map<string, number>()
-    for (const b of here.bets) counts.set(duplicateKey(b), (counts.get(duplicateKey(b)) ?? 0) + 1)
+    const matches = new Map<string, Bet[]>()
+    for (const b of here.bets) {
+      const same = matches.get(duplicateKey(b))
+      if (same) same.push(b)
+      else matches.set(duplicateKey(b), [b])
+    }
     for (const b of backup.bets) {
-      const key = duplicateKey(b)
-      const left = counts.get(key) ?? 0
+      const left = matches.get(duplicateKey(b)) ?? []
       const copy = { ...b, id: newId() }
-      if (left > 0) {
-        counts.set(key, left - 1)
+      const match = left.shift()
+      if (match) {
         plan.duplicateBets.push(copy)
-      } else plan.newBets.push(copy)
+        plan.duplicateOf.push(match)
+        plan.duplicateSources.push(b.id)
+      } else {
+        plan.newBets.push(copy)
+        sources.newBets.push(b.id)
+      }
     }
     const moveKeys = new Map<string, number>()
     const mk = (m: BankrollMove): string => `${m.date}|${m.amount}|${m.note}`
@@ -276,19 +303,26 @@ export function planRestore(
       if (left > 0) {
         moveKeys.set(mk(m), left - 1)
         plan.sameMoves++
-      } else plan.newMoves.push({ ...m, id: newId() })
+      } else {
+        plan.newMoves.push({ ...m, id: newId() })
+        sources.newMoves.push(m.id)
+      }
     }
   } else {
     for (const b of backup.bets) {
       const now = betsById.get(b.id)
-      if (!now) plan.newBets.push(b)
-      else if (sameBet(now, b)) plan.sameBets++
+      if (!now) {
+        plan.newBets.push(b)
+        sources.newBets.push(b.id)
+      } else if (sameBet(now, b)) plan.sameBets++
       else plan.changedBets++
     }
     for (const m of backup.moves) {
       const now = movesById.get(m.id)
-      if (!now) plan.newMoves.push(m)
-      else if (sameMove(now, m)) plan.sameMoves++
+      if (!now) {
+        plan.newMoves.push(m)
+        sources.newMoves.push(m.id)
+      } else if (sameMove(now, m)) plan.sameMoves++
       else plan.changedMoves++
     }
   }
@@ -302,5 +336,37 @@ export function planRestore(
     s.startingBankroll !== b.startingBankroll ||
     s.defaultStake !== b.defaultStake ||
     s.lossLimit !== b.lossLimit
+  plan.signature = JSON.stringify([
+    otherAccount,
+    sources.newBets,
+    plan.duplicateSources,
+    plan.duplicateOf.map((m) => m.id),
+    plan.sameBets,
+    plan.changedBets,
+    sources.newMoves,
+    plan.sameMoves,
+    plan.changedMoves,
+    plan.settingsDiffer,
+    SETTING_FIELDS.map((k) => s[k])
+  ])
   return plan
+}
+
+/** The settings a backup holds, in a fixed order. */
+export const SETTING_FIELDS = ['oddsFormat', 'unitSize', 'showUnits', 'startingBankroll', 'defaultStake', 'lossLimit'] as const
+
+/**
+ * The settings a restore replaces: each field where the backup differs from
+ * what is here now, as it is now and as the backup has it (the Undo puts
+ * back `before`, see App's undoBatch).
+ */
+export function settingsChange(here: Settings, backup: SettingsPatch): { before: SettingsPatch; after: SettingsPatch } | null {
+  const before: Record<string, unknown> = {}
+  const after: Record<string, unknown> = {}
+  for (const k of SETTING_FIELDS) {
+    if (backup[k] === undefined || Object.is(here[k], backup[k])) continue
+    before[k] = here[k]
+    after[k] = backup[k]
+  }
+  return Object.keys(after).length > 0 ? { before: before as SettingsPatch, after: after as SettingsPatch } : null
 }

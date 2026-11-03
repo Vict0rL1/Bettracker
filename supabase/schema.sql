@@ -3,7 +3,7 @@
 -- It creates the tables (the bets, per-user settings, deposits and
 -- withdrawals), locks them down so each user only sees their own rows, and
 -- turns on realtime so devices stay in sync. It is safe to run again, and on
--- an older install it does what migrations 001..006 do.
+-- an older install it does what migrations 001..007 do.
 
 create table if not exists public.entries (
   id         uuid primary key default gen_random_uuid(),
@@ -261,3 +261,100 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+-- A deleted bet, deposit or withdrawal stays deleted (migration 007): the
+-- database remembers each deleted row's last updated_at, and an insert of
+-- that id that is not newer (an old insert sent again after its answer was
+-- lost) is let go. A newer one is a deliberate re-add and goes in. No client
+-- can read or write the record: only these triggers, as their owner.
+create table if not exists public.deleted_rows (
+  table_name text not null,
+  id         uuid not null,
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  -- The deleted row's updated_at: the device time of its content when it went.
+  stamp      timestamptz not null,
+  deleted_at timestamptz not null default now(),
+  primary key (table_name, id)
+);
+
+-- Row-level security with no policies: requests from the app (anon,
+-- authenticated) can't see or change it. The triggers' functions run as
+-- their owner, which can.
+alter table public.deleted_rows enable row level security;
+revoke all on public.deleted_rows from public;
+do $$
+begin
+  revoke all on public.deleted_rows from anon;
+exception when undefined_object then null;
+end $$;
+do $$
+begin
+  revoke all on public.deleted_rows from authenticated;
+exception when undefined_object then null;
+end $$;
+
+create or replace function public.remember_deleted_row()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  -- The account itself is going (on delete cascade): nothing to remember.
+  if not exists (select 1 from auth.users u where u.id = old.user_id) then
+    return old;
+  end if;
+  insert into public.deleted_rows (table_name, id, user_id, stamp)
+  values (tg_table_name, old.id, old.user_id, old.updated_at)
+  on conflict (table_name, id) do update
+    set stamp = greatest(public.deleted_rows.stamp, excluded.stamp),
+        user_id = excluded.user_id,
+        deleted_at = now();
+  return old;
+end;
+$$;
+
+create or replace function public.skip_deleted_row()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  -- An insert of a row deleted since, no newer than what was deleted: an old
+  -- insert sent again. Let go without an error (nothing comes back).
+  if exists (
+    select 1 from public.deleted_rows d
+     where d.table_name = tg_table_name
+       and d.id = new.id
+       and d.user_id = new.user_id
+       and d.stamp >= new.updated_at
+  ) then
+    return null;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.remember_deleted_row() from public;
+revoke all on function public.skip_deleted_row() from public;
+
+drop trigger if exists entries_remember_deleted on public.entries;
+create trigger entries_remember_deleted
+  after delete on public.entries
+  for each row execute function public.remember_deleted_row();
+
+drop trigger if exists entries_skip_deleted on public.entries;
+create trigger entries_skip_deleted
+  before insert on public.entries
+  for each row execute function public.skip_deleted_row();
+
+drop trigger if exists bankroll_moves_remember_deleted on public.bankroll_moves;
+create trigger bankroll_moves_remember_deleted
+  after delete on public.bankroll_moves
+  for each row execute function public.remember_deleted_row();
+
+drop trigger if exists bankroll_moves_skip_deleted on public.bankroll_moves;
+create trigger bankroll_moves_skip_deleted
+  before insert on public.bankroll_moves
+  for each row execute function public.skip_deleted_row();
