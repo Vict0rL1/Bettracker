@@ -75,31 +75,141 @@ export interface SettingsOutcomeEvent {
   kept: (keyof SettingsPatch)[]
   rejected: (keyof SettingsPatch)[]
   reason?: string
+  /**
+   * The server's row as known with this answer (null: there is none, the
+   * defaults hold), when known: what a kept field holds there, to tell a
+   * change made since from a write that just did not land (see App).
+   */
+  row?: Settings | null
 }
 
 /** Equal as settings: numbers within a cent (the server rounds), anything else exactly. */
 const sameSetting = (a: unknown, b: unknown): boolean =>
   typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.005 : Object.is(a ?? null, b ?? null)
 
+/** One statement a pending patch is sent as (see settingsGroups). */
+export interface SettingsGroup {
+  origin?: string
+  editedAt: string
+  patch: SettingsPatch
+  guard?: SettingsPatch
+}
+
+/**
+ * The statements a pending patch is sent as: each operation's write (see
+ * PendingSettings.fieldOrigin) at the time it was made, oldest first, then
+ * the user's own fields at the patch's time. Sent as one at the latest time,
+ * a restore's older write would land over a change made on another device
+ * after it, only because the user changed something else here later.
+ */
+export function settingsGroups(p: PendingSettings): SettingsGroup[] {
+  const by = new Map<string, SettingsGroup>()
+  const own: SettingsPatch = {}
+  const put = (target: SettingsPatch, k: keyof SettingsPatch, v: unknown): void => {
+    ;(target as Record<string, unknown>)[k] = v
+  }
+  for (const k of Object.keys(p.patch) as (keyof SettingsPatch)[]) {
+    const origin = p.fieldOrigin?.[k]
+    if (!origin) {
+      put(own, k, p.patch[k])
+      continue
+    }
+    const editedAt = fieldTime(p, k)
+    const key = `${origin}|${editedAt}`
+    const g = by.get(key) ?? { origin, editedAt, patch: {} }
+    put(g.patch, k, p.patch[k])
+    if (p.guard && k in p.guard) put((g.guard ??= {}), k, p.guard[k])
+    by.set(key, g)
+  }
+  const groups = [...by.values()].sort((a, b) => (a.editedAt < b.editedAt ? -1 : a.editedAt > b.editedAt ? 1 : 0))
+  if (Object.keys(own).length > 0) {
+    const guard = p.guard ? (Object.fromEntries(Object.entries(p.guard).filter(([k]) => k in own)) as SettingsPatch) : undefined
+    groups.push({ editedAt: p.editedAt, patch: own, ...(guard && Object.keys(guard).length > 0 ? { guard } : {}) })
+  }
+  return groups
+}
+
+/** What one statement of a patch came to: the row it answered with (null: a newer edit won), or a refusal. */
+export interface GroupAnswer {
+  origin?: string
+  fields: (keyof SettingsPatch)[]
+  row?: Settings | null
+  error?: unknown
+}
+
+/**
+ * Send a pending patch statement by statement (see settingsGroups), each
+ * answer into `answers` as it comes. A statement the server refuses for good
+ * does not stop the others; the refusal is thrown once they are through (the
+ * patch is let go, as a refused one is). Any other failure stops it there: the
+ * patch stays, and goes again whole. Resolves with the last row, or null when
+ * a statement lost to a newer edit (a conflict: the caller reads the row).
+ */
+export async function saveGroups(
+  p: PendingSettings,
+  save: (patch: SettingsPatch, editedAt: string, guard?: SettingsPatch) => Promise<Settings | null>,
+  answers: GroupAnswer[]
+): Promise<Settings | null> {
+  let last: Settings | null = null
+  let beaten = false
+  let refused: { error: unknown } | null = null
+  for (const g of settingsGroups(p)) {
+    const fields = Object.keys(g.patch) as (keyof SettingsPatch)[]
+    try {
+      const row = await save(g.patch, g.editedAt, g.guard)
+      answers.push({ ...(g.origin ? { origin: g.origin } : {}), fields, row })
+      if (row) last = row
+      else beaten = true
+    } catch (err) {
+      if (classifySyncError(err) !== 'rejected') throw err
+      answers.push({ ...(g.origin ? { origin: g.origin } : {}), fields, error: err })
+      refused ??= { error: err }
+    }
+  }
+  if (refused) throw refused.error
+  return beaten ? null : last
+}
+
 /**
  * The answer to a sent patch, for each operation that wrote some of it (see
  * PendingSettings.fieldOrigin), by the time each write was made: a field the
  * saved row holds as written is confirmed; one it holds otherwise, or a patch
- * beaten by a newer edit, kept (a later change won); a refusal, rejected. A
- * field the user set (no origin) is nobody's to hear.
+ * beaten by a newer edit, kept (a later change won, or the write did not
+ * land: App tells them apart by `row`); a refusal, rejected. A field the user
+ * set (no origin) is nobody's to hear. `groups`: the answer of each statement
+ * (see saveGroups), over the patch's; `latest`: the row read after a
+ * statement lost (null: none).
  */
-export function settingsOutcomes(sent: PendingSettings, out: SettingsAnswer): SettingsOutcomeEvent[] {
+export function settingsOutcomes(
+  sent: PendingSettings,
+  out: SettingsAnswer,
+  opts: { groups?: readonly GroupAnswer[]; latest?: Settings | null } = {}
+): SettingsOutcomeEvent[] {
   const by = new Map<string, SettingsOutcomeEvent>()
-  const reason = out.stop === 'rejected' ? (out.error instanceof Error ? out.error.message : String(out.error)) : undefined
+  const answerOf = (k: keyof SettingsPatch): SettingsAnswer => {
+    const g = opts.groups?.find((x) => x.fields.includes(k))
+    if (!g) return out
+    if (g.error !== undefined) return { stop: 'rejected', error: g.error }
+    return g.row ? { stop: 'saved', row: g.row } : { stop: 'conflict' }
+  }
   for (const k of Object.keys(sent.patch) as (keyof SettingsPatch)[]) {
     const origin = sent.fieldOrigin?.[k]
     if (!origin) continue
     const editedAt = fieldTime(sent, k)
     const key = `${origin}|${editedAt}`
-    const e = by.get(key) ?? { origin, editedAt, confirmed: [], kept: [], rejected: [], ...(reason ? { reason } : {}) }
-    if (out.stop === 'rejected') e.rejected.push(k)
-    else if (out.stop === 'saved' && sameSetting(out.row[k as keyof Settings], sent.patch[k])) e.confirmed.push(k)
-    else e.kept.push(k)
+    const a = answerOf(k)
+    const e: SettingsOutcomeEvent = by.get(key) ?? { origin, editedAt, confirmed: [], kept: [], rejected: [] }
+    if (a.stop === 'rejected') {
+      e.rejected.push(k)
+      e.reason ??= a.error instanceof Error ? a.error.message : String(a.error)
+    } else if (a.stop === 'saved') {
+      if (sameSetting(a.row[k as keyof Settings], sent.patch[k])) e.confirmed.push(k)
+      else e.kept.push(k)
+      e.row = a.row
+    } else {
+      e.kept.push(k)
+      if (opts.latest !== undefined && e.row === undefined) e.row = opts.latest
+    }
     by.set(key, e)
   }
   return [...by.values()]
@@ -260,14 +370,20 @@ export function useSettings(
     if (backoffRef.current.waiting) return
     syncingRef.current = userId
     let out: SettingsPushResult | null
+    // What each statement of the patch came to (see saveGroups).
+    const answers: GroupAnswer[] = []
     try {
       out = await withLock(`bettracker:drain:settings:${userId}`, () =>
         pushSettings({
           pending: () => store.fresh(),
           settle: async (sent) => void (await change((current) => afterSettingsAnswer(current, sent))),
-          save: (p) => saveSettings(p.patch, p.editedAt, userId, p.guard),
+          // Statement by statement: each operation's write at its own time (see settingsGroups).
+          save: (p) => saveGroups(p, (patch, editedAt, guard) => saveSettings(patch, editedAt, userId, guard), answers),
           answered: async (sent, answer) => {
-            for (const e of settingsOutcomes(sent, answer)) await tellOutcome(e)
+            // A write that lost: the row as it is now tells a change made since from one that did not land.
+            const lost = answers.some((g) => g.row === null && g.origin !== undefined)
+            const latest = lost ? await getSettings(userId).catch(() => undefined) : undefined
+            for (const e of settingsOutcomes(sent, answer, { groups: answers, ...(latest !== undefined ? { latest } : {}) })) await tellOutcome(e)
           }
         })
       )

@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../lib/supabase', () => {
   const chain: Record<string, unknown> = {}
-  for (const m of ['from', 'select', 'insert', 'update', 'eq', 'lte', 'single', 'maybeSingle']) {
+  for (const m of ['from', 'select', 'insert', 'update', 'eq', 'is', 'lte', 'single', 'maybeSingle']) {
     chain[m] = (...args: unknown[]) => {
       state.calls.push({ method: m, args })
       return chain
@@ -111,6 +111,45 @@ describe('saveSettings — last write wins by edit time', () => {
     state.replies = [{ data: ROW, error: null }]
     await saveSettings({ unitSize: null, showUnits: false }, 'E')
     expect(calls('update')[0]?.args[0]).toEqual({ unit_size: null, show_units: false, updated_at: 'E' })
+  })
+})
+
+describe('saveSettings — a guarded field on an account with no row yet (the server holds the defaults)', () => {
+  it('a guard that is the default applies: the first save inserts the row, at the edit time', async () => {
+    state.replies = [
+      { data: null, error: null }, // the guarded update matched nothing
+      { data: null, error: null }, // no row exists
+      { data: { ...ROW, odds_format: 'fractional' }, error: null }
+    ]
+    const out = await saveSettings({ oddsFormat: 'fractional' }, 'E', undefined, { oddsFormat: 'american' })
+    expect(calls('eq').map((c) => c.args)).toContainEqual(['odds_format', 'american'])
+    expect(calls('insert')[0]?.args[0]).toEqual({ user_id: 'user-1', odds_format: 'fractional', updated_at: 'E' })
+    expect(out?.oddsFormat).toBe('fractional')
+  })
+
+  it('a guard that is not the default finds its value gone: nothing is inserted, and the defaults are the answer', async () => {
+    state.replies = [
+      { data: null, error: null },
+      { data: null, error: null }
+    ]
+    const out = await saveSettings({ oddsFormat: 'fractional' }, 'E', undefined, { oddsFormat: 'decimal' })
+    expect(calls('insert')).toHaveLength(0)
+    expect(out?.oddsFormat).toBe('american')
+  })
+
+  it('a guard against null is checked with IS NULL', async () => {
+    state.replies = [{ data: { ...ROW, loss_limit: '50' }, error: null }]
+    await saveSettings({ lossLimit: 50 }, 'E', undefined, { lossLimit: null })
+    expect(calls('is')[0]?.args).toEqual(['loss_limit', null])
+  })
+
+  it('another device’s first save got there first: a conflict', async () => {
+    state.replies = [
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: null, error: { message: 'duplicate key value violates unique constraint', code: '23505' } }
+    ]
+    expect(await saveSettings({ oddsFormat: 'fractional' }, 'E', undefined, { oddsFormat: 'american' })).toBeNull()
   })
 })
 

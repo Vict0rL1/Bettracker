@@ -317,6 +317,59 @@ test.describe('settings restored: reported as the server answered', () => {
     expect((await serverSettings(page))?.odds_format).toBe('fractional')
   })
 
+  test('restored offline, then another device changes a different setting: not "changed later", and it can be tried again', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    const backup = withOdds(await download(page), 'american')
+    await setFlag(page, 'down', '1')
+    const dialog = await pickBackup(page, backup, true)
+    await dialog.locator('.restore-go').click()
+    await expect(dialog.locator('.result-settings')).toContainText('Saved on this device, waiting to sync: odds format.', { timeout: 15_000 })
+    // Meanwhile another device changes the loss limit: the row is newer than the restore's write, its odds format untouched.
+    await page.evaluate(() => {
+      const row = JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as Record<string, unknown>
+      localStorage.setItem('e2e:settings', JSON.stringify({ ...row, loss_limit: 75, updated_at: new Date().toISOString() }))
+    })
+    await setFlag(page, 'down', null)
+    await online(page)
+    const settings = dialog.locator('.result-settings')
+    await expect(settings).toContainText('Not on the server, which still has the value from before: odds format.', { timeout: 15_000 })
+    await expect(settings).not.toContainText('changed later')
+    expect((await serverSettings(page))?.odds_format).toBe('decimal')
+    await dialog.locator('.result-recover-retrySettings').click()
+    await expect(settings).toContainText('Replaced: odds format.', { timeout: 15_000 })
+    expect((await serverSettings(page))?.odds_format).toBe('american')
+    expect(Number((await serverSettings(page))?.loss_limit)).toBe(75)
+  })
+
+  test('restored offline, the same setting changed on another device after it, then another setting edited here: the other device’s change stays', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    const backup = withOdds(await download(page), 'american')
+    await setFlag(page, 'down', '1')
+    const dialog = await pickBackup(page, backup, true)
+    await dialog.locator('.restore-go').click()
+    await expect(dialog.locator('.result-settings')).toContainText('Saved on this device, waiting to sync: odds format.', { timeout: 15_000 })
+    await page.evaluate(() => {
+      const row = JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as Record<string, unknown>
+      localStorage.setItem('e2e:settings', JSON.stringify({ ...row, odds_format: 'fractional', updated_at: new Date().toISOString() }))
+    })
+    await page.keyboard.press('Escape')
+    // Here, later still: the unit size (another setting).
+    await menu(page, '.settings-btn')
+    const box = page.locator('.settings-modal input[inputmode="decimal"]').first()
+    await box.fill('30')
+    await box.blur()
+    await page.keyboard.press('Escape')
+    await setFlag(page, 'down', null)
+    await online(page)
+    await expect.poll(async () => Number((await serverSettings(page))?.unit_size), { timeout: 15_000 }).toBe(30)
+    expect((await serverSettings(page))?.odds_format).toBe('fractional')
+    const result = await details(page)
+    await expect(result.locator('.result-settings')).toContainText('Not replaced, changed later (here or on another device): odds format.', { timeout: 15_000 })
+    await expect(result.locator('.result-settings')).not.toContainText('Replaced:')
+  })
+
   test('a later edit here, before the restore synced: not replaced, and the later edit is what reaches the server', async ({ page }) => {
     await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
     await expect(page.locator('.sync-badge')).toHaveText('Synced')

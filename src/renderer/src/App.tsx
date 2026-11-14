@@ -160,7 +160,20 @@ export default function App() {
   // What the server made of a restore's settings, or its Undo's, by the write's generation.
   const onSettingsOutcome = useCallback(async (e: SettingsOutcomeEvent) => {
     const uid = activeUserRef.current
-    if (uid) setBatches(await recordBatchEvent(uid, settingsAnswer(e)))
+    if (!uid) return
+    let event = settingsAnswer(e)
+    // "Kept" only where the server's row shows a change made since: one that
+    // still holds what was there before the write did not land (a newer edit
+    // of another field moved the row on), and can be tried again.
+    if (event.kind === 'settings' && e.kept.length > 0 && e.row !== undefined) {
+      const s = (await freshImports(uid)).find((b) => b.id === event.batch)?.restore?.settings
+      if (s) {
+        const row = e.row as unknown as Partial<Record<SettingsField, unknown>> | null
+        const found = checkSettings(s, row, e.kept, event.undo === true, DEFAULT_SETTINGS as unknown as Partial<Record<SettingsField, unknown>>)
+        event = { ...event, confirmed: [...(event.confirmed ?? []), ...found.confirmed], kept: found.kept, missing: found.missing }
+      }
+    }
+    setBatches(await recordBatchEvent(uid, event))
   }, [])
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice, onBatch)

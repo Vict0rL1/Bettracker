@@ -37,7 +37,7 @@ import {
 import { oneAtATime } from './oneAtATime'
 import { evictExpendable } from './store'
 import { addsQueued, queuedByBatch, removalsQueued, settledHere, undoQueued } from './useOpQueue'
-import { settingsOutcomes } from './useSettings'
+import { saveGroups, settingsGroups, settingsOutcomes, type GroupAnswer } from './useSettings'
 
 const U = 'u-nov5'
 const S = '2026-11-05T10:00:00.000Z'
@@ -390,10 +390,56 @@ describe('2 · settings restored: reported as the server answered', () => {
   it('saved: a field the row holds as written is confirmed, another value kept; beaten: kept; refused: rejected with why', () => {
     const p = sent({ oddsFormat: 'american', unitSize: 25 })
     const row = { ...DEFAULT_SETTINGS, oddsFormat: 'american', unitSize: 10, updatedAt: S } as Settings
-    expect(settingsOutcomes(p, { stop: 'saved', row })).toEqual([{ origin: 'R', editedAt: S, confirmed: ['oddsFormat'], kept: ['unitSize'], rejected: [] }])
+    expect(settingsOutcomes(p, { stop: 'saved', row })).toEqual([{ origin: 'R', editedAt: S, confirmed: ['oddsFormat'], kept: ['unitSize'], rejected: [], row }])
     expect(settingsOutcomes(p, { stop: 'conflict' })).toEqual([{ origin: 'R', editedAt: S, confirmed: [], kept: ['oddsFormat', 'unitSize'], rejected: [] }])
     expect(settingsOutcomes(p, { stop: 'rejected', error: new Error('nope') })).toEqual([
       { origin: 'R', editedAt: S, confirmed: [], kept: [], rejected: ['oddsFormat', 'unitSize'], reason: 'nope' }
+    ])
+  })
+
+  it('sent statement by statement: each operation’s write at its own time, oldest first, then the user’s own fields at the latest', () => {
+    let p = sent({ oddsFormat: 'fractional' })
+    p = editSettings(p, { lossLimit: 50 }, T2, { lossLimit: null }, undoOrigin('Q'))
+    p = editSettings(p, { defaultStake: 10 }, T3)
+    expect(settingsGroups(p)).toEqual([
+      { origin: 'R', editedAt: S, patch: { oddsFormat: 'fractional' } },
+      { origin: undoOrigin('Q'), editedAt: T2, patch: { lossLimit: 50 }, guard: { lossLimit: null } },
+      { editedAt: T3, patch: { defaultStake: 10 } }
+    ])
+  })
+
+  it('a restore’s write queued offline, a change of another device after it, then an unrelated edit here: the other device’s change stays', async () => {
+    // One row, last write wins by edit time (as the server: update … where updated_at <= editedAt).
+    let row: Settings = { ...DEFAULT_SETTINGS, oddsFormat: 'american', updatedAt: T2 }
+    const save = async (patch: SettingsPatch, editedAt: string): Promise<Settings | null> => {
+      if (row.updatedAt > editedAt) return null
+      row = { ...row, ...patch, updatedAt: editedAt }
+      return row
+    }
+    const p = editSettings(sent({ oddsFormat: 'fractional' }), { defaultStake: 10 }, T3)
+    const answers: GroupAnswer[] = []
+    expect(await saveGroups(p, save, answers)).toBeNull()
+    expect(row.oddsFormat).toBe('american')
+    expect(row.defaultStake).toBe(10)
+    const latest = { ...row }
+    expect(settingsOutcomes(p, { stop: 'conflict' }, { groups: answers, latest })).toEqual([
+      { origin: 'R', editedAt: S, confirmed: [], kept: ['oddsFormat'], rejected: [], row: latest }
+    ])
+  })
+
+  it('a statement refused for good does not stop the others; the refusal comes after them', async () => {
+    const saved: SettingsPatch[] = []
+    const save = async (patch: SettingsPatch, editedAt: string): Promise<Settings | null> => {
+      if (patch.oddsFormat) throw Object.assign(new Error('new row violates check constraint'), { code: '23514', status: 400 })
+      saved.push(patch)
+      return { ...DEFAULT_SETTINGS, ...patch, updatedAt: editedAt }
+    }
+    const p = editSettings(sent({ oddsFormat: 'fractional' }), { defaultStake: 10 }, T3)
+    const answers: GroupAnswer[] = []
+    await expect(saveGroups(p, save, answers)).rejects.toThrow('check constraint')
+    expect(saved).toEqual([{ defaultStake: 10 }])
+    expect(settingsOutcomes(p, { stop: 'rejected', error: new Error('x') }, { groups: answers })).toEqual([
+      { origin: 'R', editedAt: S, confirmed: [], kept: [], rejected: ['oddsFormat'], reason: 'new row violates check constraint' }
     ])
   })
 
