@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BankrollMove, Bet, BetInput, BetStatus, MoveInput, SettingsPatch } from '../../shared/types'
+import { DEFAULT_SETTINGS, type BankrollMove, type Bet, type BetInput, type BetStatus, type MoveInput } from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
 import BankrollDialog from './components/BankrollDialog'
 import Breakdown from './components/Breakdown'
@@ -28,13 +28,41 @@ import { hasStoredSession } from './lib/supabase'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
 import { dayDraftId, loadDayDraft, loadQuickDraft, saveDayDraft, saveQuickDraft, type QuickDraft } from './data/drafts'
-import { changeImport, loadImports, recordBatchEvent, recordImport, updateImports, type BatchEvent, type ImportBatch, type SettingsField } from './data/imports'
+import {
+  batchOf,
+  changeImport,
+  freshImports,
+  HistoryFullError,
+  loadImports,
+  recordBatchEvent,
+  settingsAnswer,
+  unanswered,
+  withOperation,
+  type BatchEvent,
+  type ImportBatch,
+  type SettingsField
+} from './data/imports'
+import {
+  checkSettings,
+  continueOperation,
+  preparedParts,
+  queueParts,
+  redoBatch,
+  resumeOperations,
+  retrySettingsOf,
+  startOperation,
+  undoSettingsLog,
+  type OperationPorts
+} from './data/operations'
 import { readdStamp, sameStamp } from './data/offline'
-import type { BatchLive } from './lib/batchStatus'
+import { rowStamps } from './data/bets'
+import { getSettings } from './data/settings'
+import { normalizeInput, normalizeMove } from './lib/validate'
+import { batchStatus, type BatchLive, type RecoveryAction } from './lib/batchStatus'
 import { planImport } from './lib/importPlan'
 import { newId } from './lib/uuid'
 import { downloadBackup, makeBackup, planRestore, settingsChange } from './lib/backup'
-import { useSettings } from './data/useSettings'
+import { useSettings, type SettingsOutcomeEvent } from './data/useSettings'
 import { bankrollNow, firstBetDate } from './lib/bankroll'
 import { retagPlan, settlePlan, toInput, type TagPatch } from './lib/bulk'
 import { downloadCsv } from './lib/csv'
@@ -51,6 +79,21 @@ import { effectiveUnit } from './lib/validate'
 import { PlusIcon } from './components/icons'
 
 const kindOf = (amount: number): 'deposit' | 'withdrawal' => (amount > 0 ? 'deposit' : 'withdrawal')
+
+/** How often a window looks for operations another window left prepared (see data/operations.ts). */
+const RESUME_INTERVAL_MS = 20_000
+const NONE_QUEUED = { adds: 0, removals: 0 }
+
+/** Rows (and a settings write) an operation has written down but not queued yet: lost if the user signs out now. */
+function unqueuedOf(b: ImportBatch): number {
+  let n = 0
+  if (b.parts?.bets?.phase === 'prepared') n += unanswered(b, 'bets').length
+  if (b.parts?.moves?.phase === 'prepared') n += unanswered(b, 'moves').length
+  if (b.restore?.settings?.phase === 'prepared') n += 1
+  if (b.undo?.phase === 'prepared') n += b.undo.bets.length + b.undo.moves.length - b.undo.removed.length - b.undo.kept.length
+  if (b.undo?.settings?.phase === 'prepared') n += 1
+  return Math.max(0, n)
+}
 
 function Boot() {
   return (
@@ -114,6 +157,11 @@ export default function App() {
     const uid = activeUserRef.current
     if (uid) setBatches(await recordBatchEvent(uid, e))
   }, [])
+  // What the server made of a restore's settings, or its Undo's, by the write's generation.
+  const onSettingsOutcome = useCallback(async (e: SettingsOutcomeEvent) => {
+    const uid = activeUserRef.current
+    if (uid) setBatches(await recordBatchEvent(uid, settingsAnswer(e)))
+  }, [])
 
   const sync = useBetSync(activeUserId, Boolean(session), showError, showNotice, onBatch)
   const { bets, status, queuedCount, isOffline } = sync
@@ -125,10 +173,12 @@ export default function App() {
     unsaved: settingsUnsaved,
     status: settingsStatus,
     saveState: settingsSaveState,
-    pendingPatch: settingsPendingPatch,
+    pendingOrigins: settingsOrigins,
+    held: settingsHeld,
+    queueFresh: settingsQueueFresh,
     update: updateSettings,
     saveAgain: saveSettingsAgain
-  } = useSettings(activeUserId, Boolean(session), showError, showNotice)
+  } = useSettings(activeUserId, Boolean(session), showError, showNotice, onSettingsOutcome)
   const moves = useMoves(activeUserId, Boolean(session), showError, showNotice, onBatch)
   // One badge for the three queues. A settings change or a deposit is a
   // queued change too: the badge says what holds it back (or that it is on
@@ -499,13 +549,62 @@ export default function App() {
   // Where a batch stands now, for the restore's result (see lib/batchStatus.ts).
   const batchLive = useCallback(
     (b: ImportBatch): BatchLive => ({
-      betsQueued: sync.batchQueued.get(b.id) ?? 0,
-      movesQueued: moves.batchQueued.get(b.id) ?? 0,
+      bets: sync.batchQueued.get(b.id) ?? NONE_QUEUED,
+      moves: moves.batchQueued.get(b.id) ?? NONE_QUEUED,
+      betsHeld: sync.held,
+      movesHeld: moves.held,
       refused: sync.batchRefused.has(b.id) || moves.batchRefused.has(b.id),
-      settingsPending: settingsPendingPatch
+      settingsOrigins,
+      settingsHeld
     }),
-    [sync.batchQueued, sync.batchRefused, moves.batchQueued, moves.batchRefused, settingsPendingPatch]
+    [sync.batchQueued, sync.batchRefused, sync.held, moves.batchQueued, moves.batchRefused, moves.held, settingsOrigins, settingsHeld]
   )
+  const batchLiveRef = useRef(batchLive)
+  batchLiveRef.current = batchLive
+
+  // What an operation needs of the app (see data/operations.ts): for one
+  // user, always through the latest hooks.
+  const syncRef = useRef(sync)
+  syncRef.current = sync
+  const movesHookRef = useRef(moves)
+  movesHookRef.current = moves
+  const updateSettingsRef = useRef(updateSettings)
+  updateSettingsRef.current = updateSettings
+  const settingsQueueRef = useRef(settingsQueueFresh)
+  settingsQueueRef.current = settingsQueueFresh
+  const portsFor = useCallback(
+    (uid: string): OperationPorts => ({
+      userId: uid,
+      active: () => activeUserRef.current === uid,
+      history: { fresh: () => freshImports(uid), change: (id, fn) => changeImport(uid, id, fn) },
+      bets: {
+        queue: () => syncRef.current.queueFresh(),
+        add: (payload, o) => syncRef.current.queueBatch(payload, o),
+        remove: async (targets, batch) => ({ saved: await syncRef.current.undoBets(targets, batch) })
+      },
+      moves: {
+        queue: () => movesHookRef.current.queueFresh(),
+        add: (payload, o) => movesHookRef.current.queueBatch(payload, o),
+        remove: async (targets, batch) => ({ saved: await movesHookRef.current.undoMoves(targets, batch) })
+      },
+      settings: { pending: () => settingsQueueRef.current(), write: (patch, o) => updateSettingsRef.current(patch, o) },
+      shown: (list) => {
+        if (activeUserRef.current === uid) setBatches(list)
+      }
+    }),
+    []
+  )
+
+  // Operations a window left written down but not queued (closed or reloaded
+  // in between): queued now, and every little while, by one window at a time.
+  useEffect(() => {
+    if (!activeUserId) return
+    const uid = activeUserId
+    const go = (): void => void resumeOperations(portsFor(uid)).catch(() => undefined)
+    go()
+    const timer = setInterval(go, RESUME_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [activeUserId, portsFor])
 
   /**
    * Undo a whole import or restore. It removes only what the batch wrote and
@@ -514,8 +613,9 @@ export default function App() {
    * as the delete (see deleteBet), so a row that was there before, another
    * device's, or one edited since anywhere, stays. The settings a restore
    * replaced go back where they still hold the backup's value, here and on
-   * the server (see PendingSettings.guard). Itself undoable: the toast puts
-   * back what it removed, with its ids, under a new stamp.
+   * the server (see PendingSettings.guard). Written down first and then
+   * queued, as the batch was (see data/operations.ts). Itself undoable: the
+   * toast puts back what it removed, with its ids, under a new stamp.
    *
    * An entry from before batches had stamps: an import's rows each count as
    * unchanged at the stamp this device last saw; a restore's can't be told
@@ -525,8 +625,13 @@ export default function App() {
     async (batch: ImportBatch): Promise<boolean> => {
       const uid = activeUserId
       if (!uid) return false
-      const entry = loadImports(uid).find((b) => b.id === batch.id) ?? batch
+      const entry = (await freshImports(uid)).find((b) => b.id === batch.id) ?? batch
       if (!entry.stamp && entry.kind === 'restore') return false
+      // A part not queued yet would be queued after the Undo, and stay: it waits for it.
+      if (preparedParts(entry).some((p) => p === 'bets' || p === 'moves' || p === 'settings')) {
+        setToast({ kind: 'ok', text: t('undo.wait') })
+        return false
+      }
       const stampOf = (row: { updatedAt: string }): string => entry.stamp ?? row.updatedAt
       const here = new Map((betsRef.current ?? []).map((b) => [b.id, b]))
       const hereMoves = new Map(movesRef.current.map((m) => [m.id, m]))
@@ -546,39 +651,31 @@ export default function App() {
         else if (sameStamp(row.updatedAt, stampOf(row))) goneMoves.push(row)
         else changedHere++
       }
-      // Settings: back where they still hold what the restore set.
-      const replaced = entry.restore?.settings
-      const fields = replaced ? (Object.keys(replaced.after) as SettingsField[]) : []
-      const reverted = fields.filter((f) => Object.is(settingsRef.current[f], replaced?.after[f]))
-      const keptFields = fields.filter((f) => !reverted.includes(f))
-      const pick = (p: SettingsPatch | undefined, keys: SettingsField[]): SettingsPatch =>
-        Object.fromEntries(keys.map((k) => [k, (p as Record<string, unknown> | undefined)?.[k]])) as SettingsPatch
-
-      setBatches(
-        await changeImport(uid, entry.id, (b) => ({
-          ...b,
-          undone: true,
-          undo: {
-            at: new Date().toISOString(),
-            stamp: entry.stamp ?? '',
-            bets: goneBets.map((r) => r.id),
-            moves: goneMoves.map((r) => r.id),
-            changedHere,
-            goneHere,
-            removed: [],
-            kept: [],
-            ...(fields.length > 0 ? { settings: { reverted, kept: keptFields } } : {})
-          }
-        }))
-      )
+      // Settings: back where they still hold what the restore set (see undoSettingsLog).
+      const at = new Date().toISOString()
+      const plan = undoSettingsLog(entry.restore?.settings, settingsRef.current as unknown as Partial<Record<SettingsField, unknown>>, at)
+      const reverted = plan.reverted
+      const keptFields = plan.keptHere
+      const undo = {
+        at,
+        stamp: entry.stamp ?? '',
+        ...(entry.stamp ? {} : { stamps: Object.fromEntries([...goneBets, ...goneMoves].map((r) => [r.id, r.updatedAt])) }),
+        phase: goneBets.length + goneMoves.length > 0 ? ('prepared' as const) : ('queued' as const),
+        bets: goneBets.map((r) => r.id),
+        moves: goneMoves.map((r) => r.id),
+        changedHere,
+        goneHere,
+        removed: [],
+        kept: [],
+        ...(plan.settings ? { settings: plan.settings } : {})
+      }
+      const ports = portsFor(uid)
+      const after = await continueOperation(ports, entry.id, (b) => ({ ...b, undone: true, undo }))
       if (goneBets.length === 0 && goneMoves.length === 0 && reverted.length === 0) {
-        setToast({ kind: 'ok', text: changedHere > 0 || keptFields.length > 0 ? t('undo.allChanged') : t('imp.undoNothing') })
+        setToast({ kind: 'ok', text: t(changedHere > 0 || keptFields.length > 0 ? 'undo.allChanged' : entry.kind === 'restore' ? 'undo.restoreNothing' : 'imp.undoNothing') })
         return true
       }
-      let saved = goneBets.length > 0 ? await sync.undoBets(goneBets.map((r) => ({ id: r.id, stamp: stampOf(r) })), entry.id) : true
-      if (goneMoves.length > 0) saved = (await moves.undoMoves(goneMoves.map((r) => ({ id: r.id, stamp: stampOf(r) })), entry.id)) && saved
-      if (reverted.length > 0) saved = (await updateSettings(pick(replaced?.before, reverted), { guard: pick(replaced?.after, reverted) })) && saved
-
+      const saved = after?.undo?.phase !== 'held' && after?.undo?.settings?.phase !== 'held'
       const parts = [
         entry.kind === 'restore'
           ? t('undo.restoreRemoved', { bets: tn('bet', goneBets.length), moves: tn('move', goneMoves.length) })
@@ -589,33 +686,30 @@ export default function App() {
       ]
       done(saved, savedNote(parts.filter(Boolean).join(' · ')), async () => {
         // Put back what it removed, all under one new stamp: the next Undo
-        // takes them by it (see readdStamp for why it is new).
+        // takes them by it (see readdStamp for why it is new). Written down,
+        // then queued, as the batch was.
         const stamp = readdStamp([...goneBets, ...goneMoves])
-        setBatches(
-          await changeImport(uid, entry.id, (b) => ({
-            ...b,
-            undone: false,
+        const back = await continueOperation(portsFor(uid), entry.id, (b) =>
+          redoBatch(b, {
             stamp,
-            ids: b.ids.filter((id) => here.has(id)),
-            moveIds: b.moveIds?.filter((id) => hereMoves.has(id)),
-            made: [],
-            madeMoves: [],
-            undo: undefined
-          }))
+            now: new Date().toISOString(),
+            bets: goneBets.map((r) => ({ id: r.id, input: toInput(r) })),
+            moves: goneMoves.map((m) => ({ id: m.id, input: { date: m.date, amount: m.amount, note: m.note } })),
+            reverted
+          })
         )
-        let back = goneBets.length > 0 ? await sync.restoreBets(goneBets, { batch: entry.id, stamp }) : true
-        if (goneMoves.length > 0) back = (await moves.restoreMoves(goneMoves, { batch: entry.id, stamp })) && back
-        if (reverted.length > 0) back = (await updateSettings(pick(replaced?.after, reverted), { guard: pick(replaced?.before, reverted) })) && back
-        return back
+        return back?.parts?.bets?.phase !== 'held' && back?.parts?.moves?.phase !== 'held' && back?.restore?.settings?.phase !== 'held'
       })
       return saved
     },
-    [activeUserId, sync, moves, updateSettings, done, savedNote, t, tn]
+    [activeUserId, portsFor, done, savedNote, t, tn]
   )
 
   // From the review step: what the user chose to import, against the bets as
   // they are now. Bets that changed since the review change the plan: the
-  // review shows the new one instead. Throws when refused.
+  // review shows the new one instead. Checked whole first (a row that can't
+  // go in fails the import before anything is written down), then written
+  // down and queued (see data/operations.ts). Throws when refused.
   const handleImport = useCallback(
     async (choice: ImportChoice): Promise<ImportOutcome> => {
       const uid = activeUserId
@@ -625,36 +719,46 @@ export default function App() {
       const keep = new Set(choice.keepLines)
       const rows = [...plan.fresh, ...plan.duplicates.filter((d) => keep.has(d.line))].sort((a, b) => a.line - b.line)
       const skipped = plan.duplicates.length - plan.duplicates.filter((d) => keep.has(d.line)).length
-      // Recorded first, so what the server makes of it is never told to no one.
-      const batch: ImportBatch = { id: newId(), at: new Date().toISOString(), file: choice.file, fingerprint: choice.fingerprint, ids: rows.map(() => newId()) }
-      batch.stamp = batch.at
-      if (rows.length > 0) setBatches(await recordImport(uid, batch))
-      let count: number
-      let saved: boolean
-      try {
-        ;({ count, saved } = await sync.importBets(
-          rows.map((r) => r.input),
-          { ids: batch.ids, batch: batch.id, stamp: batch.stamp }
-        ))
-      } catch (err) {
-        setBatches(await updateImports(uid, (list) => list.filter((b) => b.id !== batch.id)))
-        throw err
+      const payload = rows.map((r) => ({ id: newId(), input: normalizeInput(r.input) }))
+      const at = new Date().toISOString()
+      const batch: ImportBatch = {
+        id: newId(),
+        at,
+        file: choice.file,
+        fingerprint: choice.fingerprint,
+        ids: payload.map((p) => p.id),
+        stamp: at,
+        parts: { bets: { phase: 'prepared', payload } }
       }
       const notes = (skipped > 0 ? t('imp.doneSkipped', { n: skipped }) : '') + (plan.rejected.length > 0 ? t('imp.doneRejected', { n: plan.rejected.length }) : '')
-      done(saved, savedNote(t('imp.done', { bets: tn('bet', count) }) + notes), () => undoBatch(batch))
+      if (payload.length === 0) {
+        done(true, savedNote(t('imp.done', { bets: tn('bet', 0) }) + notes))
+        return { kind: 'done' }
+      }
+      let after: ImportBatch | undefined
+      try {
+        after = await startOperation(portsFor(uid), batch)
+      } catch (err) {
+        if (err instanceof HistoryFullError) throw new StorageWriteError(err)
+        throw err
+      }
+      const saved = after?.parts?.bets?.phase !== 'held'
+      if (after?.parts?.bets?.phase === 'failed') throw new Error(after.parts.bets.error ?? t('common.error'))
+      done(saved, savedNote(t('imp.done', { bets: tn('bet', payload.length) }) + notes), () => undoBatch(batch))
       return { kind: 'done' }
     },
-    [activeUserId, sync, done, savedNote, undoBatch, t, tn]
+    [activeUserId, portsFor, done, savedNote, undoBatch, t, tn]
   )
 
   /**
    * A backup, as reviewed. The plan is made again from the data as it is now
    * first: another device or window may have changed it during the review,
    * and then the review shows the new plan instead of applying the old one.
-   * The history entry is written before anything is queued, and says after
-   * what could not be queued or stored, so a restore that stops halfway says
-   * what is missing. A restore only adds (see planRestore), and the server
-   * leaves a row it already has as it is (see addBets).
+   * Every part is checked, then written down with what it is to queue, then
+   * queued (see data/operations.ts): a restore that stops halfway (a reload,
+   * a closed window) goes on by itself, once, and says what is missing. A
+   * restore only adds (see planRestore), and the server leaves a row it
+   * already has as it is (see addBets).
    */
   const handleRestore = useCallback(
     async (choice: RestoreChoice): Promise<RestoreOutcome> => {
@@ -669,6 +773,9 @@ export default function App() {
       const add = [...plan.newBets, ...dups]
       const replaced = choice.replaceSettings ? settingsChange(settingsRef.current, plan.settings) : null
       if (add.length === 0 && plan.newMoves.length === 0 && !replaced) return { kind: 'nothing' }
+      // Every row checked before anything is written down.
+      const bets = add.map((b) => ({ id: b.id, input: normalizeInput(toInput(b)) }))
+      const movesPayload = plan.newMoves.map((m) => ({ id: m.id, input: normalizeMove({ date: m.date, amount: m.amount, note: m.note }) }))
 
       const stamp = new Date().toISOString()
       const entry: ImportBatch = {
@@ -677,38 +784,139 @@ export default function App() {
         at: stamp,
         file: choice.file,
         fingerprint: choice.fingerprint,
-        ids: add.map((b) => b.id),
-        moveIds: plan.newMoves.map((m) => m.id),
+        ids: bets.map((b) => b.id),
+        moveIds: movesPayload.map((m) => m.id),
         stamp,
+        parts: {
+          ...(bets.length > 0 ? { bets: { phase: 'prepared' as const, payload: bets } } : {}),
+          ...(movesPayload.length > 0 ? { moves: { phase: 'prepared' as const, payload: movesPayload } } : {})
+        },
         restore: {
           skippedBets: plan.sameBets + plan.changedBets,
           skippedMoves: plan.sameMoves + plan.changedMoves,
           skippedDuplicates: plan.duplicateBets.length - dups.length,
-          ...(replaced ? { settings: { ...replaced, editedAt: stamp } } : {}),
+          ...(replaced ? { settings: { ...replaced, editedAt: stamp, phase: 'prepared' as const } } : {}),
           failed: [],
           held: []
         }
       }
-      setBatches(await recordImport(uid, entry))
-      const failed: ('bets' | 'moves' | 'settings')[] = []
-      const held: ('bets' | 'moves' | 'settings')[] = []
-      const attempt = async (part: 'bets' | 'moves' | 'settings', queue: () => Promise<boolean>): Promise<void> => {
-        try {
-          if (!(await queue())) held.push(part)
-        } catch {
-          failed.push(part)
-        }
-      }
-      if (add.length > 0) await attempt('bets', async () => (await sync.importBets(add.map(toInput), { ids: entry.ids, batch: entry.id, stamp })).saved)
-      if (plan.newMoves.length > 0) await attempt('moves', () => moves.restoreMoves(plan.newMoves, { batch: entry.id, stamp }))
-      if (replaced) await attempt('settings', () => updateSettings(replaced.after))
-      if (failed.length > 0 || held.length > 0) {
-        setBatches(await changeImport(uid, entry.id, (b) => (b.restore ? { ...b, restore: { ...b.restore, failed, held } } : b)))
+      try {
+        await startOperation(portsFor(uid), entry)
+      } catch (err) {
+        if (err instanceof HistoryFullError) throw new StorageWriteError(err)
+        throw err
       }
       return { kind: 'done', batch: entry.id }
     },
-    [activeUserId, sync, moves, updateSettings]
+    [activeUserId, portsFor]
   )
+
+  /**
+   * Check again: ask the server about what a batch has no answer for. A row
+   * that carries the batch's stamp was made by it; another one was there
+   * already; none, it is not there. An Undo's row still there as the batch
+   * wrote it goes out again (its removal never reached the server); gone, it
+   * was removed; changed, it was kept. Settings: as checkSettings says. An
+   * entry from before batches had stamps has nothing to ask about its rows.
+   */
+  const checkBatch = useCallback(
+    async (b: ImportBatch): Promise<void> => {
+      const uid = activeUserId
+      if (!uid) return
+      const entry = (await freshImports(uid)).find((x) => x.id === b.id)
+      if (!entry) return
+      const ports = portsFor(uid)
+      const inQueue = async (table: 'bets' | 'moves', undo: boolean): Promise<Set<string>> => {
+        const queue = await (table === 'bets' ? ports.bets.queue() : ports.moves.queue())
+        const ids = new Set<string>()
+        for (const op of queue) {
+          const of = batchOf(op)
+          if (!of || of.batch !== entry.id || of.undo !== undo) continue
+          if (op.kind === 'bulk-add') op.entries.slice(op.done ?? 0).forEach((e) => ids.add(e.id))
+          else if (op.kind !== 'update') ids.add(op.id)
+        }
+        return ids
+      }
+      const stamp = entry.stamp
+      for (const table of ['bets', 'moves'] as const) {
+        // Undone, or from before batches had stamps (its rows carry no receipt): nothing to ask.
+        if (entry.undone || stamp === undefined) continue
+        const queued = await inQueue(table, false)
+        const open = unanswered(entry, table).filter((id) => !queued.has(id))
+        if (open.length === 0) continue
+        const stamps = await rowStamps(table === 'bets' ? 'entries' : 'bankroll_moves', open)
+        const made = open.filter((id) => stamps.has(id) && sameStamp(stamps.get(id) as string, stamp))
+        const present = open.filter((id) => stamps.has(id) && !made.includes(id))
+        const missing = open.filter((id) => !stamps.has(id))
+        setBatches(await recordBatchEvent(uid, { kind: 'outcome', batch: entry.id, table, stamp, made, present, missing }))
+      }
+      if (entry.undo) {
+        const u = entry.undo
+        const answered = new Set([...u.removed, ...u.kept, ...(u.failed ?? [])])
+        let again = false
+        for (const table of ['bets', 'moves'] as const) {
+          const queued = await inQueue(table, true)
+          const open = (table === 'bets' ? u.bets : u.moves).filter((id) => !answered.has(id) && !queued.has(id))
+          if (open.length === 0) continue
+          const stamps = await rowStamps(table === 'bets' ? 'entries' : 'bankroll_moves', open)
+          for (const id of open) {
+            const found = stamps.get(id)
+            const asked = u.stamps?.[id] ?? u.stamp
+            if (found === undefined) setBatches(await recordBatchEvent(uid, { kind: 'undo', batch: entry.id, table, stamp: asked, id, removed: true }))
+            else if (sameStamp(found, asked)) again = true
+            else setBatches(await recordBatchEvent(uid, { kind: 'undo', batch: entry.id, table, stamp: asked, id, removed: false }))
+          }
+        }
+        // Still there as the batch wrote them: their removal goes out again.
+        if (again) await continueOperation(ports, entry.id, (x) => (x.undo ? { ...x, undo: { ...x.undo, phase: 'prepared' } } : x))
+      }
+      const s = entry.restore?.settings
+      const us = entry.undo?.settings
+      const st = batchStatus(entry, batchLiveRef.current(entry))
+      const settingsOpen = !entry.undone ? st.settings.unknown : []
+      const undoOpen = st.undo?.settings?.unknown ?? []
+      if (s && (settingsOpen.length > 0 || undoOpen.length > 0)) {
+        const row = await getSettings(uid)
+        const defaults = DEFAULT_SETTINGS as unknown as Partial<Record<SettingsField, unknown>>
+        const values = row as unknown as Partial<Record<SettingsField, unknown>> | null
+        if (settingsOpen.length > 0) {
+          const found = checkSettings(s, values, settingsOpen, false, defaults)
+          setBatches(await recordBatchEvent(uid, { kind: 'settings', batch: entry.id, editedAt: s.editedAt, ...found }))
+        }
+        if (us && undoOpen.length > 0) {
+          const found = checkSettings(s, values, undoOpen, true, defaults)
+          setBatches(await recordBatchEvent(uid, { kind: 'settings', batch: entry.id, undo: true, editedAt: us.editedAt ?? entry.undo?.at, ...found }))
+        }
+      }
+    },
+    [activeUserId, portsFor]
+  )
+
+  /** What a batch's recovery button does (see lib/batchStatus.ts); picking the file again is the dialog's. */
+  const recoverBatch = useCallback(
+    async (b: ImportBatch, action: RecoveryAction): Promise<void> => {
+      const uid = activeUserId
+      if (!uid) return
+      const ports = portsFor(uid)
+      try {
+        if (action === 'resume') await withOperation(uid, b.id, () => queueParts(ports, b.id))
+        else if (action === 'check') await checkBatch(b)
+        else if (action === 'retrySettings') await continueOperation(ports, b.id, (x) => retrySettingsOf(x, new Date().toISOString()))
+        else if (action === 'saveAgain') {
+          const all = await Promise.all([sync.saveAgain(), moves.saveAgain(), saveSettingsAgain()])
+          if (!all.every(Boolean)) setToast({ kind: 'error', text: t('toast.notSaved') })
+        } else if (action === 'sendAgain') {
+          await Promise.all([sync.retryRefused(), moves.retryRefused()])
+        }
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [activeUserId, portsFor, checkBatch, sync, moves, saveSettingsAgain, showError, t]
+  )
+
+  // Written down but not queued yet: lost if the user signs out before it goes on.
+  const unqueued = useMemo(() => batches.reduce((n, b) => n + unqueuedOf(b), 0), [batches])
 
   if (loading) return <Boot />
   // Opened from a password reset email: the new password first.
@@ -730,7 +938,7 @@ export default function App() {
           status={sessionEnded ? 'signedout' : badgeStatus}
           queuedCount={badgeQueued}
           pendingCount={openList.length}
-          unsynced={badgeQueued + (settingsDirty ? 1 : 0) + refusedList.length}
+          unsynced={badgeQueued + (settingsDirty ? 1 : 0) + refusedList.length + unqueued}
           theme={theme}
           onOpenData={() => {
             refreshBatches()
@@ -946,15 +1154,7 @@ export default function App() {
             onImport={handleImport}
             onRestore={handleRestore}
             onUndoBatch={(b) => undoBatch(b)}
-            onSaveAgain={() => {
-              void Promise.all([sync.saveAgain(), moves.saveAgain(), saveSettingsAgain()]).then((all) => {
-                if (!all.every(Boolean)) setToast({ kind: 'error', text: t('toast.notSaved') })
-              })
-            }}
-            onRetryRefused={() => {
-              void sync.retryRefused()
-              void moves.retryRefused()
-            }}
+            onRecover={recoverBatch}
             onClose={() => setDataOpen(false)}
           />
         )}

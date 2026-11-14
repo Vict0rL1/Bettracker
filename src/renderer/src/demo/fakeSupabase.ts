@@ -60,6 +60,7 @@ export interface FakeSupabaseConfig {
  *                    `__win`);
  *                    `table:list` holds only the reads of the whole list
  *                    (the app's refresh), not a lookup of some rows;
+ *                    `e2e:hold-reads@<window>` holds that window's alone;
  *  - `e2e:migrated-007`  set: the database has migration 007: a deleted bet
  *                    or move leaves its last `updated_at` behind
  *                    (`e2e:tombstones`), and an insert of that id that is not
@@ -133,8 +134,10 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       // `table:list`: only the reads of the whole list (no filter), not a lookup of some rows.
       const listRead = Object.keys(q.eq).length === 0 && Object.keys(q.within).length === 0
       const holding = (): boolean => {
-        const v = localStorage.getItem(key('hold-reads'))
-        return q.action === 'select' && (v === q.table || (v === `${q.table}:list` && listRead))
+        if (q.action !== 'select') return false
+        return [localStorage.getItem(key('hold-reads')), localStorage.getItem(key(`hold-reads@${win}`))].some(
+          (v) => v === q.table || (v === `${q.table}:list` && listRead)
+        )
       }
       const held = holding()
       if (held) count('reads-held')

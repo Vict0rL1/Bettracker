@@ -128,8 +128,29 @@ async function saveGuarded(
   if (row) return row
   const back = await supabase.from(TABLE).select('*').eq('user_id', user_id).maybeSingle()
   if (back.error) throw describeError(back.error, back.status)
-  return back.data ? toSettings(back.data as Row) : null
+  if (back.data) return toSettings(back.data as Row)
+  // No row yet: the server holds the defaults. A guarded field whose guard is
+  // the default applies (a first save); one whose guard is not, finds the
+  // value it was guarded against gone, and is left as the defaults have it.
+  const fits = guarded.filter((k) => sameSetting(guard[k] ?? null, (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[k] ?? null))
+  if (fits.length === 0) return { ...DEFAULT_SETTINGS }
+  const first = Object.fromEntries(fits.map((k) => [k, patch[k]])) as SettingsPatch
+  const inserted = await supabase
+    .from(TABLE)
+    .insert({ user_id, ...toRowPatch(first), updated_at: editedAt })
+    .select()
+    .single()
+  if (inserted.error) {
+    // Another device's first save got there first: treat as a conflict.
+    if (inserted.error.code === '23505') return null
+    throw describeError(inserted.error, inserted.status)
+  }
+  return toSettings(inserted.data as Row)
 }
+
+/** Equal as settings: numbers within a cent (the server rounds), anything else exactly. */
+const sameSetting = (a: unknown, b: unknown): boolean =>
+  typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.005 : Object.is(a ?? null, b ?? null)
 
 export function subscribeToSettings(userId: string, onChange: () => void): () => void {
   const channel: RealtimeChannel = supabase

@@ -213,7 +213,15 @@ export interface SettingsPushHooks {
   settle: (sent: PendingSettings) => void | Promise<void>
   /** Resolves with the saved row, or null when a newer edit already landed. */
   save: (p: PendingSettings) => Promise<Settings | null>
+  /**
+   * `sent` has had this answer: told before it is settled, so a reload in
+   * between tells it again (the patch is sent again), never loses it.
+   */
+  answered?: (sent: PendingSettings, out: SettingsAnswer) => void | Promise<void>
 }
+
+/** The answer a pending patch had: saved (the row as it is then), beaten by a newer edit, or refused for good. */
+export type SettingsAnswer = { stop: 'saved'; row: Settings } | { stop: 'conflict' } | { stop: 'rejected'; error: unknown }
 
 /**
  * Push the one queued settings patch, with the same keep-or-drop rule as the
@@ -223,17 +231,21 @@ export interface SettingsPushHooks {
 export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushResult | null> {
   const p = await h.pending()
   if (!p) return null
+  let saved: Settings | null
   try {
-    const saved = await h.save(p)
-    await h.settle(p)
-    return saved ? { stop: 'saved', row: saved } : { stop: 'conflict' }
+    saved = await h.save(p)
   } catch (err) {
     const failure = classifySyncError(err)
     if (failure === 'offline') return { stop: 'offline' }
     if (failure !== 'rejected') return { stop: failure, error: err }
+    await h.answered?.(p, { stop: 'rejected', error: err })
     await h.settle(p)
     return { stop: 'rejected', error: err }
   }
+  const out: SettingsAnswer = saved ? { stop: 'saved', row: saved } : { stop: 'conflict' }
+  await h.answered?.(p, out)
+  await h.settle(p)
+  return out
 }
 
 /**

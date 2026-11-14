@@ -3598,7 +3598,37 @@ tbody tr.is-selected {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
-  flex-shrink: 0;
+  /* The name keeps its room: the buttons wrap before they squeeze it. */
+  flex: 0 1 auto;
+  max-width: 62%;
+}
+
+/* A batch with something to do: its buttons go under its name. */
+.data-batch.has-recover {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.data-batch.has-recover .data-batch-actions {
+  max-width: none;
+  justify-content: flex-start;
+}
+
+@media (max-width: 520px) {
+  .data-batch {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .data-batch-actions {
+    max-width: none;
+    justify-content: stretch;
+  }
+
+  .data-batch-actions > .btn {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 
 /* A restore's result: what was added, what waits, what failed and what to do. */
@@ -3636,10 +3666,28 @@ tbody tr.is-selected {
   border-left-color: var(--amber, var(--text-3));
 }
 
+.result-part.is-preparing {
+  border-left-color: var(--amber, var(--text-3));
+}
+
+.result-part.is-done.has-gap {
+  border-left-color: var(--amber, var(--text-3));
+}
+
 .result-part.is-failed,
 .result-part.is-held,
-.result-part.is-refused {
+.result-part.is-refused,
+.result-part.is-unknown {
   border-left-color: var(--red);
+}
+
+/* One fact per line: what was added, what waits, what needs the user. */
+.result-line {
+  display: block;
+}
+
+.result-reason {
+  margin: 0;
 }
 
 .result-overall {

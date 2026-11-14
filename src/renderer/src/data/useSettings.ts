@@ -3,14 +3,17 @@ import { DEFAULT_SETTINGS, type Settings, type SettingsPatch } from '../../../sh
 import {
   afterSettingsAnswer,
   editSettings,
+  fieldTime,
   loadSettingsCache,
   loadSettingsOutbox,
+  pendingWrite,
   queueKeys,
   saveSettingsCache,
   saveSettingsOutbox,
+  supersededBy,
   type PendingSettings
 } from './offline'
-import { backoff, migrationNotice, pushSettings, retryPlan, syncStatus, type SettingsPushResult, type SyncStatus } from './drain'
+import { backoff, migrationNotice, pushSettings, retryPlan, syncStatus, type SettingsAnswer, type SettingsPushResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
 import { journalEntry, journalRemove, newerSettings, replayJournals, type JournalEdit, type SettingsSaveState } from './settingsJournal'
@@ -44,13 +47,61 @@ export interface SettingsSync {
   saveState: SettingsSaveState
   /** The edits waiting to reach the server, field by field (null: none). */
   pendingPatch: SettingsPatch | null
+  /** The operation each pending field's write belongs to (see PendingSettings.fieldOrigin). */
+  pendingOrigins: Partial<Record<keyof SettingsPatch, string>>
+  /** True while storage refuses the pending patch (it is in this window only). */
+  held: boolean
   /**
    * Resolves once the change is pending: true when this device's storage
    * holds it. `guard`: fields that apply only where the server still holds
-   * that value (see PendingSettings.guard).
+   * that value (see PendingSettings.guard). `origin`: the operation the write
+   * is part of, which hears its answer (see settingsOutcomes); `editedAt`:
+   * the time it was made (its generation); `once`: not again when that write
+   * is pending already (a resume after the mark was lost).
    */
-  update: (patch: SettingsPatch, opts?: { guard?: SettingsPatch }) => Promise<boolean>
+  update: (patch: SettingsPatch, opts?: { guard?: SettingsPatch; origin?: string; editedAt?: string; once?: boolean }) => Promise<boolean>
   saveAgain: () => Promise<boolean>
+  /** The pending patch as stored, read under its lock. */
+  queueFresh: () => Promise<PendingSettings | null>
+}
+
+/** What a write of an operation came to, field by field (see settingsOutcomes). */
+export interface SettingsOutcomeEvent {
+  origin: string
+  /** When the write was made: its generation. */
+  editedAt?: string
+  confirmed: (keyof SettingsPatch)[]
+  kept: (keyof SettingsPatch)[]
+  rejected: (keyof SettingsPatch)[]
+  reason?: string
+}
+
+/** Equal as settings: numbers within a cent (the server rounds), anything else exactly. */
+const sameSetting = (a: unknown, b: unknown): boolean =>
+  typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.005 : Object.is(a ?? null, b ?? null)
+
+/**
+ * The answer to a sent patch, for each operation that wrote some of it (see
+ * PendingSettings.fieldOrigin), by the time each write was made: a field the
+ * saved row holds as written is confirmed; one it holds otherwise, or a patch
+ * beaten by a newer edit, kept (a later change won); a refusal, rejected. A
+ * field the user set (no origin) is nobody's to hear.
+ */
+export function settingsOutcomes(sent: PendingSettings, out: SettingsAnswer): SettingsOutcomeEvent[] {
+  const by = new Map<string, SettingsOutcomeEvent>()
+  const reason = out.stop === 'rejected' ? (out.error instanceof Error ? out.error.message : String(out.error)) : undefined
+  for (const k of Object.keys(sent.patch) as (keyof SettingsPatch)[]) {
+    const origin = sent.fieldOrigin?.[k]
+    if (!origin) continue
+    const editedAt = fieldTime(sent, k)
+    const key = `${origin}|${editedAt}`
+    const e = by.get(key) ?? { origin, editedAt, confirmed: [], kept: [], rejected: [], ...(reason ? { reason } : {}) }
+    if (out.stop === 'rejected') e.rejected.push(k)
+    else if (out.stop === 'saved' && sameSetting(out.row[k as keyof Settings], sent.patch[k])) e.confirmed.push(k)
+    else e.kept.push(k)
+    by.set(key, e)
+  }
+  return [...by.values()]
 }
 
 const RETRY_INTERVAL_MS = 20_000
@@ -67,7 +118,8 @@ export function useSettings(
   userId: string | null,
   canSync: boolean,
   onError: (err: unknown) => void,
-  onNotice?: (code: 'conflict') => void
+  onNotice?: (code: 'conflict') => void,
+  onOutcome?: (e: SettingsOutcomeEvent) => void | Promise<void>
 ): SettingsSync {
   const [server, setServerState] = useState<Settings | null>(null)
   const [pending, setPendingState] = useState<PendingSettings | null>(null)
@@ -108,6 +160,17 @@ export function useSettings(
   onErrorRef.current = onError
   const onNoticeRef = useRef(onNotice)
   onNoticeRef.current = onNotice
+  const onOutcomeRef = useRef(onOutcome)
+  onOutcomeRef.current = onOutcome
+  // An operation's write answered: into its history. Never in the way of the sync.
+  const tellOutcome = useCallback(async (e: SettingsOutcomeEvent): Promise<void> => {
+    if (userRef.current !== userId) return
+    try {
+      await onOutcomeRef.current?.(e)
+    } catch {
+      // The history is not in the way of the settings.
+    }
+  }, [userId])
 
   const store = useMemo(
     () =>
@@ -201,7 +264,10 @@ export function useSettings(
         pushSettings({
           pending: () => store.fresh(),
           settle: async (sent) => void (await change((current) => afterSettingsAnswer(current, sent))),
-          save: (p) => saveSettings(p.patch, p.editedAt, userId, p.guard)
+          save: (p) => saveSettings(p.patch, p.editedAt, userId, p.guard),
+          answered: async (sent, answer) => {
+            for (const e of settingsOutcomes(sent, answer)) await tellOutcome(e)
+          }
         })
       )
     } finally {
@@ -229,7 +295,7 @@ export function useSettings(
     // Answered (saved, beaten or refused): an edit made while it was out is
     // still pending, and goes now.
     if ((out?.stop === 'saved' || out?.stop === 'conflict' || out?.stop === 'rejected') && pendingRef.current) setTimeout(() => void syncNowRef.current(), 0)
-  }, [userId, store, change, setServer, refresh, report, reached])
+  }, [userId, store, change, setServer, refresh, report, reached, tellOutcome])
   syncNowRef.current = syncNow
 
   // Boot from the device cache.
@@ -259,7 +325,7 @@ export function useSettings(
     let live = true
     void replayJournals(userId, async (edits) => {
       if (!live || !store) return false
-      const r = await store.update((current) => edits.reduce<PendingSettings | null>((acc, e) => editSettings(acc, e.patch, e.editedAt, e.guard), current))
+      const r = await store.update((current) => edits.reduce<PendingSettings | null>((acc, e) => editSettings(acc, e.patch, e.editedAt, e.guard, e.origin), current))
       if (live) mirror(r.value)
       if (r.saved) setTimeout(() => void syncNowRef.current(), 0)
       return r.saved
@@ -323,19 +389,30 @@ export function useSettings(
   }, [userId, syncNow, refresh])
 
   const update = useCallback(
-    async (patch: SettingsPatch, opts: { guard?: SettingsPatch } = {}): Promise<boolean> => {
+    async (patch: SettingsPatch, opts: { guard?: SettingsPatch; origin?: string; editedAt?: string; once?: boolean } = {}): Promise<boolean> => {
       if (!userId) return false
-      const editedAt = new Date().toISOString()
+      const editedAt = opts.editedAt ?? new Date().toISOString()
       // Into this window's journal first, at once: the queue waits for a lock
       // other windows share, and a reload or a closed window meanwhile must
       // not lose the edit (the next start queues it, see replayJournals).
-      const entry = journalEntry(userId, { patch, editedAt, ...(opts.guard ? { guard: opts.guard } : {}) })
+      const entry = journalEntry(userId, { patch, editedAt, ...(opts.guard ? { guard: opts.guard } : {}), ...(opts.origin ? { origin: opts.origin } : {}) })
       const item = { patch, journaled: entry !== null }
       setStoring((xs) => [...xs, item])
+      // Decided once, on the patch as stored then (the change may be replayed, see store.ts).
+      let decided: { skip: boolean; superseded: ReturnType<typeof supersededBy> } | null = null
       try {
         // Merged into what is pending now, other windows' edits included,
         // field by field by edit time (see editSettings).
-        const saved = await change((current) => editSettings(current, patch, editedAt, opts.guard))
+        const saved = await change((current) => {
+          decided ??= {
+            skip: opts.once === true && opts.origin !== undefined && pendingWrite(current, opts.origin, editedAt),
+            superseded: supersededBy(current, patch, editedAt, opts.origin)
+          }
+          return decided.skip ? current : editSettings(current, patch, editedAt, opts.guard, opts.origin)
+        })
+        // Writes of operations this edit replaced before they went: a later change won.
+        const replaced = decided as { skip: boolean; superseded: ReturnType<typeof supersededBy> } | null
+        if (replaced && !replaced.skip) for (const x of replaced.superseded) await tellOutcome({ origin: x.origin, editedAt: x.editedAt, confirmed: [], kept: x.fields, rejected: [] })
         // In the queue's storage now (with any edit held before it): out of
         // the journal. Storage refused the queue: the journal keeps it on
         // this device until the queue is stored.
@@ -351,7 +428,7 @@ export function useSettings(
         setStoring((xs) => xs.filter((x) => x !== item))
       }
     },
-    [userId, change]
+    [userId, change, tellOutcome]
   )
 
   const saveAgain = useCallback(async (): Promise<boolean> => {
@@ -380,6 +457,8 @@ export function useSettings(
         : 'synced'
 
   const pendingPatch = pending || storing.length > 0 ? { ...(pending?.patch ?? {}), ...Object.assign({}, ...storing.map((x) => x.patch)) } : null
+  const pendingOrigins = useMemo(() => ({ ...(pending?.fieldOrigin ?? {}) }), [pending])
+  const queueFresh = useCallback(async (): Promise<PendingSettings | null> => (store ? store.fresh() : pendingRef.current), [store])
 
-  return { settings, dirty, blocked, loaded: server !== null || blocked, unsaved, status, saveState, pendingPatch, update, saveAgain }
+  return { settings, dirty, blocked, loaded: server !== null || blocked, unsaved, status, saveState, pendingPatch, pendingOrigins, held, update, saveAgain, queueFresh }
 }

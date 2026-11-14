@@ -83,10 +83,21 @@ describe('restore and Undo: only what the batch wrote, and nobody changed since'
       // In an import still queued: its delete goes after it.
       { opId: 'imp', kind: 'bulk-add', entries: [{ id: 'imported', input }], queuedAt: S, batch: 'B' }
     ]
-    await settledHere(queue, [{ id: 'cancelled' }, { id: 'kept' }, { id: 'sent' }, { id: 'imported' }], 'B', 'moves', async (e) => void told.push(e))
+    await settledHere(
+      queue,
+      [
+        { id: 'cancelled', stamp: S },
+        { id: 'kept', stamp: S },
+        { id: 'sent', stamp: S },
+        { id: 'imported', stamp: S }
+      ],
+      'B',
+      'moves',
+      async (e) => void told.push(e)
+    )
     expect(told).toEqual([
-      { kind: 'undo', batch: 'B', table: 'moves', id: 'cancelled', removed: true },
-      { kind: 'undo', batch: 'B', table: 'moves', id: 'kept', removed: false }
+      { kind: 'undo', batch: 'B', table: 'moves', stamp: S, id: 'cancelled', removed: true },
+      { kind: 'undo', batch: 'B', table: 'moves', stamp: S, id: 'kept', removed: false }
     ])
   })
 
@@ -96,7 +107,8 @@ describe('restore and Undo: only what the batch wrote, and nobody changed since'
       { opId: 'old', kind: 'bulk-add', entries: [{ id: 'd', input }], queuedAt: S },
       undo('z')
     ]
-    expect(Object.fromEntries(queuedByBatch(q))).toEqual({ B: 3, old: 1 })
+    // An import's rows not yet confirmed, and an Undo's removals, each counted for what it is.
+    expect(Object.fromEntries(queuedByBatch(q))).toEqual({ B: { adds: 2, removals: 1 }, old: { adds: 1, removals: 0 } })
   })
 })
 
@@ -228,36 +240,41 @@ describe('a change the server refused is never in neither place', () => {
 })
 
 describe('a read answered late never undoes what another window got confirmed', () => {
-  it('lays over a read what other windows confirmed after it went out, in order, and not its own', () => {
+  const noVersions = (): Promise<null> => Promise.resolve(null)
+
+  it('lays over a read what other windows confirmed after it went out, in order, and not its own', async () => {
     let clock = 1000
     const key = 'bettracker:confirmed-bets:u'
-    const here = sharedLog<{ op: PendingOp; row: Bet | null }>(key, () => clock, 'win-here')
-    const there = sharedLog<{ op: PendingOp; row: Bet | null }>(key, () => clock, 'win-there')
+    const here = sharedLog<{ op: PendingOp; row: Bet | null }>(key, { now: () => clock, win: 'win-here', versions: noVersions, channel: null })
+    const there = sharedLog<{ op: PendingOp; row: Bet | null }>(key, { now: () => clock, win: 'win-there', versions: noVersions, channel: null })
     const kept = bet({ id: 'kept' })
     const gone = bet({ id: 'gone' })
     // Confirmed before the read went out: the read has it.
-    there.record({ op: { opId: 'x', kind: 'delete', id: 'older' }, row: null })
+    await there.record({ op: { opId: 'x', kind: 'delete', id: 'older' }, row: null })
     clock = 2000
-    const read = here.read()
+    const read = await here.begin()
     clock = 3000
     // Another window deletes one bet and adds another while the read is out.
-    there.record({ op: { opId: 'd', kind: 'delete', id: 'gone' }, row: null })
+    await there.record({ op: { opId: 'd', kind: 'delete', id: 'gone' }, row: null })
     const added = bet({ id: 'added' })
-    there.record({ op: { opId: 'n', kind: 'add', id: 'added', input, queuedAt: S }, row: added })
+    await there.record({ op: { opId: 'n', kind: 'add', id: 'added', input, queuedAt: S }, row: added })
     // This window's own confirmations are laid over by its own log, not this one.
-    here.record({ op: { opId: 'o', kind: 'delete', id: 'kept' }, row: null })
-    const rows = read.over([kept, gone], (acc, c) => reconcile(acc, c.op, c.row))
+    await here.record({ op: { opId: 'o', kind: 'delete', id: 'kept' }, row: null })
+    let rows: Bet[] = []
+    expect(await read.finish([kept, gone], (acc, c) => reconcile(acc, c.op, c.row), (r) => (rows = r))).toBe(true)
     expect(rows.map((b) => b.id).sort()).toEqual(['added', 'kept'])
   })
 
-  it('forgets entries older than any read can be', () => {
+  it('forgets entries older than any read can be, and raises its floor past them', async () => {
     let clock = 0
     const key = 'bettracker:confirmed-moves:u'
-    const log = sharedLog<number>(key, () => clock, 'w')
-    log.record(1)
+    const log = sharedLog<number>(key, { now: () => clock, win: 'w', versions: noVersions, channel: null })
+    await log.record(1)
     clock = 11 * 60_000
-    log.record(2)
-    expect((JSON.parse(localStorage.getItem(key) ?? '[]') as { change: number }[]).map((e) => e.change)).toEqual([2])
+    await log.record(2)
+    const state = JSON.parse(localStorage.getItem(key) ?? 'null') as { floor: number; entries: { change: number }[] }
+    expect(state.entries.map((e) => e.change)).toEqual([2])
+    expect(state.floor).toBe(1)
   })
 })
 
@@ -321,20 +338,29 @@ describe('restore result: what is known, never more', () => {
     stamp: S,
     restore: { skippedBets: 2, skippedMoves: 0, skippedDuplicates: 1, settings: { before: { oddsFormat: 'american' }, after: { oddsFormat: 'decimal' }, editedAt: S }, failed: [], held: [] }
   }
-  const live = (over: Partial<BatchLive> = {}): BatchLive => ({ betsQueued: 0, movesQueued: 0, refused: false, settingsPending: null, ...over })
+  const none = { adds: 0, removals: 0 }
+  const live = (over: Partial<BatchLive> = {}): BatchLive => ({ bets: none, moves: none, betsHeld: false, movesHeld: false, refused: false, settingsOrigins: {}, settingsHeld: false, ...over })
 
   it('rows still queued are waiting, not added; settings still pending are waiting too', () => {
-    const st = batchStatus(entry, live({ betsQueued: 3, movesQueued: 1, settingsPending: { oddsFormat: 'decimal' } }))
+    const st = batchStatus(entry, live({ bets: { adds: 3, removals: 0 }, moves: { adds: 1, removals: 0 }, settingsOrigins: { oddsFormat: 'B' } }))
     expect(st.bets).toMatchObject({ state: 'waiting', made: 0, waiting: 3 })
     expect(st.moves.state).toBe('waiting')
     expect(st.settings.state).toBe('waiting')
     expect(st.complete).toBe(false)
   })
 
-  it('once nothing waits: what the server made is added, the rest was there already', () => {
-    const st = batchStatus({ ...entry, made: ['a', 'b'], madeMoves: ['m'] }, live())
-    expect(st.bets).toMatchObject({ state: 'done', made: 2, alreadyThere: 1 })
-    expect(st.moves).toMatchObject({ state: 'done', made: 1, alreadyThere: 0 })
+  it('nothing waiting and no answer is not "added": it has no answer, and Check again is offered', () => {
+    const st = batchStatus(entry, live())
+    expect(st.bets).toMatchObject({ state: 'unknown', made: 0, unknown: 3 })
+    expect(st.settings.state).toBe('unknown')
+    expect(st.complete).toBe(false)
+    expect(st.actions).toContain('check')
+  })
+
+  it('once the server answered: what it made is added, what it already had was there', () => {
+    const st = batchStatus({ ...entry, made: ['a', 'b'], present: ['c'], madeMoves: ['m'], restore: { ...entry.restore!, settings: { ...entry.restore!.settings!, confirmed: ['oddsFormat'] } } }, live())
+    expect(st.bets).toMatchObject({ state: 'done', made: 2, present: 1 })
+    expect(st.moves).toMatchObject({ state: 'done', made: 1, present: 0 })
     expect(st.settings.state).toBe('done')
     expect(st.skipped).toEqual({ bets: 2, moves: 0, duplicates: 1 })
     expect(st.complete).toBe(true)
@@ -342,11 +368,11 @@ describe('restore result: what is known, never more', () => {
 
   it('a part that failed, was refused, or is only in this window says so, and the whole is not complete', () => {
     const failed = { ...entry, restore: { ...entry.restore!, failed: ['moves' as const], held: ['bets' as const] } }
-    const st = batchStatus(failed, live({ betsQueued: 3, movesQueued: 0 }))
+    const st = batchStatus(failed, live({ bets: { adds: 3, removals: 0 } }))
     expect(st.bets.state).toBe('held')
     expect(st.moves.state).toBe('failed')
     expect(st.complete).toBe(false)
-    expect(batchStatus(entry, live({ refused: true, betsQueued: 3 })).bets.state).toBe('refused')
+    expect(batchStatus({ ...entry, rejected: ['a', 'b', 'c'] }, live({ refused: true })).bets.state).toBe('refused')
   })
 
   it('an Undo counts what the server removed and kept, and what is still to go', () => {
@@ -355,6 +381,9 @@ describe('restore result: what is known, never more', () => {
       undone: true,
       undo: { at: S, stamp: S, bets: ['a', 'b'], moves: ['m'], changedHere: 1, goneHere: 0, removed: ['a'], kept: ['m'], settings: { reverted: ['oddsFormat'], kept: [] } }
     }
-    expect(batchStatus(undone, live({ betsQueued: 1 })).undo).toEqual({ waiting: 1, removed: 1, kept: 1, changedHere: 1, goneHere: 0, settings: { reverted: ['oddsFormat'], kept: [] } })
+    const undo = batchStatus(undone, live({ bets: { adds: 0, removals: 1 } })).undo
+    expect(undo).toMatchObject({ waiting: 1, removed: 1, kept: 1, changedHere: 1, goneHere: 0 })
+    // From before answers were recorded: what it put back has no answer yet (asked again), never "put back".
+    expect(undo?.settings).toMatchObject({ fields: ['oddsFormat'], confirmed: [], unknown: ['oddsFormat'], keptHere: [] })
   })
 })

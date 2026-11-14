@@ -2,17 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BankrollMove, MoveInput } from '../../../shared/types'
 import { newId } from '../lib/uuid'
 import { normalizeMove } from '../lib/validate'
-import { sharedLog } from './confirmed'
+import { MAX_READS, REREAD_MS, sharedLog } from './confirmed'
 import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { SignedOutError } from './errors'
-import type { BatchEvent } from './imports'
+import { addAnswer, opsAsEvents, undoAnswer, type BatchEvent, type MovePayload } from './imports'
+import { oneAtATime } from './oneAtATime'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
   applyMoveOutbox,
   confirmedKey,
-  insertStamp,
   readdStamp,
-  sameStamp,
   loadMoveCache,
   loadMovesRefused,
   queueKeys,
@@ -24,7 +23,7 @@ import {
   type MoveOp,
   type Refused
 } from './offline'
-import { queuedByBatch, refusedBatches, settledHere, useOpQueue } from './useOpQueue'
+import { addsQueued, queuedByBatch, refusedBatches, settledHere, useOpQueue, type BatchQueued } from './useOpQueue'
 
 export interface MoveSync {
   /**
@@ -61,8 +60,14 @@ export interface MoveSync {
   restoreMoves: (ms: readonly BankrollMove[], opts: { batch: string; stamp: string }) => Promise<boolean>
   /** The Undo of a restore: remove these moves only where they still carry their stamp (see useBetSync.undoBets). */
   undoMoves: (targets: readonly { id: string; stamp: string }[], batch: string) => Promise<boolean>
+  /** As useBetSync's queueBatch: a batch's moves, unless that generation of it is queued already. */
+  queueBatch: (payload: readonly MovePayload[], o: { batch: string; stamp: string }) => Promise<{ saved: boolean; queued: boolean }>
+  /** The queue as stored, read under its lock. */
+  queueFresh: () => Promise<MoveOp[]>
+  /** True while storage refuses the queue (it is in this window only). */
+  held: boolean
   /** As useBetSync's. */
-  batchQueued: ReadonlyMap<string, number>
+  batchQueued: ReadonlyMap<string, BatchQueued>
   batchRefused: ReadonlySet<string>
   retryRefused: () => Promise<boolean>
   discardRefused: () => Promise<void>
@@ -141,6 +146,7 @@ export function useMoves(
   }, [])
   // As useBetSync: confirmations for reads in other windows (see confirmed.ts).
   const shared = useMemo(() => (userId ? sharedLog<{ op: MoveOp; row: BankrollMove | null }>(confirmedKey(userId, 'moves')) : null), [userId])
+  useEffect(() => () => shared?.close(), [shared])
 
   const queue = useOpQueue<MoveInput>({
     userId,
@@ -151,6 +157,9 @@ export function useMoves(
     readRefused: loadMovesRefused,
     saveRefused: saveMovesRefused,
     onRefused: (err) => onErrorRef.current(err),
+    onBatchOps: async (kind, ops, reason) => {
+      for (const e of opsAsEvents(kind, 'moves', ops, reason)) await tell(e)
+    },
     newId
   })
   // Each of these keeps its identity from render to render (the queue object itself does not).
@@ -194,31 +203,64 @@ export function useMoves(
     setRetryingState(next)
   }, [])
 
-  const refresh = useCallback(async (): Promise<void> => {
+  // As useBetSync: a read the shared log could not vouch for, read again later.
+  const rereadRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshRef = useRef<() => Promise<void>>(async () => {})
+
+  /** As useBetSync's readOnce. */
+  const readOnce = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
-    const read = confirmedRef.current.read()
-    const elsewhere = shared?.read()
-    try {
-      const got = await getMoves(userId)
-      const rows = read.over(elsewhere ? elsewhere.over(got, (acc, c) => reconcileMove(acc, c.op, c.row)) : got)
-      if (userRef.current !== userId) return
-      setServer(rows)
-      setOffline(false)
-      tableMissingRef.current = false
-      setTableReady(true)
-      setBehind(false)
-    } catch (err) {
-      if (userRef.current !== userId) return
-      const failed = afterFailedRead(err, serverRef.current)
-      setOffline(failed.offline)
-      // Only the missing table changes the snapshot: no table, no moves yet.
-      if (failed.server !== null && failed.server !== serverRef.current) setServer(failed.server)
-      if (failed.tableMissing) tableMissingRef.current = true
-      if (failed.report) onErrorRef.current(err)
-    } finally {
-      read.end()
+    if (rereadRef.current) clearTimeout(rereadRef.current)
+    rereadRef.current = null
+    for (let i = 0; i < MAX_READS; i++) {
+      const read = confirmedRef.current.read()
+      const elsewhere = shared ? await shared.begin() : null
+      let got: BankrollMove[]
+      try {
+        got = await getMoves(userId)
+      } catch (err) {
+        read.end()
+        elsewhere?.cancel()
+        if (userRef.current !== userId) return
+        const failed = afterFailedRead(err, serverRef.current)
+        setOffline(failed.offline)
+        // Only the missing table changes the snapshot: no table, no moves yet.
+        if (failed.server !== null && failed.server !== serverRef.current) setServer(failed.server)
+        if (failed.tableMissing) tableMissingRef.current = true
+        if (failed.report) onErrorRef.current(err)
+        return
+      }
+      if (userRef.current !== userId) {
+        read.end()
+        elsewhere?.cancel()
+        return
+      }
+      const install = (rows: BankrollMove[]): void => {
+        setServer(read.over(rows))
+        setOffline(false)
+        tableMissingRef.current = false
+        setTableReady(true)
+        setBehind(false)
+      }
+      let installed = true
+      try {
+        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcileMove(acc, c.op, c.row), install)
+        else install(got)
+      } finally {
+        read.end()
+      }
+      if (installed || userRef.current !== userId) return
     }
+    rereadRef.current = setTimeout(() => void refreshRef.current(), REREAD_MS)
   }, [userId, setServer, setBehind, shared])
+
+  const refresh = useMemo(() => oneAtATime(readOnce, () => userRef.current === userId), [readOnce, userId])
+  refreshRef.current = refresh
+
+  useEffect(() => {
+    if (!shared) return
+    return shared.onGap(() => void refreshRef.current())
+  }, [shared])
 
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
@@ -236,18 +278,22 @@ export function useMoves(
           // of this device to the same move is still queued (see useBetSync).
           if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
           // What a restore's adds and its Undo came to (see useBetSync).
-          if (op.kind === 'add' && op.batch && row && sameStamp(row.updatedAt, insertStamp(op))) {
-            await tell({ kind: 'made', batch: op.batch, table: 'moves', ids: [op.id] })
+          if (op.kind === 'add') {
+            const e = addAnswer(op, 'moves', row)
+            if (e) await tell(e)
           }
-          if (op.kind === 'delete' && op.batch && op.ifStamp) {
-            await tell({ kind: 'undo', batch: op.batch, table: 'moves', id: op.id, removed: row === null })
+          if (op.kind === 'delete') {
+            const e = undoAnswer(op, 'moves', row)
+            if (e) await tell(e)
           }
           if (userRef.current !== userId) return
           // Folded only into a snapshot this device has (see foldApplied).
           // The refresh after the drain brings the whole list.
           const change = (rows: readonly BankrollMove[]): BankrollMove[] => reconcileMove(rows, op, row)
           confirmedRef.current.confirmed(change)
-          shared?.record({ op, row })
+          // Into the shared log before anything shows or caches it (see confirmed.ts).
+          await shared?.record({ op, row })
+          if (userRef.current !== userId) return
           const next = foldApplied(serverRef.current, landedRef.current, change)
           if (next.server !== null) setServer(next.server)
           else {
@@ -330,6 +376,8 @@ export function useMoves(
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
       retryTimerRef.current = null
+      if (rereadRef.current) clearTimeout(rereadRef.current)
+      rereadRef.current = null
     }
   }, [userId])
 
@@ -455,10 +503,22 @@ export function useMoves(
   const undoMoves = useCallback(
     async (targets: readonly { id: string; stamp: string }[], batch: string): Promise<boolean> => {
       const saved = await mutateMany(targets.map(({ id, stamp }) => ({ opId: newId(), kind: 'delete', id, ifStamp: stamp, batch })))
-      await settledHere(outboxRef.current, targets, batch, 'moves', tell)
+      await settledHere(await queue.fresh(), targets, batch, 'moves', tell)
       return saved
     },
-    [mutateMany, outboxRef, tell]
+    [mutateMany, queue.fresh, tell]
+  )
+
+  const queueBatch = useCallback(
+    async (payload: readonly MovePayload[], o: { batch: string; stamp: string }): Promise<{ saved: boolean; queued: boolean }> => {
+      if (payload.length === 0) return { saved: true, queued: false }
+      // All checked before any is queued.
+      const ops: MoveOp[] = payload.map((p) => ({ opId: newId(), kind: 'add', id: p.id, input: normalizeMove(p.input), queuedAt: o.stamp, batch: o.batch }))
+      const r = await queue.enqueueIf((q) => addsQueued(q, o.batch, o.stamp), ops)
+      setTimeout(() => void syncNowRef.current(), 0)
+      return r
+    },
+    [queue.enqueueIf]
   )
   const batchQueued = useMemo(() => queuedByBatch(outbox), [outbox])
   const batchRefused = useMemo(() => refusedBatches(queue.refused), [queue.refused])
@@ -497,6 +557,9 @@ export function useMoves(
     restoreMove: restore,
     restoreMoves,
     undoMoves,
+    queueBatch,
+    queueFresh: queue.fresh,
+    held: queue.held,
     batchQueued,
     batchRefused,
     retryRefused,

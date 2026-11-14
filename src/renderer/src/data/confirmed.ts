@@ -10,62 +10,262 @@
  * — a bet deleted there back here, one added there gone — and write that copy
  * to the cache every window shows.
  *
- * So each confirmation is also written here, as data, with the time it came;
- * a read notes the time it went out, and lays over what it got every change
- * another window had confirmed since. Entries older than any read can be are
- * dropped. Storage full: nothing is kept, and a read in another window may
- * show the old list until the next one, as before.
+ * So each confirmation is also written here, numbered (`seq`), before the
+ * window that got it shows it or caches it; a read notes the number it went
+ * out at. Once it is in, it lays over what it got every change another window
+ * confirmed since, and is installed, all under the log's lock (no confirmation
+ * slips in between) — but only when the log still holds every one of them:
+ *  - it keeps the newest MAX_ENTRIES of the last KEEP_MS. What it lets go
+ *    raises its `floor`: a read that went out below the floor can't know what
+ *    it missed (more confirmations than are kept, or older than kept);
+ *  - an import's chunk is too big to keep: it is kept as "read again" (null);
+ *  - a log cleared to make room, or never there, starts a new `epoch`: a read
+ *    that went out under another one can't trust it;
+ *  - a window that could not write here (storage full) says so to the others
+ *    (`gap`, on a broadcast channel): every read out then is read again.
+ * Such a read is not installed: the caller reads again (see `finish`).
+ *
+ * The log is changed only under its lock, with the version fence of store.ts,
+ * so two windows writing at once never lose an entry or reuse a number, and
+ * never half-written: a write storage refuses is not made at all.
+ *
+ * What is left: a confirmation whose answer has not reached its window yet
+ * when a read here is installed. That window writes it here, then folds it
+ * into its copy and caches that, after this read: the cache every window shows
+ * ends up with it (see the hooks' storage listeners).
  */
-import { writeExpendable } from './store'
+import { queueStore, StorageWriteError, type QueueStore, type Versions } from './store'
 
 export interface ConfirmedEntry<C> {
+  seq: number
   /** When the confirmation came (this device's clock, shared by its windows). */
   at: number
   /** The window that got it. */
   win: string
-  change: C
+  /** What changed, to lay over a read; null: too big to keep, a read that overlaps it reads again. */
+  change: C | null
+}
+
+export interface ConfirmedLogState<C> {
+  /** Names this log since it started: a read that saw another one cannot trust it. '' while there is none. */
+  epoch: string
+  /** The last number given. */
+  seq: number
+  /** Every entry up to this number has been let go. */
+  floor: number
+  entries: ConfirmedEntry<C>[]
 }
 
 /** Longer than a read can take: each page gives up after 30 s, and a list is a few pages. */
-const KEEP_MS = 10 * 60_000
+export const KEEP_MS = 10 * 60_000
 /** At most this many entries are kept; the oldest go first. */
-const MAX_ENTRIES = 200
+export const MAX_ENTRIES = 200
+
+/** Reads in a row a refresh makes when the log can't vouch for what one got. */
+export const MAX_READS = 3
+/** Then what is shown stays, and it reads again after this long. */
+export const REREAD_MS = 2000
 
 /** This window, as the log names it. */
 export const WINDOW_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
-function readEntries<C>(key: string): ConfirmedEntry<C>[] {
+const empty = <C>(): ConfirmedLogState<C> => ({ epoch: '', seq: 0, floor: 0, entries: [] })
+
+/** The log's lock, by its key: `bettracker:confirmed-bets:<user>` → `bettracker:lock:confirmed-bets:<user>`. */
+export const lockName = (key: string): string => (key.startsWith('bettracker:') ? `bettracker:lock:${key.slice('bettracker:'.length)}` : `${key}:lock`)
+
+function readState<C>(key: string): ConfirmedLogState<C> {
   try {
-    const raw = JSON.parse(localStorage.getItem(key) ?? '[]') as unknown
-    return Array.isArray(raw) ? (raw as ConfirmedEntry<C>[]).filter((e) => typeof e?.at === 'number' && typeof e.win === 'string') : []
+    const raw = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<ConfirmedLogState<C>> | null
+    if (!raw || typeof raw.epoch !== 'string' || typeof raw.seq !== 'number' || typeof raw.floor !== 'number' || !Array.isArray(raw.entries)) return empty()
+    return {
+      epoch: raw.epoch,
+      seq: raw.seq,
+      floor: raw.floor,
+      entries: raw.entries.filter((e) => typeof e?.seq === 'number' && typeof e.at === 'number' && typeof e.win === 'string')
+    }
   } catch {
-    return []
+    return empty()
   }
 }
 
-export interface SharedLog<C> {
-  /** A change the server confirmed in this window. */
-  record: (change: C) => void
-  /** A read going out: once it is in, `over` lays on it what other windows confirmed since. */
-  read: () => { over: <T>(rows: T[], apply: (rows: readonly T[], change: C) => T[]) => T[] }
+/** Store the log, or throw: never half-kept. */
+function writeState<C>(key: string, state: ConfirmedLogState<C>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(state))
+  } catch (err) {
+    throw new StorageWriteError(err)
+  }
 }
 
-export function sharedLog<C>(key: string, now: () => number = Date.now, win: string = WINDOW_ID): SharedLog<C> {
+/**
+ * The log with one more confirmation: numbered after the last, the old and
+ * the too many let go (the floor rises past them). A log that was not there
+ * starts with a new epoch.
+ */
+export function appendConfirmed<C>(state: ConfirmedLogState<C>, entry: Omit<ConfirmedEntry<C>, 'seq'>, newEpoch: () => string): ConfirmedLogState<C> {
+  const epoch = state.epoch || newEpoch()
+  const seq = state.seq + 1
+  const all = [...state.entries, { ...entry, seq }]
+  const kept = all.filter((e) => e.at > entry.at - KEEP_MS).slice(-MAX_ENTRIES)
+  const floor = all.filter((e) => !kept.includes(e)).reduce((max, e) => Math.max(max, e.seq), state.floor)
+  return { epoch, seq, floor, entries: kept }
+}
+
+/** Where a read went out: the log's epoch and last number then. */
+export interface ReadStart {
+  epoch: string
+  seq: number
+}
+
+/**
+ * What a read that went out at `start` can lay over what it got, from the log
+ * as it is now: the other windows' changes since, in order; or null when the
+ * log cannot vouch for them all (it started over, let some go, or keeps one
+ * only as "read again").
+ */
+export function changesSince<C>(state: ConfirmedLogState<C>, start: ReadStart, win: string): C[] | null {
+  if (state.epoch !== start.epoch) return null
+  if (state.floor > start.seq) return null
+  const since = state.entries.filter((e) => e.seq > start.seq && e.win !== win).sort((a, b) => a.seq - b.seq)
+  if (since.some((e) => e.change === null)) return null
+  return since.map((e) => e.change as C)
+}
+
+/** A read out (see SharedLog.begin). */
+export interface SharedRead<C> {
+  /**
+   * The read is in: under the log's lock, lay the other windows' changes
+   * since over `rows` and `install` the result. Resolves false, installing
+   * nothing, when the log cannot vouch for them: the caller reads again.
+   */
+  finish: <T>(rows: T[], apply: (rows: readonly T[], change: C) => T[], install: (rows: T[]) => void) => Promise<boolean>
+  /** The read failed: forget it. */
+  cancel: () => void
+}
+
+export interface SharedLog<C> {
+  /**
+   * A change the server confirmed in this window (null: too big to keep).
+   * Awaited before the window shows or caches it. Resolves with whether the
+   * log holds it; when it does not, the other windows heard of the gap.
+   */
+  record: (change: C | null) => Promise<boolean>
+  /** A read going out. */
+  begin: () => Promise<SharedRead<C>>
+  /** Called when another window could not record a change (a read made before may miss it). Returns a way to stop. */
+  onGap: (fn: () => void) => () => void
+  /** Stop listening to other windows (an account changed). */
+  close: () => void
+}
+
+type Channel = Pick<BroadcastChannel, 'postMessage' | 'close'> & { onmessage: ((e: MessageEvent) => void) | null }
+
+export interface SharedLogOptions {
+  now?: () => number
+  win?: string
+  /** Where the store's versions are kept (see store.ts); IndexedDB unless a test says otherwise. */
+  versions?: () => Promise<Versions | null>
+  /** A broadcast channel; the real one unless a test says otherwise (null: none). */
+  channel?: ((name: string) => Channel) | null
+}
+
+export function sharedLog<C>(key: string, opts: SharedLogOptions = {}): SharedLog<C> {
+  const now = opts.now ?? Date.now
+  const win = opts.win ?? WINDOW_ID
+  const store: QueueStore<ConfirmedLogState<C>> = queueStore<ConfirmedLogState<C>>({
+    // Outside the log's own key space: clearing caches to make room (see
+    // evictExpendable) takes the log, never its lock's version, which would
+    // make every holder wait for a version that is not coming (store.ts).
+    lock: lockName(key),
+    load: () => readState<C>(key),
+    save: (state) => writeState(key, state),
+    ...(opts.versions ? { versions: opts.versions } : {})
+  })
+  // The reads out now, each marked when a window failed to record a change meanwhile.
+  const out = new Set<{ tainted: boolean }>()
+  const listeners = new Set<() => void>()
+  const taint = (): void => {
+    for (const r of out) r.tainted = true
+  }
+  const makeChannel = opts.channel === undefined ? (typeof BroadcastChannel !== 'undefined' ? (name: string): Channel => new BroadcastChannel(name) : null) : opts.channel
+  let channel: Channel | null = null
+  // Opened when first needed, and again after close(): a component that runs
+  // its effects twice (React's StrictMode) closes and goes on using the log.
+  const open = (): Channel | null => {
+    if (channel || !makeChannel) return channel
+    try {
+      channel = makeChannel(`${key}:gaps`)
+    } catch {
+      return null
+    }
+    channel.onmessage = (e: MessageEvent) => {
+      const data = e.data as { gap?: string } | null
+      if (!data || typeof data.gap !== 'string' || data.gap === win) return
+      taint()
+      for (const fn of listeners) fn()
+    }
+    return channel
+  }
+  open()
+  let epochs = 0
+  const newEpoch = (): string => `${win}-${now().toString(36)}-${(epochs++).toString(36)}`
   return {
-    record(change) {
+    async record(change) {
       const at = now()
-      const kept = readEntries<C>(key).filter((e) => e.at > at - KEEP_MS)
-      writeExpendable(key, [...kept, { at, win, change }].slice(-MAX_ENTRIES))
-    },
-    read() {
-      const since = now()
-      return {
-        over: (rows, apply) =>
-          readEntries<C>(key)
-            .filter((e) => e.win !== win && e.at >= since)
-            .sort((a, b) => a.at - b.at)
-            .reduce((acc, e) => apply(acc, e.change), rows)
+      const r = await store.update((state) => appendConfirmed(state, { at, win, change }, newEpoch), { hold: false })
+      if (!r.saved) {
+        // Not kept: a read out anywhere may be missing this change.
+        taint()
+        try {
+          open()?.postMessage({ gap: win })
+        } catch {
+          // No channel: another window's read may show the old list until its next read.
+        }
       }
+      return r.saved
+    },
+    async begin() {
+      const mark = { tainted: false }
+      out.add(mark)
+      let state = await store.fresh()
+      // A log that is not there yet starts now, so a later one (cleared to
+      // make room, then started again) can't pass for it.
+      if (!state.epoch) state = (await store.update((s) => (s.epoch ? s : { ...s, epoch: newEpoch() }), { hold: false })).value
+      const start: ReadStart = { epoch: state.epoch, seq: state.seq }
+      return {
+        async finish(rows, apply, install) {
+          try {
+            return await store.within((current) => {
+              if (mark.tainted) return false
+              const changes = changesSince(current, start, win)
+              if (changes === null) return false
+              install(changes.reduce((acc, c) => apply(acc, c), rows))
+              return true
+            })
+          } finally {
+            out.delete(mark)
+          }
+        },
+        cancel() {
+          out.delete(mark)
+        }
+      }
+    },
+    onGap(fn) {
+      listeners.add(fn)
+      open()
+      return () => void listeners.delete(fn)
+    },
+    close() {
+      listeners.clear()
+      out.clear()
+      try {
+        channel?.close()
+      } catch {
+        // already closed
+      }
+      channel = null
     }
   }
 }

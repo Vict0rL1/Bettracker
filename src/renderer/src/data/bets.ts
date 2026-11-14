@@ -203,6 +203,34 @@ export async function idsWithStamp(table: 'entries' | 'bankroll_moves', ids: rea
   return out
 }
 
+/**
+ * The `updated_at` of each of `ids` the server has now (a row it does not
+ * have is not in the map). Read in slices so a long list stays within a
+ * request.
+ */
+export async function rowStamps(table: 'entries' | 'bankroll_moves', ids: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  for (let i = 0; i < ids.length; i += 100) {
+    const slice = ids.slice(i, i + 100)
+    const { data, error, status } = await supabase.from(table).select('id, updated_at').in('id', slice)
+    if (error) throw describeError(error, status)
+    for (const r of (data ?? []) as { id: string; updated_at: string }[]) out.set(r.id, r.updated_at)
+  }
+  return out
+}
+
+/**
+ * What the server made of a chunk of an import: the rows this batch made
+ * (inserted now, or by an attempt whose answer was lost: they carry its
+ * stamp), the ones it already had (another device's, or edited since:
+ * left as they were), and the ones it skipped (deleted since, migration 007).
+ */
+export interface AddOutcome {
+  made: string[]
+  present: string[]
+  absent: string[]
+}
+
 /** Rows per request of an import. */
 export const IMPORT_CHUNK = 250
 
@@ -222,15 +250,14 @@ export const IMPORT_CHUNK = 250
  * can also meet one that is already there.
  *
  * `progress` hears, after each chunk, how many rows the server has confirmed
- * and which of the chunk's rows this batch made: the ones the insert returned,
- * and the ones an earlier attempt made whose answer was lost (they carry its
- * stamp). Resolves with how many rows this call inserted.
+ * and what it made of each of the chunk's rows (see AddOutcome). Resolves
+ * with how many rows this call inserted.
  */
 export async function addBets(
   inputs: readonly { id: string; input: BetInput }[],
   queuedAt?: string,
   done = 0,
-  progress?: (done: number, made: string[]) => Promise<void>,
+  progress?: (done: number, outcome: AddOutcome) => Promise<void>,
   asUser?: string
 ): Promise<number> {
   if (inputs.length <= done) return 0
@@ -249,8 +276,13 @@ export async function addBets(
     const inserted = new Set(((data ?? []) as { id: string }[]).map((r) => r.id))
     written += inserted.size
     const others = chunk.map((r) => r.id).filter((id) => !inserted.has(id))
-    const earlier = queuedAt && others.length > 0 ? await idsWithStamp(TABLE, others, queuedAt) : []
-    await progress?.(i + chunk.length, [...inserted, ...earlier])
+    const stamps = others.length > 0 ? await rowStamps(TABLE, others) : new Map<string, string>()
+    const earlier = others.filter((id) => stamps.has(id) && queuedAt !== undefined && sameStamp(stamps.get(id), queuedAt))
+    await progress?.(i + chunk.length, {
+      made: [...inserted, ...earlier],
+      present: others.filter((id) => stamps.has(id) && !earlier.includes(id)),
+      absent: others.filter((id) => !stamps.has(id))
+    })
   }
   return written
 }
@@ -261,7 +293,7 @@ export async function addBets(
  * way that version sent it. Resolves with the row the server returned, when
  * there is one.
  */
-export async function sendOp(op: PendingOp, progress?: (done: number, made: string[]) => Promise<void>, asUser?: string): Promise<Bet | null> {
+export async function sendOp(op: PendingOp, progress?: (done: number, outcome: AddOutcome) => Promise<void>, asUser?: string): Promise<Bet | null> {
   // An edit or a delete sent without a session would find no row and leave
   // the queue as if refused: it waits for the next sign-in instead. One
   // queued by another account (`asUser`) waits for that account.

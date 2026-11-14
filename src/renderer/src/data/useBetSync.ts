@@ -3,14 +3,14 @@ import type { Bet, BetInput } from '../../../shared/types'
 import { newId } from '../lib/uuid'
 import { normalizeInput } from '../lib/validate'
 import { getBets, sendOp, subscribeToBets } from './bets'
-import { sharedLog } from './confirmed'
+import { MAX_READS, REREAD_MS, sharedLog } from './confirmed'
 import { backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
-import type { BatchEvent } from './imports'
+import { addAnswer, chunkAnswer, opsAsEvents, undoAnswer, type BatchEvent, type BetPayload } from './imports'
+import { oneAtATime } from './oneAtATime'
 import {
   applyOutbox,
   confirmedKey,
-  insertStamp,
   landImport,
   loadCache,
   loadRefused,
@@ -19,14 +19,13 @@ import {
   readdStamp,
   readOutbox,
   reconcile,
-  sameStamp,
   saveCache,
   saveOutbox,
   saveRefused,
   type PendingOp,
   type Refused
 } from './offline'
-import { queuedByBatch, refusedBatches, settledHere, useOpQueue } from './useOpQueue'
+import { addsQueued, queuedByBatch, refusedBatches, settledHere, useOpQueue, type BatchQueued } from './useOpQueue'
 
 export type { SyncStatus }
 
@@ -65,6 +64,17 @@ export interface BetSync {
     inputs: readonly BetInput[],
     opts?: { ids?: readonly string[]; batch?: string; stamp?: string }
   ) => Promise<{ count: number; saved: boolean; opId: string; ids: string[]; stamp: string }>
+  /**
+   * Queue the rows of a batch (see data/operations.ts), already checked, as
+   * one op: unless the queue already holds that generation of the batch (its
+   * stamp), decided under the queue's lock. Resolves with whether storage
+   * holds the queue and whether they were queued now.
+   */
+  queueBatch: (payload: readonly BetPayload[], o: { batch: string; stamp: string }) => Promise<{ saved: boolean; queued: boolean }>
+  /** The queue as stored, read under its lock. */
+  queueFresh: () => Promise<PendingOp[]>
+  /** True while storage refuses the queue (it is in this window only). */
+  held: boolean
   /** Imports still on their way, by the op that carries each: how many rows have landed, of how many. */
   importing: ReadonlyMap<string, { done: number; total: number }>
   /** Several edits at once (bulk retag/settle, and Undo of either): one state update, one op per bet. */
@@ -75,8 +85,8 @@ export interface BetSync {
    * still carry their stamp, the batch's (see deleteBet), and tell `batch`.
    */
   undoBets: (targets: readonly { id: string; stamp: string }[], batch: string) => Promise<boolean>
-  /** Rows still waiting to reach the server, by the batch they belong to (see ImportBatch). */
-  batchQueued: ReadonlyMap<string, number>
+  /** What each batch still has in the queue: its adds, and its Undo's removals (see ImportBatch). */
+  batchQueued: ReadonlyMap<string, BatchQueued>
   /** Batches with a change the server refused for good. */
   batchRefused: ReadonlySet<string>
   /**
@@ -93,6 +103,8 @@ export interface BetSync {
 
 const RETRY_INTERVAL_MS = 20_000
 const REALTIME_DEBOUNCE_MS = 400
+/** An import's chunk of more rows than this is kept in the shared log as "read again" (see confirmed.ts). */
+export const SHARED_CHUNK_MAX = 20
 
 /**
  * Offline-first bet state.
@@ -168,6 +180,7 @@ export function useBetSync(
   }, [])
   // The same confirmations, for reads in this user's other windows (see confirmed.ts).
   const shared = useMemo(() => (userId ? sharedLog<{ op: PendingOp; row: Bet | null }>(confirmedKey(userId, 'bets')) : null), [userId])
+  useEffect(() => () => shared?.close(), [shared])
 
   const queue = useOpQueue<BetInput>({
     userId,
@@ -178,6 +191,9 @@ export function useBetSync(
     readRefused: loadRefused,
     saveRefused,
     onRefused: (err) => onErrorRef.current(err),
+    onBatchOps: async (kind, ops, reason) => {
+      for (const e of opsAsEvents(kind, 'bets', ops, reason)) await tell(e)
+    },
     newId
   })
   // Each of these keeps its identity from render to render (the queue object itself does not).
@@ -225,10 +241,12 @@ export function useBetSync(
   // A row (or rows) the server got back: into the copy when there is one,
   // else kept apart until the first read (see foldApplied).
   const fold = useCallback(
-    (change: (rows: readonly Bet[]) => Bet[], told?: { op: PendingOp; row: Bet | null }) => {
+    async (change: (rows: readonly Bet[]) => Bet[], told: { op: PendingOp; row: Bet | null } | null) => {
       if (userRef.current !== userId) return
       confirmedRef.current.confirmed(change)
-      if (told) shared?.record(told)
+      // Into the shared log before anything shows or caches it (see confirmed.ts).
+      await shared?.record(told)
+      if (userRef.current !== userId) return
       const next = foldApplied(serverRef.current, landedRef.current, change)
       if (next.server !== null) setServer(next.server)
       else {
@@ -239,30 +257,70 @@ export function useBetSync(
     [userId, setServer, shared]
   )
 
-  const refresh = useCallback(async (): Promise<void> => {
+  // A read the shared log could not vouch for, read again later (see readOnce).
+  const rereadRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshRef = useRef<() => Promise<void>>(async () => {})
+
+  /**
+   * Read the list, and install it with what this window and the others got
+   * confirmed while it was out (see confirmed.ts). A read the shared log can't
+   * vouch for is not installed: read again, MAX_READS times; then what shows
+   * stays, and it reads again after REREAD_MS.
+   */
+  const readOnce = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
-    const read = confirmedRef.current.read()
-    const elsewhere = shared?.read()
-    try {
-      const got = await getBets(userId)
-      // What other windows got confirmed meanwhile, then this one's.
-      const rows = read.over(elsewhere ? elsewhere.over(got, (acc, c) => reconcile(acc, c.op, c.row)) : got)
-      if (userRef.current !== userId) return
-      setServer(rows)
-      landedRef.current = []
-      setLanded([])
-      setOffline(false)
-    } catch (err) {
-      if (userRef.current !== userId) return
-      // Unreachable: offline. Signed out meanwhile, or a passing server
-      // failure: the next read will do. Either way the device copy stays.
-      const failure = classifySyncError(err)
-      if (failure === 'offline') setOffline(true)
-      else if (failure !== 'paused' && failure !== 'retry') onErrorRef.current(err)
-    } finally {
-      read.end()
+    if (rereadRef.current) clearTimeout(rereadRef.current)
+    rereadRef.current = null
+    for (let i = 0; i < MAX_READS; i++) {
+      const read = confirmedRef.current.read()
+      const elsewhere = shared ? await shared.begin() : null
+      let got: Bet[]
+      try {
+        got = await getBets(userId)
+      } catch (err) {
+        read.end()
+        elsewhere?.cancel()
+        if (userRef.current !== userId) return
+        // Unreachable: offline. Signed out meanwhile, or a passing server
+        // failure: the next read will do. Either way the device copy stays.
+        const failure = classifySyncError(err)
+        if (failure === 'offline') setOffline(true)
+        else if (failure !== 'paused' && failure !== 'retry') onErrorRef.current(err)
+        return
+      }
+      if (userRef.current !== userId) {
+        read.end()
+        elsewhere?.cancel()
+        return
+      }
+      const install = (rows: Bet[]): void => {
+        // What other windows got confirmed meanwhile (laid on by the log), then this one's.
+        setServer(read.over(rows))
+        landedRef.current = []
+        setLanded([])
+        setOffline(false)
+      }
+      let installed = true
+      try {
+        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcile(acc, c.op, c.row), install)
+        else install(got)
+      } finally {
+        read.end()
+      }
+      if (installed || userRef.current !== userId) return
     }
+    rereadRef.current = setTimeout(() => void refreshRef.current(), REREAD_MS)
   }, [userId, setServer, shared])
+
+  // One read at a time: a call while one is out asks for one more after it.
+  const refresh = useMemo(() => oneAtATime(readOnce, () => userRef.current === userId), [readOnce, userId])
+  refreshRef.current = refresh
+
+  // Another window could not write a confirmation down: a read out may miss it.
+  useEffect(() => {
+    if (!shared) return
+    return shared.onGap(() => void refreshRef.current())
+  }, [shared])
 
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
@@ -283,12 +341,12 @@ export function useBetSync(
           let from = op.done ?? 0
           return sendOp(
             op,
-            async (done, made) => {
+            async (done, outcome) => {
               const start = from
               const chunk = { ...op, entries: op.entries.slice(start, done), done: 0 }
-              fold((rows) => landImport(rows, op, start, done), { op: chunk, row: null })
+              await fold((rows) => landImport(rows, op, start, done), chunk.entries.length > SHARED_CHUNK_MAX ? null : { op: chunk, row: null })
               from = done
-              if (made.length > 0 && userRef.current === userId) await tell({ kind: 'made', batch: op.batch ?? op.opId, table: 'bets', ids: made })
+              if (userRef.current === userId) await tell(chunkAnswer(op, 'bets', outcome))
               await progress(done)
             },
             userId
@@ -306,14 +364,16 @@ export function useBetSync(
           // the row if it carries the add's stamp (one already there, or
           // another device's, does not); an Undo's delete removed it unless
           // the row came back as it is now.
-          if (op.kind === 'add' && op.batch && row && sameStamp(row.updatedAt, insertStamp(op))) {
-            await tell({ kind: 'made', batch: op.batch, table: 'bets', ids: [op.id] })
+          if (op.kind === 'add') {
+            const e = addAnswer(op, 'bets', row)
+            if (e) await tell(e)
           }
-          if (op.kind === 'delete' && op.batch && op.ifStamp) {
-            await tell({ kind: 'undo', batch: op.batch, table: 'bets', id: op.id, removed: row === null })
+          if (op.kind === 'delete') {
+            const e = undoAnswer(op, 'bets', row)
+            if (e) await tell(e)
           }
           if (userRef.current !== userId) return
-          fold((rows) => reconcile(rows, op, row), op.kind === 'bulk-add' ? undefined : { op, row })
+          await fold((rows) => reconcile(rows, op, row), op.kind === 'bulk-add' ? null : { op, row })
           setOffline(false)
           setBehind(false)
           setPaused(false)
@@ -389,6 +449,8 @@ export function useBetSync(
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
       retryTimerRef.current = null
+      if (rereadRef.current) clearTimeout(rereadRef.current)
+      rereadRef.current = null
     }
   }, [userId])
 
@@ -530,10 +592,23 @@ export function useBetSync(
   const undoBets = useCallback(
     async (targets: readonly { id: string; stamp: string }[], batch: string): Promise<boolean> => {
       const saved = await mutateMany(targets.map(({ id, stamp }) => ({ opId: newId(), kind: 'delete', id, ifStamp: stamp, batch })))
-      await settledHere(outboxRef.current, targets, batch, 'bets', tell)
+      await settledHere(await queue.fresh(), targets, batch, 'bets', tell)
       return saved
     },
-    [mutateMany, outboxRef, tell]
+    [mutateMany, queue.fresh, tell]
+  )
+
+  const queueBatch = useCallback(
+    async (payload: readonly BetPayload[], o: { batch: string; stamp: string }): Promise<{ saved: boolean; queued: boolean }> => {
+      if (payload.length === 0) return { saved: true, queued: false }
+      const entries = payload.map((p) => ({ id: p.id, input: normalizeInput(p.input) }))
+      const r = await queue.enqueueIf((q) => addsQueued(q, o.batch, o.stamp), [
+        { opId: newId(), kind: 'bulk-add', entries, queuedAt: o.stamp, batch: o.batch }
+      ])
+      setTimeout(() => void syncNowRef.current(), 0)
+      return r
+    },
+    [queue.enqueueIf]
   )
 
   const restoreBets = useCallback(
@@ -615,6 +690,9 @@ export function useBetSync(
     updateBets,
     deleteBets,
     undoBets,
+    queueBatch,
+    queueFresh: queue.fresh,
+    held: queue.held,
     batchQueued,
     batchRefused,
     restoreBets,

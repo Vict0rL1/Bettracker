@@ -55,9 +55,9 @@ describe('what the server made of a batch', () => {
   it('records the rows it made, once each, and only for that batch', async () => {
     await recordImport(U, batch('a'))
     await recordImport(U, batch('b'))
-    await recordBatchEvent(U, { kind: 'made', batch: 'a', table: 'bets', ids: ['a-1'] })
-    await recordBatchEvent(U, { kind: 'made', batch: 'a', table: 'bets', ids: ['a-1', 'a-2'] })
-    await recordBatchEvent(U, { kind: 'made', batch: 'a', table: 'moves', ids: ['m-1'] })
+    await recordBatchEvent(U, { kind: 'outcome', batch: 'a', table: 'bets', made: ['a-1'] })
+    await recordBatchEvent(U, { kind: 'outcome', batch: 'a', table: 'bets', made: ['a-1', 'a-2'] })
+    await recordBatchEvent(U, { kind: 'outcome', batch: 'a', table: 'moves', made: ['m-1'] })
     const [b, a] = loadImports(U)
     expect(a.made).toEqual(['a-1', 'a-2'])
     expect(a.madeMoves).toEqual(['m-1'])
@@ -77,6 +77,6 @@ describe('what the server made of a batch', () => {
   })
 
   it('drops an event for a batch no longer listed', () => {
-    expect(foldBatchEvent([batch('a')], { kind: 'made', batch: 'zz', table: 'bets', ids: ['q'] })).toEqual([batch('a')])
+    expect(foldBatchEvent([batch('a')], { kind: 'outcome', batch: 'zz', table: 'bets', made: ['q'] })).toEqual([batch('a')])
   })
 })

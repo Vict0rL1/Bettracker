@@ -30,6 +30,8 @@ export interface JournalEdit {
   patch: SettingsPatch
   editedAt: string
   guard?: SettingsPatch
+  /** The operation the edit is part of (see PendingSettings.fieldOrigin). */
+  origin?: string
 }
 
 const windowLock = (id: string): string => `bettracker:window:${id}`

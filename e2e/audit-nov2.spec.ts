@@ -106,7 +106,7 @@ test.describe('restore: what it did, and an Undo that only takes back its own', 
     await dialog.locator('.restore-go').click()
     const result = dialog.locator('.restore-result')
     // The server had it already: left as it was, and said.
-    await expect(result.locator('.result-bets')).toContainText('Already on the server (added on another device meanwhile), left as they were: 1.', { timeout: 15_000 })
+    await expect(result.locator('.result-bets')).toContainText('Already on the server, left as they were: 1.', { timeout: 15_000 })
     await result.locator('.result-undo-go').click()
     await expect(result.locator('.result-undo-state')).toContainText('Kept, changed since the restore (here or on another device): 1.', { timeout: 15_000 })
     // The other device's bet is still on the server, and back on screen.

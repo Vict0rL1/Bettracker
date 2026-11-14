@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactElement, type ReactNode, 
 import type { BankrollMove, Bet, BetInput, OddsFormat, Settings } from '../../../shared/types'
 import type { ImportBatch } from '../data/imports'
 import { readBackup, planRestore, type Backup, type BadEntry, type RestorePlan } from '../lib/backup'
-import { batchStatus, type BatchLive, type PartStatus } from '../lib/batchStatus'
+import { batchStatus, type BatchLive, type BatchStatus, type PartStatus, type RecoveryAction, type SettingsStatus } from '../lib/batchStatus'
 import { refusalText } from '../lib/betForm'
 import { parseBetsCsv, type ImportResult, type Rejection } from '../lib/csv'
 import { humanDate } from '../lib/dates'
@@ -64,8 +64,8 @@ interface Props {
   onImport: (choice: ImportChoice) => Promise<ImportOutcome>
   onRestore: (choice: RestoreChoice) => Promise<RestoreOutcome>
   onUndoBatch: (batch: ImportBatch) => Promise<boolean>
-  onSaveAgain: () => void
-  onRetryRefused: () => void
+  /** A recovery button of a batch (see lib/batchStatus.ts); picking the file again is the dialog's own. */
+  onRecover: (batch: ImportBatch, action: RecoveryAction) => Promise<void>
   onClose: () => void
 }
 
@@ -229,8 +229,7 @@ export default function DataDialog(props: Props) {
     onImport,
     onRestore,
     onUndoBatch,
-    onSaveAgain,
-    onRetryRefused,
+    onRecover,
     onClose
   } = props
   const { t, tn } = useLang()
@@ -379,15 +378,28 @@ export default function DataDialog(props: Props) {
     />
   )
 
-  const batchState = (b: ImportBatch): string => {
-    if (b.undone) return t('data.batchUndone')
+  const batchState = (b: ImportBatch, st: BatchStatus): string => {
+    const states = b.undone ? [st.undo?.state ?? 'done'] : [st.bets.state, st.moves.state, st.settings.state]
     const going = importing.get(b.id)
-    if (going && b.kind !== 'restore') return t('data.batchGoing', { done: going.done, total: going.total })
-    const st = batchStatus(b, live(b))
-    if (st.complete) return t(b.kind === 'restore' ? 'data.batchRestored' : 'data.batchDone')
-    const states = [st.bets.state, st.moves.state, st.settings.state]
-    if (states.some((x) => x === 'failed' || x === 'held' || x === 'refused')) return t('data.batchIncomplete')
-    return t('data.batchWaiting')
+    if (!b.undone && going && b.kind !== 'restore' && going.done > 0) return t('data.batchGoing', { done: going.done, total: going.total })
+    if (states.some((x) => x === 'failed' || x === 'refused' || x === 'unknown' || x === 'held')) return t('data.batchIncomplete')
+    if (states.includes('preparing')) return t('data.batchPreparing')
+    if (states.includes('waiting')) return t(b.undone ? 'data.batchUndoWaiting' : 'data.batchWaiting')
+    // Undone, but a setting it was to put back is not back on the server (asked again).
+    if (b.undone && (st.undo?.settings?.missing.length ?? 0) > 0) return t('data.batchUndoPartial')
+    if (b.undone) return t('data.batchUndone')
+    // Finished, but part of it never reached the server: never called imported or restored.
+    if (st.notAdded > 0) return t(st.addedAny ? 'data.batchNotAdded' : 'data.batchNoneAdded')
+    return t(b.kind === 'restore' ? 'data.batchRestored' : 'data.batchDone')
+  }
+
+  /** Run a recovery button; picking the file again opens the picker for it. */
+  const recover = (b: ImportBatch, action: RecoveryAction): void => {
+    if (action === 'pickAgain') {
+      ;(b.kind === 'restore' ? backupRef : csvRef).current?.click()
+      return
+    }
+    void run(async () => (await onRecover(b, action), 'stay'))
   }
 
   const header = (
@@ -615,10 +627,9 @@ export default function DataDialog(props: Props) {
         offline={offline}
         headRef={stepHeadRef}
         busy={busy}
+        refusal={refusal}
         onUndo={() => void run(async () => (await onUndoBatch(b), 'stay'))}
-        onSaveAgain={onSaveAgain}
-        onRetryRefused={onRetryRefused}
-        onPickAgain={() => backupRef.current?.click()}
+        onRecover={(a) => recover(b, a)}
         onDone={() => go_menu()}
       />
     ) : (
@@ -686,30 +697,41 @@ export default function DataDialog(props: Props) {
             <p className="hint">{t('data.noImports')}</p>
           ) : (
             <ul className="imp-list data-batches">
-              {batches.map((b) => (
-                <li key={b.id} className="data-batch">
-                  <span className="data-batch-text">
-                    <strong>{b.file}</strong>
-                    <span className="hint">
-                      {humanDate(b.at.slice(0, 10))} · {tn('bet', b.ids.length)}
-                      {b.moveIds && b.moveIds.length > 0 ? ` · ${t('data.movesN', { n: b.moveIds.length })}` : ''}
-                      {b.restore?.settings ? ` · ${t('data.settingsOnly')}` : ''} · {batchState(b)}
+              {batches.map((b) => {
+                const st = batchStatus(b, live(b))
+                return (
+                  <li key={b.id} className={`data-batch${st.actions.length > 0 ? ' has-recover' : ''}`}>
+                    <span className="data-batch-text">
+                      <strong>{b.file}</strong>
+                      <span className="hint">
+                        {humanDate(b.at.slice(0, 10))} · {tn('bet', b.ids.length)}
+                        {b.moveIds && b.moveIds.length > 0 ? ` · ${t('data.movesN', { n: b.moveIds.length })}` : ''}
+                        {b.restore?.settings ? ` · ${t('data.settingsOnly')}` : ''} · <span className="data-batch-state">{batchState(b, st)}</span>
+                      </span>
                     </span>
-                  </span>
-                  <span className="data-batch-actions">
-                    {b.kind === 'restore' && (
-                      <button type="button" className="btn btn-ghost data-details" onClick={() => go({ kind: 'result', batch: b.id })}>
+                    <span className="data-batch-actions">
+                      {st.actions.map((a) => (
+                        <button key={a} type="button" className={`btn btn-ghost data-recover data-recover-${a}`} disabled={busy} onClick={() => recover(b, a)}>
+                          {t(recoverLabel(a, b))}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="btn btn-ghost data-details"
+                        aria-label={t('data.detailsOf', { file: b.file })}
+                        onClick={() => go({ kind: 'result', batch: b.id })}
+                      >
                         {t('data.details')}
                       </button>
-                    )}
-                    {!b.undone && (b.kind !== 'restore' || b.stamp) && (
-                      <button type="button" className="btn btn-ghost data-undo" onClick={() => void onUndoBatch(b)}>
-                        {t(b.kind === 'restore' ? 'data.undoRestore' : 'data.undoImport')}
-                      </button>
-                    )}
-                  </span>
-                </li>
-              ))}
+                      {!b.undone && (b.kind !== 'restore' || b.stamp) && !st.actions.includes('resume') && !st.nothingToUndo && (
+                        <button type="button" className="btn btn-ghost data-undo" onClick={() => void onUndoBatch(b)}>
+                          {t(b.kind === 'restore' ? 'data.undoRestore' : 'data.undoImport')}
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
           )}
           <p className="hint">{t('data.historyHint')}</p>
@@ -782,10 +804,11 @@ export default function DataDialog(props: Props) {
 }
 
 /**
- * What a restore did, part by part, as far as it is known: what the server
- * confirmed it added, what waits on this device to sync (never called added),
- * what was there already, the settings, and anything that failed with what
- * to do about it; then its Undo, and what that did.
+ * What an import or a restore did, part by part, as far as it is known: one
+ * line per fact, each said only as the server said it (added, already there,
+ * skipped, refused, not there) or as it stands on this device (waiting to
+ * sync, not queued yet, no answer recorded); what to do about what is not
+ * finished; then its Undo, and what that did.
  */
 function RestoreResult({
   batch,
@@ -793,10 +816,9 @@ function RestoreResult({
   offline,
   headRef,
   busy,
+  refusal,
   onUndo,
-  onSaveAgain,
-  onRetryRefused,
-  onPickAgain,
+  onRecover,
   onDone
 }: {
   batch: ImportBatch
@@ -804,126 +826,154 @@ function RestoreResult({
   offline: boolean
   headRef: RefObject<HTMLHeadingElement | null>
   busy: boolean
+  refusal: string | null
   onUndo: () => void
-  onSaveAgain: () => void
-  onRetryRefused: () => void
-  onPickAgain: () => void
+  onRecover: (action: RecoveryAction) => void
   onDone: () => void
 }) {
   const { t, tn } = useLang()
   const st = batchStatus(batch, live)
-  const lines = (p: PartStatus, items: (n: number) => string): string[] => {
-    switch (p.state) {
-      case 'none':
-        return [t('result.none')]
-      case 'failed':
-        return [t('result.failed', { items: items(p.planned) })]
-      case 'held':
-        return [t('result.held', { items: items(p.waiting) })]
-      case 'refused':
-        return [t('result.refused', { items: items(p.planned) })]
-      case 'waiting':
-        return [
-          p.made > 0
-            ? t('result.partial', { made: p.made, items: items(p.planned), waiting: p.waiting })
-            : t(offline ? 'result.waitingOffline' : 'result.waiting', { items: items(p.waiting) })
-        ]
-      case 'done':
-        return [t('result.added', { items: items(p.made) }), p.alreadyThere > 0 ? t('result.alreadyThere', { n: p.alreadyThere }) : '']
-    }
-  }
   const names = (fields: readonly string[]): string => fields.map((f) => t(`settingName.${f}` as StringKey)).join(', ')
-  const settingsLine =
-    st.settings.state === 'none'
-      ? t('result.settingsNone')
-      : st.settings.state === 'failed'
-        ? t('result.settingsFailed')
-        : st.settings.state === 'held'
-          ? t('result.settingsHeld')
-          : t(st.settings.state === 'waiting' ? 'result.settingsWaiting' : 'result.settingsDone', { fields: names(st.settings.fields) })
+  const lines = (p: PartStatus, items: (n: number) => string): string[] => {
+    if (p.state === 'none') return [t('result.none')]
+    return [
+      p.made > 0 ? t('result.added', { items: items(p.made) }) : '',
+      p.present > 0 ? t('result.alreadyThere', { n: p.present }) : '',
+      p.absent > 0 ? t('result.absent', { n: p.absent }) : '',
+      p.untracked > 0 ? t('result.untracked', { items: items(p.untracked) }) : '',
+      p.waiting > 0 ? (p.state === 'held' ? t('result.held', { items: items(p.waiting) }) : t(offline ? 'result.waitingOffline' : 'result.waiting', { items: items(p.waiting) })) : '',
+      p.preparing > 0 ? t('result.preparing', { items: items(p.preparing) }) : '',
+      p.unknown > 0 ? t('result.unknown', { items: items(p.unknown) }) : '',
+      // Still in the refused list: it can be sent again; let go (or undone): said as it is.
+      p.rejected > 0 ? t(p.rejectedOpen ? 'result.refused' : 'result.refusedFinal', { items: items(p.rejected) }) : '',
+      p.failed > 0 ? t(batch.kind === 'restore' ? 'result.failed' : 'result.failedFile', { items: items(p.failed) }) : '',
+      // Picking the file again is offered only while the batch stands (not undone).
+      p.missing > 0 ? t(st.actions.includes('pickAgain') ? 'result.missing' : 'result.missingNoPick', { items: items(p.missing) }) : ''
+    ].filter(Boolean)
+  }
+  const settingsLines = (s: SettingsStatus, undo: boolean): string[] => [
+    s.confirmed.length > 0 ? t(undo ? 'result.undoSettingsBack' : 'result.settingsDone', { fields: names(s.confirmed) }) : '',
+    s.waiting.length > 0
+      ? s.state === 'held'
+        ? t('result.settingsHeld', { fields: names(s.waiting) })
+        : t(undo ? 'result.undoSettingsWaiting' : 'result.settingsWaiting', { fields: names(s.waiting) })
+      : '',
+    s.preparing.length > 0 ? t('result.settingsPreparing', { fields: names(s.preparing) }) : '',
+    s.unknown.length > 0 ? t('result.settingsUnknown', { fields: names(s.unknown) }) : '',
+    s.kept.length > 0 ? t(undo ? 'result.undoSettingsKept' : 'result.settingsKept', { fields: names(s.kept) }) : '',
+    s.rejected.length > 0 ? t(undo ? 'result.undoSettingsRefused' : 'result.settingsRefused', { fields: names(s.rejected) }) : '',
+    s.failed.length > 0 ? t('result.settingsFailed', { fields: names(s.failed) }) : '',
+    s.missing.length > 0
+      ? t(undo ? 'result.undoSettingsMissing' : !batch.undone && st.actions.includes('retrySettings') ? 'result.settingsMissing' : 'result.settingsMissingNoRetry', { fields: names(s.missing) })
+      : ''
+  ]
+  const show = (l: readonly string[]): ReactNode =>
+    l.filter(Boolean).map((x) => (
+      <span key={x} className="result-line">
+        {x}{' '}
+      </span>
+    ))
   const states = [st.bets.state, st.moves.state, st.settings.state]
-  const held = states.includes('held')
-  const refused = states.includes('refused')
-  const failed = states.includes('failed')
+  const overall = st.complete
+    ? st.untracked > 0
+      ? 'result.completeUntracked'
+      : st.notAdded > 0
+        ? st.addedAny
+          ? 'result.completeNotAdded'
+          : 'result.completeNoneAdded'
+        : st.skippedLater
+          ? 'result.completeSkipped'
+          : 'result.complete'
+    : states.some((x) => x === 'failed' || x === 'refused' || x === 'unknown')
+      ? 'result.incomplete'
+      : states.includes('preparing')
+        ? 'result.preparingAll'
+        : 'result.pending'
   const undo = st.undo
+  const reason = st.settings.reason ?? batch.reason
+  const recoverButtons = st.actions.length > 0 && (
+    <div className="result-recover">
+      {st.actions.map((a) => (
+        <button key={a} type="button" className={`btn btn-ghost result-recover-${a} ${LEGACY_CLASS[a] ?? ''}`} disabled={busy} onClick={() => onRecover(a)}>
+          {t(recoverLabel(a, batch))}
+        </button>
+      ))}
+    </div>
+  )
   return (
     <div className="data-step restore-result">
       <h3 ref={headRef} tabIndex={-1}>
-        {t('result.title', { file: batch.file })}
+        {t(batch.kind === 'restore' ? 'result.title' : 'result.importTitle', { file: batch.file })}
       </h3>
       <p className="hint">{humanDate(batch.at.slice(0, 10))}</p>
       <dl className="result-parts" aria-live="polite">
-        <div className={`result-part is-${st.bets.state} result-bets`}>
+        <div className={`result-part is-${st.bets.state}${st.bets.gap ? ' has-gap' : ''} result-bets`}>
           <dt>{t('result.betsLabel')}</dt>
           <dd>
-            {lines(st.bets, (n) => tn('bet', n))
-              .filter(Boolean)
-              .map((l) => (
-                <span key={l}>{l} </span>
-              ))}
-            {st.skipped.bets > 0 && <span>{t('result.skipped', { n: st.skipped.bets })} </span>}
-            {st.skipped.duplicates > 0 && <span>{t('result.skippedDups', { n: st.skipped.duplicates })}</span>}
+            {show(lines(st.bets, (n) => tn('bet', n)))}
+            {st.skipped.bets > 0 && <span className="result-line">{t('result.skipped', { n: st.skipped.bets })} </span>}
+            {st.skipped.duplicates > 0 && <span className="result-line">{t('result.skippedDups', { n: st.skipped.duplicates })}</span>}
           </dd>
         </div>
-        <div className={`result-part is-${st.moves.state} result-moves`}>
-          <dt>{t('result.movesLabel')}</dt>
-          <dd>
-            {lines(st.moves, (n) => tn('move', n))
-              .filter(Boolean)
-              .map((l) => (
-                <span key={l}>{l} </span>
-              ))}
-            {st.skipped.moves > 0 && <span>{t('result.skipped', { n: st.skipped.moves })}</span>}
-          </dd>
-        </div>
-        <div className={`result-part is-${st.settings.state} result-settings`}>
-          <dt>{t('result.settingsLabel')}</dt>
-          <dd>{settingsLine}</dd>
-        </div>
+        {batch.kind === 'restore' && (
+          <div className={`result-part is-${st.moves.state}${st.moves.gap ? ' has-gap' : ''} result-moves`}>
+            <dt>{t('result.movesLabel')}</dt>
+            <dd>
+              {show(lines(st.moves, (n) => tn('move', n)))}
+              {st.skipped.moves > 0 && <span className="result-line">{t('result.skipped', { n: st.skipped.moves })}</span>}
+            </dd>
+          </div>
+        )}
+        {batch.kind === 'restore' && (
+          <div className={`result-part is-${st.settings.state}${st.settings.gap ? ' has-gap' : ''} result-settings`}>
+            <dt>{t('result.settingsLabel')}</dt>
+            <dd>{st.settings.state === 'none' ? t('result.settingsNone') : show(settingsLines(st.settings, false))}</dd>
+          </div>
+        )}
       </dl>
-      {!batch.undone && <p className={`result-overall ${st.complete ? 'is-done' : 'is-waiting'}`}>{t(st.complete ? 'result.complete' : 'result.pending')}</p>}
-      {(held || refused || failed) && (
-        <div className="result-recover">
-          {held && (
-            <button type="button" className="btn btn-ghost result-save-again" onClick={onSaveAgain}>
-              {t('result.saveAgain')}
-            </button>
-          )}
-          {refused && (
-            <button type="button" className="btn btn-ghost result-send-again" onClick={onRetryRefused}>
-              {t('result.sendAgain')}
-            </button>
-          )}
-          {failed && (
-            <button type="button" className="btn btn-ghost result-pick-again" onClick={onPickAgain}>
-              {t('result.pickAgain')}
-            </button>
-          )}
-        </div>
+      {reason && (st.bets.rejected + st.moves.rejected > 0 || st.settings.rejected.length > 0) && <p className="hint result-reason">{t('result.reason', { reason })}</p>}
+      {!batch.undone && <p className={`result-overall ${st.complete ? 'is-done' : 'is-waiting'}`}>{t(overall)}</p>}
+      {/* Undone: what is left to do is its Undo's, so its buttons go with it (below). */}
+      {!batch.undone && recoverButtons}
+      {refusal && (
+        <p className="form-error" role="alert">
+          {refusal}
+        </p>
       )}
       <section className="imp-section result-undo">
         <h4>{t('result.undoTitle')}</h4>
         {batch.undone && undo ? (
           <p className="result-undo-state" aria-live="polite">
-            {undo.waiting > 0 && <span>{t('result.undoWaiting', { n: undo.waiting })} </span>}
-            {undo.removed > 0 && <span>{t('result.undoRemoved', { n: undo.removed })} </span>}
-            {undo.kept + undo.changedHere > 0 && <span>{t('result.undoKept', { n: undo.kept + undo.changedHere })} </span>}
-            {undo.goneHere > 0 && <span>{t('result.undoGone', { n: undo.goneHere })} </span>}
-            {undo.settings && undo.settings.reverted.length > 0 && <span>{t('result.undoSettingsBack', { fields: names(undo.settings.reverted) })} </span>}
-            {undo.settings && undo.settings.kept.length > 0 && <span>{t('result.undoSettingsKept', { fields: names(undo.settings.kept) })}</span>}
+            {show([
+              undo.waiting > 0 ? t('result.undoWaiting', { n: undo.waiting }) : '',
+              undo.preparing > 0 ? t('result.undoPreparing', { n: undo.preparing }) : '',
+              undo.unknown > 0 ? t('result.undoUnknown', { n: undo.unknown }) : '',
+              undo.removed > 0 ? t('result.undoRemoved', { n: undo.removed }) : '',
+              undo.kept + undo.changedHere > 0 ? t(batch.kind === 'restore' ? 'result.undoKept' : 'result.undoKeptImport', { n: undo.kept + undo.changedHere }) : '',
+              undo.goneHere > 0 ? t('result.undoGone', { n: undo.goneHere }) : '',
+              undo.failed > 0 ? t(undo.failedOpen ? 'result.undoRefused' : 'result.undoRefusedFinal', { n: undo.failed }) : '',
+              ...(undo.settings ? settingsLines(undo.settings, true) : []),
+              undo.settings && undo.settings.keptHere.length > 0 ? t('result.undoSettingsKept', { fields: names(undo.settings.keptHere) }) : '',
+              undo.settings && undo.settings.already.length > 0 ? t('result.undoSettingsAlready', { fields: names(undo.settings.already) }) : ''
+            ])}
           </p>
         ) : batch.undone ? (
           <p>{t('data.batchUndone')}</p>
-        ) : batch.stamp ? (
+        ) : [st.bets.state, st.moves.state, st.settings.state].includes('preparing') ? (
+          <p className="hint result-undo-wait">{t('undo.wait')}</p>
+        ) : st.nothingToUndo ? (
+          <p className="hint result-undo-nothing">{t('result.undoNothing')}</p>
+        ) : batch.stamp || batch.kind !== 'restore' ? (
           <>
-            <p className="hint">{t('result.undoHelp')}</p>
+            <p className="hint">{t(batch.kind === 'restore' ? 'result.undoHelp' : 'result.undoImportHelp')}</p>
             <button type="button" className="btn btn-ghost result-undo-go" disabled={busy} onClick={onUndo}>
-              {t('result.undoGo')}
+              {t(batch.kind === 'restore' ? 'result.undoGo' : 'data.undoImport')}
             </button>
           </>
         ) : (
           <p className="hint">{t('result.undoNA')}</p>
         )}
+        {batch.undone && recoverButtons}
       </section>
       <footer className="modal-actions">
         <span className="spacer" />
@@ -933,4 +983,29 @@ function RestoreResult({
       </footer>
     </div>
   )
+}
+
+/** The class names the recovery buttons had before (kept for what looks for them). */
+const LEGACY_CLASS: Partial<Record<RecoveryAction, string>> = {
+  saveAgain: 'result-save-again',
+  sendAgain: 'result-send-again',
+  pickAgain: 'result-pick-again'
+}
+
+/** The label of a recovery button. */
+function recoverLabel(a: RecoveryAction, b: ImportBatch): StringKey {
+  switch (a) {
+    case 'resume':
+      return 'result.resume'
+    case 'check':
+      return 'result.check'
+    case 'saveAgain':
+      return 'result.saveAgain'
+    case 'sendAgain':
+      return 'result.sendAgain'
+    case 'pickAgain':
+      return b.kind === 'restore' ? 'result.pickAgain' : 'result.pickAgainFile'
+    case 'retrySettings':
+      return 'result.retrySettings'
+  }
 }

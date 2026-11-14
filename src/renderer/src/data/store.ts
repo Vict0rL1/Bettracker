@@ -279,6 +279,11 @@ export interface QueueStore<T> {
    * as it was (for a change that must be stored or not made at all).
    */
   update(fn: (current: T) => T, opts?: { hold?: boolean }): Promise<{ value: T; saved: boolean }>
+  /**
+   * Run `fn` on the queue as it is now, under the lock, changing nothing:
+   * nothing any window stores under it can come in between.
+   */
+  within<R>(fn: (current: T) => R | Promise<R>): Promise<R>
   /** True while storage refuses this window's queue. */
   readonly held: boolean
 }
@@ -299,6 +304,7 @@ export function queueStore<T>(opts: {
     },
     read: () => (held ? held.value : opts.load()),
     fresh: () => underLock(opts.lock, versions, () => (held ? held.value : opts.load())),
+    within: (fn) => underLock(opts.lock, versions, () => fn(held ? held.value : opts.load())),
     update: (fn, how) =>
       underLock(opts.lock, versions, async (wrote) => {
         const changes = [...(held?.changes ?? []), fn]

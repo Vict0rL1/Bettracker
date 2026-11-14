@@ -363,10 +363,20 @@ describe('addBets — an import sent again after an interruption', () => {
       // Read back: r2 carries this batch's stamp (an attempt whose answer was lost), r3 another one.
       { data: [{ id: 'r2', updated_at: '2026-03-01T10:00:00.000+00:00' }, { id: 'r3', updated_at: '2026-02-01T10:00:00+00:00' }], error: null, count: null }
     ]
-    const made: string[][] = []
-    await addBets(entries(4), '2026-03-01T10:00:00.000Z', 0, async (_n, ids) => void made.push(ids))
-    expect(made).toEqual([['r0', 'r1', 'r2']])
+    const told: unknown[] = []
+    await addBets(entries(4), '2026-03-01T10:00:00.000Z', 0, async (_n, outcome) => void told.push(outcome))
+    expect(told).toEqual([{ made: ['r0', 'r1', 'r2'], present: ['r3'], absent: [] }])
     expect(call('in')?.args).toEqual(['id', ['r2', 'r3']])
+  })
+
+  it('a row the server neither inserted nor has (deleted since, 007) is told as skipped, never as made', async () => {
+    state.queued = [
+      { data: [{ id: 'r0' }], error: null, count: null },
+      { data: [{ id: 'r1', updated_at: '2026-02-01T10:00:00+00:00' }], error: null, count: null }
+    ]
+    const told: unknown[] = []
+    await addBets(entries(3), '2026-03-01T10:00:00.000Z', 0, async (_n, outcome) => void told.push(outcome))
+    expect(told).toEqual([{ made: ['r0'], present: ['r1'], absent: ['r2'] }])
   })
 
   it('reports each chunk the server confirmed, and starts after the confirmed ones next time', async () => {

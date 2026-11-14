@@ -299,6 +299,13 @@ export interface PendingSettings {
    * here drops its guard: the user's own choice applies as it is.
    */
   guard?: SettingsPatch
+  /**
+   * The operation each field's pending value comes from: a restore (its id)
+   * or its Undo (`undo:<id>`, see data/imports.ts). The answer to that write
+   * is that operation's to hear (see useSettings' settingsOutcomes); a field
+   * the user set since has none.
+   */
+  fieldOrigin?: Partial<Record<keyof SettingsPatch, string>>
 }
 export const loadSettingsOutbox = (userId: string): PendingSettings | null => readJson<PendingSettings>(settingsOutboxKey(userId))
 /** Throws StorageWriteError when the patch can't be stored. */
@@ -312,21 +319,59 @@ export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): v
  * a newer one made there. A patch stored by an older version has no times
  * per field: its fields count as edited when the patch was.
  */
-export function editSettings(current: PendingSettings | null, patch: SettingsPatch, editedAt: string, guard?: SettingsPatch): PendingSettings {
+export function editSettings(current: PendingSettings | null, patch: SettingsPatch, editedAt: string, guard?: SettingsPatch, origin?: string): PendingSettings {
   const times = current?.fieldEditedAt as Record<string, string | undefined> | undefined
   const at = (k: string): string => (times ? (times[k] ?? '') : current && k in current.patch ? current.editedAt : '')
   const fresh = Object.entries(patch).filter(([k]) => at(k) <= editedAt)
   const guards: Record<string, unknown> = { ...(current?.guard ?? {}) }
+  const origins: Record<string, string> = { ...((current?.fieldOrigin ?? {}) as Record<string, string>) }
   for (const [k] of fresh) {
     if (guard && k in guard) guards[k] = (guard as Record<string, unknown>)[k]
     else delete guards[k]
+    if (origin) origins[k] = origin
+    else delete origins[k]
   }
   return {
     patch: { ...(current?.patch ?? {}), ...Object.fromEntries(fresh) },
     editedAt: current && current.editedAt > editedAt ? current.editedAt : editedAt,
     fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...Object.fromEntries(fresh.map(([k]) => [k, editedAt])) },
-    ...(Object.keys(guards).length > 0 ? { guard: guards as SettingsPatch } : {})
+    ...(Object.keys(guards).length > 0 ? { guard: guards as SettingsPatch } : {}),
+    ...(Object.keys(origins).length > 0 ? { fieldOrigin: origins as PendingSettings['fieldOrigin'] } : {})
   }
+}
+
+/** When a field of a pending patch was set (a patch from an older version: when the patch was). */
+export const fieldTime = (p: PendingSettings, k: keyof SettingsPatch): string => p.fieldEditedAt?.[k] ?? p.editedAt
+
+/**
+ * The writes of operations (see fieldOrigin) that an edit at `editedAt`
+ * replaces before they were sent: by origin and the time they were made, the
+ * fields that will not be written by them. A later change won: theirs to hear.
+ */
+export function supersededBy(
+  current: PendingSettings | null,
+  patch: SettingsPatch,
+  editedAt: string,
+  origin?: string
+): { origin: string; editedAt: string; fields: (keyof SettingsPatch)[] }[] {
+  if (!current?.fieldOrigin) return []
+  const out = new Map<string, { origin: string; editedAt: string; fields: (keyof SettingsPatch)[] }>()
+  for (const k of Object.keys(patch) as (keyof SettingsPatch)[]) {
+    const was = current.fieldOrigin[k]
+    if (!was || was === origin || !(k in current.patch)) continue
+    const at = fieldTime(current, k)
+    if (at > editedAt) continue
+    const key = `${was}|${at}`
+    const cur = out.get(key) ?? { origin: was, editedAt: at, fields: [] }
+    out.set(key, { ...cur, fields: [...cur.fields, k] })
+  }
+  return [...out.values()]
+}
+
+/** Whether a write of `origin` made at `editedAt` is pending still, in some field at least. */
+export function pendingWrite(p: PendingSettings | null, origin: string, editedAt: string): boolean {
+  if (!p?.fieldOrigin) return false
+  return (Object.keys(p.patch) as (keyof SettingsPatch)[]).some((k) => p.fieldOrigin?.[k] === origin && fieldTime(p, k) === editedAt)
 }
 
 /**
@@ -347,7 +392,14 @@ export function afterSettingsAnswer(current: PendingSettings | null, sent: Pendi
   if (Object.keys(left).length === 0) return null
   const fieldEditedAt = current.fieldEditedAt ? { fieldEditedAt: Object.fromEntries(Object.entries(current.fieldEditedAt).filter(([k]) => k in left)) } : {}
   const guards = Object.entries(current.guard ?? {}).filter(([k]) => k in left)
-  return { patch: left as SettingsPatch, editedAt: current.editedAt, ...fieldEditedAt, ...(guards.length > 0 ? { guard: Object.fromEntries(guards) as SettingsPatch } : {}) }
+  const origins = Object.entries(current.fieldOrigin ?? {}).filter(([k]) => k in left)
+  return {
+    patch: left as SettingsPatch,
+    editedAt: current.editedAt,
+    ...fieldEditedAt,
+    ...(guards.length > 0 ? { guard: Object.fromEntries(guards) as SettingsPatch } : {}),
+    ...(origins.length > 0 ? { fieldOrigin: Object.fromEntries(origins) as PendingSettings['fieldOrigin'] } : {})
+  }
 }
 
 export const loadLastUser = (): OfflineUser | null => readJson<OfflineUser>(LAST_USER_KEY)
@@ -512,7 +564,12 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
     return [...outbox, op]
   }
   if (op.kind === 'delete') {
-    const mine = outbox.filter((o) => forBet(o, op.id))
+    // An Undo's delete is about one generation of its batch (see generationStart):
+    // what an earlier one left in the queue is not its business.
+    const from = op.ifStamp ? generationStart(outbox, op.id, op.ifStamp, op.batch) : 0
+    const before = outbox.slice(0, from)
+    const after = outbox.slice(from)
+    const mine = after.filter((o) => forBet(o, op.id))
     // An Undo's delete (ifStamp) takes only what its batch wrote, unchanged:
     // anything else queued for the row since (an edit, a delete, a re-add)
     // is a change the Undo leaves alone, and so is an add of its own that an
@@ -522,10 +579,30 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
     // no delete is queued before it: then the row exists on the server and a
     // later add is an Undo re-adding it, so deleting again must reach it.
     const cancellable = mine.some((o) => !o.sent && o.kind === 'add') && !mine.some((o) => o.kind === 'delete')
-    const kept = outbox.filter((o) => !forBet(o, op.id) || o.sent)
+    const kept = [...before, ...after.filter((o) => !forBet(o, op.id) || o.sent)]
     return cancellable ? kept : [...kept, op]
   }
   return [...outbox, op]
+}
+
+/**
+ * Where the generation of a row that `stamp` names starts in the queue: its
+ * own add, when that is queued; else just past what an earlier generation of
+ * the batch left for the row (an earlier Undo's delete, an add with another
+ * stamp); else the start.
+ */
+export function generationStart<I>(outbox: readonly PendingOp<I>[], id: string, stamp: string, batch?: string): number {
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    const o = outbox[i]
+    if (o.kind === 'add' && o.id === id && o.queuedAt === stamp) return i
+  }
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    const o = outbox[i]
+    if (o.kind === 'bulk-add' || o.id !== id || !batch) continue
+    if (o.kind === 'delete' && o.batch === batch && o.ifStamp && o.ifStamp !== stamp) return i + 1
+    if (o.kind === 'add' && o.batch === batch && o.queuedAt !== stamp) return i + 1
+  }
+  return 0
 }
 
 /**
