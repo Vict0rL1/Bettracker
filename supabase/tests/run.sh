@@ -31,8 +31,11 @@ check() { psql -q -X -v ON_ERROR_STOP=1 -d "$1" -f "$HERE/checks.sql" | grep -q 
 # Sorted dump lines: the same tables, columns, constraints, indexes, policies,
 # trigger and function whichever way the database got there (column order
 # aside, which additive migrations can't match), plus what realtime publishes.
+# Left out: what names one installation rather than the structure, such as
+# the per-column `pg_attver` options newer pg_dump builds write (a number that
+# differs from one database to the next).
 structure() {
-  pg_dump -s -n public -d "$1" | grep -v -e '^--' -e '^$' -e '^\\restrict ' -e '^\\unrestrict ' | sort
+  pg_dump -s -n public -d "$1" | grep -v -e '^--' -e '^$' -e '^\\restrict ' -e '^\\unrestrict ' -e 'SET (pg_attver=[0-9]*);$' | sort
   psql -X -At -d "$1" -c "select 'publication ' || tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1"
 }
 
