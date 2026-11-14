@@ -658,7 +658,7 @@ describe('3 · reads in other windows: a read the log can not vouch for is read 
   }
   const apply = (rows: readonly number[], c: number): number[] => [...rows, c]
 
-  it('within what is kept: the other window’s changes since are laid over, in order, and installed', async () => {
+  it('within what is kept: every change since is laid over, in the order the server confirmed them, and installed', async () => {
     const clock = { t: 1000 }
     const { here, there } = two(clock)
     await there.record(1)
@@ -668,7 +668,48 @@ describe('3 · reads in other windows: a read the log can not vouch for is read 
     await there.record(3)
     let installed: number[] = []
     expect(await read.finish([0], apply, (r) => (installed = r))).toBe(true)
-    expect(installed).toEqual([0, 2, 3])
+    expect(installed).toEqual([0, 2, 99, 3])
+  })
+
+  it('a change here, then a later one in another window to the same row: the later one ends on top', async () => {
+    const clock = { t: 1000 }
+    const { here, there } = two(clock)
+    const read = await here.begin()
+    await here.record(1) // this window: the row becomes v1 (also in its own log)
+    await there.record(2) // another window, after it: v2
+    const last = (_: readonly number[], c: number): number[] => [c]
+    let installed: number[] = []
+    // This window's own log lays v1 first; then the shared log, in order.
+    expect(await read.finish([0], last, (r) => (installed = r), () => [1])).toBe(true)
+    expect(installed).toEqual([2])
+  })
+
+  it('this window’s own "read again" (a chunk too big to keep) does not throw its own read away: its own log has it', async () => {
+    const clock = { t: 1000 }
+    const { here, there } = two(clock)
+    const read = await here.begin()
+    await here.record(null)
+    await there.record(5)
+    let installed: number[] = []
+    expect(await read.finish([0], apply, (r) => (installed = r), (r) => [...r, 42])).toBe(true)
+    expect(installed).toEqual([0, 42, 5])
+  })
+
+  it('signed out here: nothing is written to the log, nor an epoch, and nobody is told of a gap', async () => {
+    const clock = { t: 1000 }
+    const bus = busOf()
+    let allowed = true
+    const opts = (win: string, canWrite?: () => boolean) => ({ now: () => clock.t, win, versions: noVersions, channel: channelOn(bus), ...(canWrite ? { canWrite } : {}) })
+    const here = sharedLog<number>(key, opts('here', () => allowed))
+    const there = sharedLog<number>(key, opts('there'))
+    let gaps = 0
+    there.onGap(() => gaps++)
+    allowed = false
+    await here.begin()
+    expect(localStorage.getItem(key)).toBeNull()
+    expect(await here.record(7)).toBe(false)
+    expect(localStorage.getItem(key)).toBeNull()
+    expect(gaps).toBe(0)
   })
 
   it(`more than ${MAX_ENTRIES} confirmations since it went out: not installed`, async () => {
@@ -748,8 +789,12 @@ describe('3 · reads in other windows: a read the log can not vouch for is read 
     state = appendConfirmed(state, { at: 1, win: 'a', change: 1 }, () => 'E')
     state = appendConfirmed(state, { at: 2, win: 'b', change: 2 }, () => 'X')
     expect(state.epoch).toBe('E')
-    expect(changesSince(state, { epoch: 'E', seq: 0 }, 'a')).toEqual([2])
+    expect(changesSince(state, { epoch: 'E', seq: 0 }, 'a')).toEqual([1, 2])
+    expect(changesSince(state, { epoch: 'E', seq: 1 }, 'a')).toEqual([2])
     expect(changesSince(state, { epoch: 'other', seq: 0 }, 'a')).toBeNull()
+    state = appendConfirmed(state, { at: 3, win: 'a', change: null }, () => 'X')
+    expect(changesSince(state, { epoch: 'E', seq: 0 }, 'a')).toEqual([1, 2])
+    expect(changesSince(state, { epoch: 'E', seq: 0 }, 'b')).toBeNull()
   })
 
   it('making room takes the log, never its lock’s version (a holder would wait for a version that is not coming)', () => {
@@ -777,6 +822,61 @@ describe('3 · reads in other windows: a read the log can not vouch for is read 
     release()
     await a
     expect(runs).toBe(2)
+  })
+
+  it('a read that fails fails only its own callers: the one asked for after it still runs, and so do later ones', async () => {
+    let runs = 0
+    let fail = true
+    let release: () => void = () => undefined
+    const read = oneAtATime(async () => {
+      runs++
+      await new Promise<void>((r) => (release = r))
+      if (fail) {
+        fail = false
+        throw new Error('lock request failed')
+      }
+    })
+    const first = read()
+    const next = read()
+    release()
+    await expect(first).rejects.toThrow('lock request failed')
+    await Promise.resolve()
+    release()
+    await next
+    expect(runs).toBe(2)
+    const third = read()
+    const fourth = read()
+    release()
+    await third
+    await Promise.resolve()
+    release()
+    await fourth
+    expect(runs).toBe(4)
+  })
+
+  it('a call between a run ending and the one asked for after it: one run, not two at once', async () => {
+    let going = 0
+    let most = 0
+    const releases: (() => void)[] = []
+    const read = oneAtATime(async () => {
+      going++
+      most = Math.max(most, going)
+      await new Promise<void>((r) => releases.push(r))
+      going--
+    })
+    const first = read()
+    // Heard before the run asked for after it starts: it finds no run going.
+    const between = first.then(() => read())
+    const queued = read()
+    releases.shift()?.()
+    await first
+    await new Promise((r) => setTimeout(r, 0))
+    while (releases.length > 0) {
+      releases.shift()?.()
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    await Promise.all([queued, between])
+    expect(most).toBe(1)
   })
 })
 

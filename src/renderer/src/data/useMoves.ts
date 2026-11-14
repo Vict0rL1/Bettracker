@@ -11,6 +11,7 @@ import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
   applyMoveOutbox,
   confirmedKey,
+  writable,
   readdStamp,
   loadMoveCache,
   loadMovesRefused,
@@ -147,7 +148,8 @@ export function useMoves(
     }
   }, [])
   // As useBetSync: confirmations for reads in other windows (see confirmed.ts).
-  const shared = useMemo(() => (userId ? sharedLog<{ op: MoveOp; row: BankrollMove | null }>(confirmedKey(userId, 'moves')) : null), [userId])
+  // Never written once this user is signed out here (a late answer would leave a row behind).
+  const shared = useMemo(() => (userId ? sharedLog<{ op: MoveOp; row: BankrollMove | null }>(confirmedKey(userId, 'moves'), { canWrite: () => writable(userId) }) : null), [userId])
   useEffect(() => () => shared?.close(), [shared])
 
   const queue = useOpQueue<MoveInput>({
@@ -216,7 +218,14 @@ export function useMoves(
     rereadRef.current = null
     for (let i = 0; i < MAX_READS; i++) {
       const read = confirmedRef.current.read()
-      const elsewhere = shared ? await shared.begin() : null
+      let elsewhere: Awaited<ReturnType<NonNullable<typeof shared>['begin']>> | null = null
+      try {
+        elsewhere = shared ? await shared.begin() : null
+      } catch (err) {
+        // Not out after all: this window's log stops holding changes for it.
+        read.end()
+        throw err
+      }
       let got: BankrollMove[]
       try {
         got = await getMoves(userId)
@@ -238,7 +247,7 @@ export function useMoves(
         return
       }
       const install = (rows: BankrollMove[]): void => {
-        setServer(read.over(rows))
+        setServer(rows)
         setOffline(false)
         tableMissingRef.current = false
         setTableReady(true)
@@ -246,8 +255,9 @@ export function useMoves(
       }
       let installed = true
       try {
-        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcileMove(acc, c.op, c.row), install)
-        else install(got)
+        // This window's changes meanwhile, then every window's since, in the server's order (see confirmed.ts).
+        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcileMove(acc, c.op, c.row), install, read.over)
+        else install(read.over(got))
       } finally {
         read.end()
       }

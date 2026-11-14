@@ -11,6 +11,7 @@ import { oneAtATime } from './oneAtATime'
 import {
   applyOutbox,
   confirmedKey,
+  writable,
   landImport,
   loadCache,
   loadRefused,
@@ -181,7 +182,8 @@ export function useBetSync(
     }
   }, [])
   // The same confirmations, for reads in this user's other windows (see confirmed.ts).
-  const shared = useMemo(() => (userId ? sharedLog<{ op: PendingOp; row: Bet | null }>(confirmedKey(userId, 'bets')) : null), [userId])
+  // Never written once this user is signed out here (a late answer would leave a row behind).
+  const shared = useMemo(() => (userId ? sharedLog<{ op: PendingOp; row: Bet | null }>(confirmedKey(userId, 'bets'), { canWrite: () => writable(userId) }) : null), [userId])
   useEffect(() => () => shared?.close(), [shared])
 
   const queue = useOpQueue<BetInput>({
@@ -275,7 +277,14 @@ export function useBetSync(
     rereadRef.current = null
     for (let i = 0; i < MAX_READS; i++) {
       const read = confirmedRef.current.read()
-      const elsewhere = shared ? await shared.begin() : null
+      let elsewhere: Awaited<ReturnType<NonNullable<typeof shared>['begin']>> | null = null
+      try {
+        elsewhere = shared ? await shared.begin() : null
+      } catch (err) {
+        // Not out after all: this window's log stops holding changes for it.
+        read.end()
+        throw err
+      }
       let got: Bet[]
       try {
         got = await getBets(userId)
@@ -296,16 +305,17 @@ export function useBetSync(
         return
       }
       const install = (rows: Bet[]): void => {
-        // What other windows got confirmed meanwhile (laid on by the log), then this one's.
-        setServer(read.over(rows))
+        // With what was confirmed meanwhile, here and in other windows, laid on (see finish).
+        setServer(rows)
         landedRef.current = []
         setLanded([])
         setOffline(false)
       }
       let installed = true
       try {
-        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcile(acc, c.op, c.row), install)
-        else install(got)
+        // This window's changes meanwhile, then every window's since, in the server's order (see confirmed.ts).
+        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcile(acc, c.op, c.row), install, read.over)
+        else install(read.over(got))
       } finally {
         read.end()
       }

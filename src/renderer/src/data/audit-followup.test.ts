@@ -244,7 +244,7 @@ describe('a change the server refused is never in neither place', () => {
 describe('a read answered late never undoes what another window got confirmed', () => {
   const noVersions = (): Promise<null> => Promise.resolve(null)
 
-  it('lays over a read what other windows confirmed after it went out, in order, and not its own', async () => {
+  it('lays over a read what was confirmed after it went out, in order: other windows’ and its own (see audit-nov5)', async () => {
     let clock = 1000
     const key = 'bettracker:confirmed-bets:u'
     const here = sharedLog<{ op: PendingOp; row: Bet | null }>(key, { now: () => clock, win: 'win-here', versions: noVersions, channel: null })
@@ -260,11 +260,11 @@ describe('a read answered late never undoes what another window got confirmed', 
     await there.record({ op: { opId: 'd', kind: 'delete', id: 'gone' }, row: null })
     const added = bet({ id: 'added' })
     await there.record({ op: { opId: 'n', kind: 'add', id: 'added', input, queuedAt: S }, row: added })
-    // This window's own confirmations are laid over by its own log, not this one.
+    // This window's own, in its place in the order (its own log has it too).
     await here.record({ op: { opId: 'o', kind: 'delete', id: 'kept' }, row: null })
     let rows: Bet[] = []
     expect(await read.finish([kept, gone], (acc, c) => reconcile(acc, c.op, c.row), (r) => (rows = r))).toBe(true)
-    expect(rows.map((b) => b.id).sort()).toEqual(['added', 'kept'])
+    expect(rows.map((b) => b.id).sort()).toEqual(['added'])
   })
 
   it('forgets entries older than any read can be, and raises its floor past them', async () => {

@@ -12,13 +12,17 @@
  *
  * So each confirmation is also written here, numbered (`seq`), before the
  * window that got it shows it or caches it; a read notes the number it went
- * out at. Once it is in, it lays over what it got every change another window
- * confirmed since, and is installed, all under the log's lock (no confirmation
- * slips in between) — but only when the log still holds every one of them:
+ * out at. Once it is in, it lays over what it got this window's own changes
+ * meanwhile, then every change confirmed since in the order the server
+ * confirmed them (this window's in their place too: a later change of another
+ * window to the same row ends on top), and is installed, all under the log's
+ * lock (no confirmation slips in between) — but only when the log still holds
+ * every one of them:
  *  - it keeps the newest MAX_ENTRIES of the last KEEP_MS. What it lets go
  *    raises its `floor`: a read that went out below the floor can't know what
  *    it missed (more confirmations than are kept, or older than kept);
- *  - an import's chunk is too big to keep: it is kept as "read again" (null);
+ *  - an import's chunk is too big to keep: it is kept as "read again" (null)
+ *    — for the other windows; its own window has it in its own log;
  *  - a log cleared to make room, or never there, starts a new `epoch`: a read
  *    that went out under another one can't trust it;
  *  - a window that could not write here (storage full) says so to the others
@@ -120,14 +124,15 @@ export interface ReadStart {
 
 /**
  * What a read that went out at `start` can lay over what it got, from the log
- * as it is now: the other windows' changes since, in order; or null when the
- * log cannot vouch for them all (it started over, let some go, or keeps one
- * only as "read again").
+ * as it is now: every change confirmed since, in the order they were (this
+ * window's too, but not its own "read again": its own log has those); or null
+ * when the log cannot vouch for them all (it started over, let some go, or
+ * keeps one of another window's only as "read again").
  */
 export function changesSince<C>(state: ConfirmedLogState<C>, start: ReadStart, win: string): C[] | null {
   if (state.epoch !== start.epoch) return null
   if (state.floor > start.seq) return null
-  const since = state.entries.filter((e) => e.seq > start.seq && e.win !== win).sort((a, b) => a.seq - b.seq)
+  const since = state.entries.filter((e) => e.seq > start.seq && !(e.win === win && e.change === null)).sort((a, b) => a.seq - b.seq)
   if (since.some((e) => e.change === null)) return null
   return since.map((e) => e.change as C)
 }
@@ -135,11 +140,13 @@ export function changesSince<C>(state: ConfirmedLogState<C>, start: ReadStart, w
 /** A read out (see SharedLog.begin). */
 export interface SharedRead<C> {
   /**
-   * The read is in: under the log's lock, lay the other windows' changes
-   * since over `rows` and `install` the result. Resolves false, installing
-   * nothing, when the log cannot vouch for them: the caller reads again.
+   * The read is in: under the log's lock, lay over `rows` this window's own
+   * changes meanwhile (`local`: its own log, which has what this log keeps
+   * only as "read again"), then every change confirmed since, in order, and
+   * `install` the result. Resolves false, installing nothing, when the log
+   * cannot vouch for them: the caller reads again.
    */
-  finish: <T>(rows: T[], apply: (rows: readonly T[], change: C) => T[], install: (rows: T[]) => void) => Promise<boolean>
+  finish: <T>(rows: T[], apply: (rows: readonly T[], change: C) => T[], install: (rows: T[]) => void, local?: (rows: T[]) => T[]) => Promise<boolean>
   /** The read failed: forget it. */
   cancel: () => void
 }
@@ -168,11 +175,18 @@ export interface SharedLogOptions {
   versions?: () => Promise<Versions | null>
   /** A broadcast channel; the real one unless a test says otherwise (null: none). */
   channel?: ((name: string) => Channel) | null
+  /**
+   * Whether this device may still keep this user's data (false once signed
+   * out: see offline.writable). When not, nothing is written: a late answer
+   * would leave a copy of a row behind the sign-out.
+   */
+  canWrite?: () => boolean
 }
 
 export function sharedLog<C>(key: string, opts: SharedLogOptions = {}): SharedLog<C> {
   const now = opts.now ?? Date.now
   const win = opts.win ?? WINDOW_ID
+  const canWrite = opts.canWrite ?? (() => true)
   const store: QueueStore<ConfirmedLogState<C>> = queueStore<ConfirmedLogState<C>>({
     // Outside the log's own key space: clearing caches to make room (see
     // evictExpendable) takes the log, never its lock's version, which would
@@ -212,6 +226,8 @@ export function sharedLog<C>(key: string, opts: SharedLogOptions = {}): SharedLo
   const newEpoch = (): string => `${win}-${now().toString(36)}-${(epochs++).toString(36)}`
   return {
     async record(change) {
+      // Signed out: nothing kept, and nobody to tell (the other windows sign out too).
+      if (!canWrite()) return false
       const at = now()
       const r = await store.update((state) => appendConfirmed(state, { at, win, change }, newEpoch), { hold: false })
       if (!r.saved) {
@@ -231,16 +247,16 @@ export function sharedLog<C>(key: string, opts: SharedLogOptions = {}): SharedLo
       let state = await store.fresh()
       // A log that is not there yet starts now, so a later one (cleared to
       // make room, then started again) can't pass for it.
-      if (!state.epoch) state = (await store.update((s) => (s.epoch ? s : { ...s, epoch: newEpoch() }), { hold: false })).value
+      if (!state.epoch && canWrite()) state = (await store.update((s) => (s.epoch ? s : { ...s, epoch: newEpoch() }), { hold: false })).value
       const start: ReadStart = { epoch: state.epoch, seq: state.seq }
       return {
-        async finish(rows, apply, install) {
+        async finish(rows, apply, install, local) {
           try {
             return await store.within((current) => {
               if (mark.tainted) return false
               const changes = changesSince(current, start, win)
               if (changes === null) return false
-              install(changes.reduce((acc, c) => apply(acc, c), rows))
+              install(changes.reduce((acc, c) => apply(acc, c), local ? local(rows) : rows))
               return true
             })
           } finally {
