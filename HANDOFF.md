@@ -243,7 +243,18 @@ Informe en `docs/audit-2026-11-06.md`. En corto:
   ofrece reintentar, nunca lo hace solo.
 - El **registro de confirmaciones entre pestañas** (`data/confirmed.ts`) va
   numerado con suelo y época; una lectura que no puede verificarse se descarta
-  y se repite, y un fallo al escribirlo se avisa a las demás ventanas.
+  y se repite, y un fallo al escribirlo se avisa a las demás ventanas. Lo
+  validado se aplica en el orden del servidor (también lo propio), y tras
+  cerrar sesión no se escribe en él.
+- Los **ajustes pendientes se envían por sentencias** (`settingsGroups` en
+  `data/useSettings.ts`): cada escritura de una operación a su hora, y los
+  campos del usuario a la última. Si una escritura pierde por la hora de la
+  fila, App la reclasifica con la fila (`checkSettings`): «conservado» solo si
+  el campo cambió de verdad.
+- **Deshacer** se planifica bajo el candado de su operación (un segundo clic u
+  otra ventana no lo repiten), espera a que los datos estén cargados y descarta
+  las altas rechazadas del lote. «Retenido» (solo en esta ventana) sale del
+  estado en vivo del almacenamiento, no de la fase guardada.
 - Un primer trabajo de esta auditoría se perdió con un reinicio del contenedor
   (commits locales sin subir); se rehízo y desde entonces se sube a la rama.
 

@@ -645,13 +645,19 @@ export default function App() {
     async (batch: ImportBatch): Promise<boolean | null> => {
       const uid = activeUserId
       if (!uid) return false
-      // Planned against the data as it is here: not before it has loaded (an
-      // empty list or the default settings would read as "changed since").
-      if (!settingsLoadedRef.current || !movesHookRef.current.loaded || betsRef.current === null) {
+      const first = (await freshImports(uid)).find((b) => b.id === batch.id) ?? batch
+      // Planned against the data as it is here: not before what it touches has
+      // loaded (an empty list, or the default settings, would read as "gone"
+      // or "changed since").
+      const touches = {
+        bets: first.ids.length > 0,
+        moves: (first.moveIds ?? []).length > 0,
+        settings: Object.keys(first.restore?.settings?.after ?? {}).length > 0
+      }
+      if ((touches.bets && betsRef.current === null) || (touches.moves && !movesHookRef.current.loaded) || (touches.settings && !settingsLoadedRef.current)) {
         setToast({ kind: 'ok', text: t('undo.notLoaded') })
         return null
       }
-      const first = (await freshImports(uid)).find((b) => b.id === batch.id) ?? batch
       if (first.undone) {
         setToast({ kind: 'ok', text: t('undo.already') })
         return null
