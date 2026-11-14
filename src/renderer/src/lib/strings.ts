@@ -814,6 +814,8 @@ export const en = {
   'data.detailsOf': 'Details of {file}',
   'undo.wait': 'Not yet: part of it is still being queued. Undo it once that is done.',
   'undo.restoreNothing': 'Nothing to undo: nothing this restore added or set is left to take back.',
+  'undo.notLoaded': 'Not yet: your data is still loading. Undo it once it has loaded.',
+  'undo.already': 'Already done: nothing more to change.',
   ...envStrings.en
 } as const
 
@@ -1600,5 +1602,7 @@ export const es: Record<StringKey, string> = {
   'data.detailsOf': 'Detalles de {file}',
   'undo.wait': 'Aún no: una parte todavía se está poniendo en cola. Deshazlo cuando termine.',
   'undo.restoreNothing': 'Nada que deshacer: no queda nada de lo que añadió o cambió esta restauración.',
+  'undo.notLoaded': 'Aún no: tus datos todavía se están cargando. Deshazlo cuando terminen de cargar.',
+  'undo.already': 'Ya está hecho: no queda nada que cambiar.',
   ...envStrings.es
 }

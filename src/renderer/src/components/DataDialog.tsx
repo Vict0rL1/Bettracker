@@ -63,7 +63,7 @@ interface Props {
   /** Each resolves once queued (or with the plan as it is now), and throws when refused: the dialog says why. */
   onImport: (choice: ImportChoice) => Promise<ImportOutcome>
   onRestore: (choice: RestoreChoice) => Promise<RestoreOutcome>
-  onUndoBatch: (batch: ImportBatch) => Promise<boolean>
+  onUndoBatch: (batch: ImportBatch) => Promise<boolean | null>
   /** A recovery button of a batch (see lib/batchStatus.ts); picking the file again is the dialog's own. */
   onRecover: (batch: ImportBatch, action: RecoveryAction) => Promise<void>
   onClose: () => void
@@ -724,7 +724,7 @@ export default function DataDialog(props: Props) {
                         {t('data.details')}
                       </button>
                       {!b.undone && (b.kind !== 'restore' || b.stamp) && !st.actions.includes('resume') && !st.nothingToUndo && (
-                        <button type="button" className="btn btn-ghost data-undo" onClick={() => void onUndoBatch(b)}>
+                        <button type="button" className="btn btn-ghost data-undo" disabled={busy} onClick={() => void run(async () => (await onUndoBatch(b), 'stay'))}>
                           {t(b.kind === 'restore' ? 'data.undoRestore' : 'data.undoImport')}
                         </button>
                       )}

@@ -313,7 +313,7 @@ export default function App() {
   // toast says it is done only once storage holds the change: one that is
   // only in this window says so instead (see SyncNotices).
   const done = useCallback(
-    (saved: boolean, text: string, undo?: () => Promise<boolean>) => {
+    (saved: boolean, text: string, undo?: () => Promise<boolean | null>) => {
       if (!saved) {
         setToast({ kind: 'error', text: t('toast.notSaved') })
         return
@@ -323,16 +323,21 @@ export default function App() {
         return
       }
       // An offer to put things back. The undo goes through the outbox too, so it works offline.
+      let clicked = false
       setToast({
         kind: 'ok',
         text,
         action: {
           label: t('toast.undo'),
           onClick: () => {
-            undo().then(
-              (kept) => setToast(kept ? { kind: 'ok', text: savedNote(t('toast.undone')) } : { kind: 'error', text: t('toast.notSaved') }),
-              showError
-            )
+            // Once: a second click while the first is on its way would do it twice.
+            if (clicked) return
+            clicked = true
+            undo().then((kept) => {
+              // null: it said what happened itself (not yet, already done).
+              if (kept === null) return
+              setToast(kept ? { kind: 'ok', text: savedNote(t('toast.undone')) } : { kind: 'error', text: t('toast.notSaved') })
+            }, showError)
           }
         }
       })
@@ -568,6 +573,8 @@ export default function App() {
   syncRef.current = sync
   const movesHookRef = useRef(moves)
   movesHookRef.current = moves
+  const settingsLoadedRef = useRef(settingsLoaded)
+  settingsLoadedRef.current = settingsLoaded
   const updateSettingsRef = useRef(updateSettings)
   updateSettingsRef.current = updateSettings
   const settingsQueueRef = useRef(settingsQueueFresh)
@@ -622,82 +629,129 @@ export default function App() {
    * from what was there before, so its Undo is not offered (see DataDialog).
    */
   const undoBatch = useCallback(
-    async (batch: ImportBatch): Promise<boolean> => {
+    async (batch: ImportBatch): Promise<boolean | null> => {
       const uid = activeUserId
       if (!uid) return false
-      const entry = (await freshImports(uid)).find((b) => b.id === batch.id) ?? batch
-      if (!entry.stamp && entry.kind === 'restore') return false
-      // A part not queued yet would be queued after the Undo, and stay: it waits for it.
-      if (preparedParts(entry).some((p) => p === 'bets' || p === 'moves' || p === 'settings')) {
-        setToast({ kind: 'ok', text: t('undo.wait') })
-        return false
+      // Planned against the data as it is here: not before it has loaded (an
+      // empty list or the default settings would read as "changed since").
+      if (!settingsLoadedRef.current || !movesHookRef.current.loaded || betsRef.current === null) {
+        setToast({ kind: 'ok', text: t('undo.notLoaded') })
+        return null
       }
-      const stampOf = (row: { updatedAt: string }): string => entry.stamp ?? row.updatedAt
-      const here = new Map((betsRef.current ?? []).map((b) => [b.id, b]))
-      const hereMoves = new Map(movesRef.current.map((m) => [m.id, m]))
-      let changedHere = 0
-      let goneHere = 0
-      const goneBets: Bet[] = []
-      const goneMoves: BankrollMove[] = []
-      for (const id of entry.ids) {
-        const row = here.get(id)
-        if (!row) goneHere++
-        else if (sameStamp(row.updatedAt, stampOf(row))) goneBets.push(row)
-        else changedHere++
+      const first = (await freshImports(uid)).find((b) => b.id === batch.id) ?? batch
+      if (first.undone) {
+        setToast({ kind: 'ok', text: t('undo.already') })
+        return null
       }
-      for (const id of entry.moveIds ?? []) {
-        const row = hereMoves.get(id)
-        if (!row) goneHere++
-        else if (sameStamp(row.updatedAt, stampOf(row))) goneMoves.push(row)
-        else changedHere++
-      }
-      // Settings: back where they still hold what the restore set (see undoSettingsLog).
+      if (!first.stamp && first.kind === 'restore') return false
       const at = new Date().toISOString()
-      const plan = undoSettingsLog(entry.restore?.settings, settingsRef.current as unknown as Partial<Record<SettingsField, unknown>>, at)
-      const reverted = plan.reverted
-      const keptFields = plan.keptHere
-      const undo = {
-        at,
-        stamp: entry.stamp ?? '',
-        ...(entry.stamp ? {} : { stamps: Object.fromEntries([...goneBets, ...goneMoves].map((r) => [r.id, r.updatedAt])) }),
-        phase: goneBets.length + goneMoves.length > 0 ? ('prepared' as const) : ('queued' as const),
-        bets: goneBets.map((r) => r.id),
-        moves: goneMoves.map((r) => r.id),
-        changedHere,
-        goneHere,
-        removed: [],
-        kept: [],
-        ...(plan.settings ? { settings: plan.settings } : {})
+      let goneBets: Bet[] = []
+      let goneMoves: BankrollMove[] = []
+      let changedHere = 0
+      let why: 'wait' | 'already' | null = null
+      // Planned and written down under the operation's lock, from its entry as
+      // it is then: a second click, or another window, that got there first
+      // leaves it as it is (see continueOperation).
+      const plan = (entry: ImportBatch): ImportBatch => {
+        why = null
+        if (entry.undone) {
+          why = 'already'
+          return entry
+        }
+        // A part not queued yet would be queued after the Undo, and stay: it waits for it.
+        if (preparedParts(entry).some((p) => p === 'bets' || p === 'moves' || p === 'settings')) {
+          why = 'wait'
+          return entry
+        }
+        const stampOf = (row: { updatedAt: string }): string => entry.stamp ?? row.updatedAt
+        const here = new Map((betsRef.current ?? []).map((b) => [b.id, b]))
+        const hereMoves = new Map(movesRef.current.map((m) => [m.id, m]))
+        let goneHere = 0
+        goneBets = []
+        goneMoves = []
+        changedHere = 0
+        for (const id of entry.ids) {
+          const row = here.get(id)
+          if (!row) goneHere++
+          else if (sameStamp(row.updatedAt, stampOf(row))) goneBets.push(row)
+          else changedHere++
+        }
+        for (const id of entry.moveIds ?? []) {
+          const row = hereMoves.get(id)
+          if (!row) goneHere++
+          else if (sameStamp(row.updatedAt, stampOf(row))) goneMoves.push(row)
+          else changedHere++
+        }
+        // Settings: back where they still hold what the restore set (see undoSettingsLog).
+        const settingsPlan = undoSettingsLog(entry.restore?.settings, settingsRef.current as unknown as Partial<Record<SettingsField, unknown>>, at)
+        return {
+          ...entry,
+          undone: true,
+          undo: {
+            at,
+            stamp: entry.stamp ?? '',
+            ...(entry.stamp ? {} : { stamps: Object.fromEntries([...goneBets, ...goneMoves].map((r) => [r.id, r.updatedAt])) }),
+            phase: goneBets.length + goneMoves.length > 0 ? 'prepared' : 'queued',
+            bets: goneBets.map((r) => r.id),
+            moves: goneMoves.map((r) => r.id),
+            changedHere,
+            goneHere,
+            removed: [],
+            kept: [],
+            ...(settingsPlan.settings ? { settings: settingsPlan.settings } : {})
+          }
+        }
       }
       const ports = portsFor(uid)
-      const after = await continueOperation(ports, entry.id, (b) => ({ ...b, undone: true, undo }))
-      if (goneBets.length === 0 && goneMoves.length === 0 && reverted.length === 0) {
-        setToast({ kind: 'ok', text: t(changedHere > 0 || keptFields.length > 0 ? 'undo.allChanged' : entry.kind === 'restore' ? 'undo.restoreNothing' : 'imp.undoNothing') })
-        return true
+      const after = await continueOperation(ports, first.id, plan)
+      if (!after?.undone || after.undo?.at !== at) {
+        setToast({ kind: 'ok', text: t(why === 'wait' ? 'undo.wait' : 'undo.already') })
+        return null
       }
-      const saved = after?.undo?.phase !== 'held' && after?.undo?.settings?.phase !== 'held'
+      // Its adds the server refused would, sent again, put back what it took out.
+      await Promise.all([syncRef.current.discardBatchRefused(first.id), movesHookRef.current.discardBatchRefused(first.id)])
+      // The settings as queued (a change of the user's own still pending keeps one: see queuePart).
+      const us = after.undo.settings
+      const keptNow = [...(us?.kept ?? []), ...(us?.rejected ?? [])]
+      const reverted = (us?.asked ?? []).filter((f) => !keptNow.includes(f))
+      const keptFields = [...new Set([...(us?.keptHere ?? []), ...(us?.kept ?? [])])]
+      if (goneBets.length === 0 && goneMoves.length === 0 && reverted.length === 0) {
+        setToast({ kind: 'ok', text: t(changedHere > 0 || keptFields.length > 0 ? 'undo.allChanged' : after.kind === 'restore' ? 'undo.restoreNothing' : 'imp.undoNothing') })
+        return null
+      }
+      const saved = after.undo.phase !== 'held' && us?.phase !== 'held'
       const parts = [
-        entry.kind === 'restore'
+        after.kind === 'restore'
           ? t('undo.restoreRemoved', { bets: tn('bet', goneBets.length), moves: tn('move', goneMoves.length) })
           : t('imp.undone', { bets: tn('bet', goneBets.length) }),
         changedHere > 0 ? t('undo.changedKept', { n: changedHere }) : '',
         reverted.length > 0 ? t('undo.settingsBack', { fields: reverted.map((f) => t(`settingName.${f}`)).join(', ') }) : '',
         keptFields.length > 0 ? t('undo.settingsKept', { fields: keptFields.map((f) => t(`settingName.${f}`)).join(', ') }) : ''
       ]
+      const bets = goneBets
+      const moved = goneMoves
       done(saved, savedNote(parts.filter(Boolean).join(' · ')), async () => {
         // Put back what it removed, all under one new stamp: the next Undo
         // takes them by it (see readdStamp for why it is new). Written down,
-        // then queued, as the batch was.
-        const stamp = readdStamp([...goneBets, ...goneMoves])
-        const back = await continueOperation(portsFor(uid), entry.id, (b) =>
-          redoBatch(b, {
+        // then queued, as the batch was; only over this Undo (a second click,
+        // or one undone again since, leaves the entry as it is).
+        const stamp = readdStamp([...bets, ...moved])
+        let applied = false
+        const back = await continueOperation(portsFor(uid), first.id, (b) => {
+          applied = b.undone === true && b.undo?.at === at
+          if (!applied) return b
+          return redoBatch(b, {
             stamp,
             now: new Date().toISOString(),
-            bets: goneBets.map((r) => ({ id: r.id, input: toInput(r) })),
-            moves: goneMoves.map((m) => ({ id: m.id, input: { date: m.date, amount: m.amount, note: m.note } })),
+            bets: bets.map((r) => ({ id: r.id, input: toInput(r) })),
+            moves: moved.map((m) => ({ id: m.id, input: { date: m.date, amount: m.amount, note: m.note } })),
             reverted
           })
-        )
+        })
+        if (!applied) {
+          setToast({ kind: 'ok', text: t('undo.already') })
+          return null
+        }
         return back?.parts?.bets?.phase !== 'held' && back?.parts?.moves?.phase !== 'held' && back?.restore?.settings?.phase !== 'held'
       })
       return saved
@@ -823,71 +877,85 @@ export default function App() {
     async (b: ImportBatch): Promise<void> => {
       const uid = activeUserId
       if (!uid) return
-      const entry = (await freshImports(uid)).find((x) => x.id === b.id)
-      if (!entry) return
       const ports = portsFor(uid)
-      const inQueue = async (table: 'bets' | 'moves', undo: boolean): Promise<Set<string>> => {
-        const queue = await (table === 'bets' ? ports.bets.queue() : ports.moves.queue())
-        const ids = new Set<string>()
-        for (const op of queue) {
-          const of = batchOf(op)
-          if (!of || of.batch !== entry.id || of.undo !== undo) continue
-          if (op.kind === 'bulk-add') op.entries.slice(op.done ?? 0).forEach((e) => ids.add(e.id))
-          else if (op.kind !== 'update') ids.add(op.id)
+      // Under the operation's lock: a window queuing it meanwhile (see
+      // queueParts) would find answers for rows it has not sent yet.
+      await withOperation(uid, b.id, async () => {
+        const entry = (await freshImports(uid)).find((x) => x.id === b.id)
+        if (!entry) return
+        const inQueue = async (table: 'bets' | 'moves', undo: boolean): Promise<Set<string>> => {
+          const queue = await (table === 'bets' ? ports.bets.queue() : ports.moves.queue())
+          const ids = new Set<string>()
+          for (const op of queue) {
+            const of = batchOf(op)
+            if (!of || of.batch !== entry.id || of.undo !== undo) continue
+            if (op.kind === 'bulk-add') op.entries.slice(op.done ?? 0).forEach((e) => ids.add(e.id))
+            else if (op.kind !== 'update') ids.add(op.id)
+          }
+          return ids
         }
-        return ids
-      }
-      const stamp = entry.stamp
-      for (const table of ['bets', 'moves'] as const) {
-        // Undone, or from before batches had stamps (its rows carry no receipt): nothing to ask.
-        if (entry.undone || stamp === undefined) continue
-        const queued = await inQueue(table, false)
-        const open = unanswered(entry, table).filter((id) => !queued.has(id))
-        if (open.length === 0) continue
-        const stamps = await rowStamps(table === 'bets' ? 'entries' : 'bankroll_moves', open)
-        const made = open.filter((id) => stamps.has(id) && sameStamp(stamps.get(id) as string, stamp))
-        const present = open.filter((id) => stamps.has(id) && !made.includes(id))
-        const missing = open.filter((id) => !stamps.has(id))
-        setBatches(await recordBatchEvent(uid, { kind: 'outcome', batch: entry.id, table, stamp, made, present, missing }))
-      }
-      if (entry.undo) {
-        const u = entry.undo
-        const answered = new Set([...u.removed, ...u.kept, ...(u.failed ?? [])])
-        let again = false
+        const stamp = entry.stamp
         for (const table of ['bets', 'moves'] as const) {
-          const queued = await inQueue(table, true)
-          const open = (table === 'bets' ? u.bets : u.moves).filter((id) => !answered.has(id) && !queued.has(id))
+          // Undone, or from before batches had stamps (its rows carry no receipt): nothing to ask.
+          if (entry.undone || stamp === undefined) continue
+          // Not queued yet: the resume sends it (asked now, none would be there).
+          if (entry.parts?.[table]?.phase === 'prepared') continue
+          const queued = await inQueue(table, false)
+          // No answer yet, or not there when last asked (it may be by now).
+          const missing = (table === 'bets' ? entry.missing : entry.missingMoves) ?? []
+          const open = [...new Set([...unanswered(entry, table), ...missing])].filter((id) => !queued.has(id))
           if (open.length === 0) continue
           const stamps = await rowStamps(table === 'bets' ? 'entries' : 'bankroll_moves', open)
-          for (const id of open) {
-            const found = stamps.get(id)
-            const asked = u.stamps?.[id] ?? u.stamp
-            if (found === undefined) setBatches(await recordBatchEvent(uid, { kind: 'undo', batch: entry.id, table, stamp: asked, id, removed: true }))
-            else if (sameStamp(found, asked)) again = true
-            else setBatches(await recordBatchEvent(uid, { kind: 'undo', batch: entry.id, table, stamp: asked, id, removed: false }))
+          const made = open.filter((id) => stamps.has(id) && sameStamp(stamps.get(id) as string, stamp))
+          const present = open.filter((id) => stamps.has(id) && !made.includes(id))
+          const gone = open.filter((id) => !stamps.has(id))
+          setBatches(await recordBatchEvent(uid, { kind: 'outcome', batch: entry.id, table, stamp, made, present, missing: gone }))
+        }
+        const u = entry.undo
+        // An Undo from before it kept the stamps it asked at has nothing to compare with.
+        if (u && u.phase !== 'prepared' && (u.stamp || u.stamps)) {
+          const answered = new Set([...u.removed, ...u.kept, ...(u.failed ?? [])])
+          let again = false
+          for (const table of ['bets', 'moves'] as const) {
+            const queued = await inQueue(table, true)
+            const open = (table === 'bets' ? u.bets : u.moves).filter((id) => !answered.has(id) && !queued.has(id))
+            if (open.length === 0) continue
+            const stamps = await rowStamps(table === 'bets' ? 'entries' : 'bankroll_moves', open)
+            for (const id of open) {
+              const found = stamps.get(id)
+              const asked = u.stamps?.[id] ?? u.stamp
+              if (found === undefined) setBatches(await recordBatchEvent(uid, { kind: 'undo', batch: entry.id, table, stamp: asked, id, removed: true }))
+              else if (sameStamp(found, asked)) again = true
+              else setBatches(await recordBatchEvent(uid, { kind: 'undo', batch: entry.id, table, stamp: asked, id, removed: false }))
+            }
+          }
+          // Still there as the batch wrote them: their removal goes out again
+          // (queued here, under the lock already held).
+          if (again) {
+            setBatches(await ports.history.change(entry.id, (x) => (x.undo && x.undo.at === u.at ? { ...x, undo: { ...x.undo, phase: 'prepared' } } : x)))
+            await queueParts(ports, entry.id)
           }
         }
-        // Still there as the batch wrote them: their removal goes out again.
-        if (again) await continueOperation(ports, entry.id, (x) => (x.undo ? { ...x, undo: { ...x.undo, phase: 'prepared' } } : x))
-      }
-      const s = entry.restore?.settings
-      const us = entry.undo?.settings
-      const st = batchStatus(entry, batchLiveRef.current(entry))
-      const settingsOpen = !entry.undone ? st.settings.unknown : []
-      const undoOpen = st.undo?.settings?.unknown ?? []
-      if (s && (settingsOpen.length > 0 || undoOpen.length > 0)) {
-        const row = await getSettings(uid)
-        const defaults = DEFAULT_SETTINGS as unknown as Partial<Record<SettingsField, unknown>>
-        const values = row as unknown as Partial<Record<SettingsField, unknown>> | null
-        if (settingsOpen.length > 0) {
-          const found = checkSettings(s, values, settingsOpen, false, defaults)
-          setBatches(await recordBatchEvent(uid, { kind: 'settings', batch: entry.id, editedAt: s.editedAt, ...found }))
+        const s = entry.restore?.settings
+        const us = entry.undo?.settings
+        const st = batchStatus(entry, batchLiveRef.current(entry))
+        // Not queued yet: the resume writes them; there is nothing to ask the server.
+        const settingsOpen = !entry.undone && s?.phase !== 'prepared' ? st.settings.unknown : []
+        const undoOpen = us?.phase !== 'prepared' ? (st.undo?.settings?.unknown ?? []) : []
+        if (s && (settingsOpen.length > 0 || undoOpen.length > 0)) {
+          const row = await getSettings(uid)
+          const defaults = DEFAULT_SETTINGS as unknown as Partial<Record<SettingsField, unknown>>
+          const values = row as unknown as Partial<Record<SettingsField, unknown>> | null
+          if (settingsOpen.length > 0) {
+            const found = checkSettings(s, values, settingsOpen, false, defaults)
+            setBatches(await recordBatchEvent(uid, { kind: 'settings', batch: entry.id, editedAt: s.editedAt, ...found }))
+          }
+          if (us && undoOpen.length > 0) {
+            const found = checkSettings(s, values, undoOpen, true, defaults)
+            setBatches(await recordBatchEvent(uid, { kind: 'settings', batch: entry.id, undo: true, editedAt: us.editedAt ?? entry.undo?.at, ...found }))
+          }
         }
-        if (us && undoOpen.length > 0) {
-          const found = checkSettings(s, values, undoOpen, true, defaults)
-          setBatches(await recordBatchEvent(uid, { kind: 'settings', batch: entry.id, undo: true, editedAt: us.editedAt ?? entry.undo?.at, ...found }))
-        }
-      }
+      })
     },
     [activeUserId, portsFor]
   )

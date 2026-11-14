@@ -255,6 +255,20 @@ test.describe('the history keeps what to do about a batch that is not finished',
     await expect(result.locator('.result-bets')).toContainText('Not on the server (never arrived, or deleted since): 1 bet. To add them, pick the file again')
     await expect(result.locator('.result-recover-pickAgain')).toHaveText('Pick the file again')
     await expect(result.locator('.result-overall')).toHaveText('Finished, but part of it is not on the server (see above).')
+    // The missing row is put on the server later (another device): asked again, it is there now.
+    await page.evaluate(
+      ({ from, to }) => {
+        const all = JSON.parse(localStorage.getItem('e2e:rows') ?? '[]') as { id: string; updated_at: string }[]
+        const src = all.find((r) => r.id === from) as { id: string; updated_at: string }
+        all.push({ ...src, id: to, updated_at: new Date().toISOString() })
+        localStorage.setItem('e2e:rows', JSON.stringify(all))
+      },
+      { from: id(2), to: id(9) }
+    )
+    await result.locator('.result-recover-check').click()
+    await expect(result.locator('.result-bets')).toContainText('Already on the server, left as they were: 1.')
+    await expect(result.locator('.result-bets')).not.toContainText('Not on the server')
+    await expect(result.locator('.result-recover-pickAgain')).toHaveCount(0)
   })
 })
 
@@ -492,6 +506,33 @@ test.describe('what the history and the details say, as it is', () => {
     await result.locator('.result-undo-go').click()
     await expect(result.locator('.result-undo-state')).toContainText('Kept, changed since the import (here or on another device): 1.', { timeout: 15_000 })
     await expect(result.locator('.result-undo-state')).not.toContainText('restore')
+  })
+
+  test('Undo clicked twice in the history, and its toast’s Undo twice: each done once, and the rows put back can be undone again', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await importFile(page, CSV, 'twice.csv')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced', { timeout: 15_000 })
+    const imported = async (): Promise<number> => (await serverRows(page)).filter((r) => r.note.startsWith('imported')).length
+    expect(await imported()).toBe(2)
+    await menu(page, '.data-btn')
+    const batch = page.locator('.data-batch', { hasText: 'twice.csv' })
+    await batch.locator('.data-undo').dblclick()
+    await expect(page.locator('.toast')).toContainText('Removed 2 bets of that import')
+    await expect.poll(imported, { timeout: 15_000 }).toBe(0)
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.data-modal')).toHaveCount(0)
+    // Put back, from the toast: once, under one new stamp.
+    await page.locator('.toast-action').dblclick()
+    await expect(page.locator('.toast')).toContainText('Undone')
+    await expect.poll(imported, { timeout: 15_000 }).toBe(2)
+    await expect(page.locator('.sync-badge')).toHaveText('Synced', { timeout: 15_000 })
+    // …and they can be undone again, as the batch they are now.
+    await menu(page, '.data-btn')
+    await expect(batch).not.toContainText('already')
+    await batch.locator('.data-undo').click()
+    await expect(page.locator('.toast')).toContainText('Removed 2 bets of that import')
+    await expect.poll(imported, { timeout: 15_000 }).toBe(0)
   })
 
   test('an entry from before this version: no answer was kept, and it does not say all of it is on the server', async ({ page }) => {

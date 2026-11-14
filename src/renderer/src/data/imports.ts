@@ -204,6 +204,26 @@ export const MAX_IMPORTS = 20
 /** The origin a settings write of an Undo carries (see PendingSettings.fieldOrigin). */
 export const undoOrigin = (batch: string): string => `undo:${batch}`
 
+/**
+ * Whether a settings write of an operation (origin: its id, or undoOrigin(id))
+ * left in a closed window's journal is still wanted: only while that part is
+ * still to be stored in the queue (prepared, or held by a failed write) with
+ * the same time, and a restore's only while it is not undone. Queued, sent or
+ * answered since (another window resumed it), replayed it would be a second
+ * write at its old time.
+ */
+export function journalWanted(history: readonly ImportBatch[], e: { origin?: string; editedAt: string }): boolean {
+  if (!e.origin) return true
+  const undo = e.origin.startsWith(undoOrigin(''))
+  const id = undo ? e.origin.slice(undoOrigin('').length) : e.origin
+  const b = history.find((x) => x.id === id)
+  if (!b) return false
+  const phase = undo ? b.undo?.settings?.phase : b.restore?.settings?.phase
+  const at = undo ? (b.undo?.settings?.editedAt ?? b.undo?.at) : b.restore?.settings?.editedAt
+  if (phase !== 'prepared' && phase !== 'held') return false
+  return at === e.editedAt && (undo || !b.undone)
+}
+
 const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
 const optStrings = (v: unknown): boolean => v === undefined || strings(v)
 

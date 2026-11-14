@@ -10,6 +10,7 @@ import {
   forgetImports,
   freshImports,
   HistoryFullError,
+  journalWanted,
   opsAsEvents,
   prepare,
   recordBatchEvent,
@@ -874,5 +875,48 @@ describe('review of the rebuild — queues and generations', () => {
     const sent = editSettings(null, { unitSize: 5 }, S)
     const current = editSettings(sent, { oddsFormat: 'american' }, T2, undefined, 'R')
     expect(afterSettingsAnswer(current, sent)?.fieldOrigin).toEqual({ oddsFormat: 'R' })
+  })
+
+  it('a restore’s settings resumed after the user changed the same field: the newer change is kept, not overwritten', async () => {
+    const { ports, calls, pending } = fakePorts({ pending: editSettings(null, { oddsFormat: 'fractional' }, T2) })
+    await prepare(U, restore({ parts: {} }))
+    await queueParts(ports, 'R')
+    expect(calls.settings).toBe(0)
+    expect(pending()?.patch).toEqual({ oddsFormat: 'fractional' })
+    const e = await entryOf()
+    expect(e.restore?.settings?.kept).toEqual(['oddsFormat'])
+    expect(e.restore?.settings?.phase).toBe('queued')
+  })
+
+  it('…while a change made before the restore is written over, as it would have been then', async () => {
+    const { ports, calls, pending } = fakePorts({ pending: editSettings(null, { oddsFormat: 'fractional' }, '2026-11-05T09:00:00.000Z') })
+    await prepare(U, restore({ parts: {} }))
+    await queueParts(ports, 'R')
+    expect(calls.settings).toBe(1)
+    expect(pending()?.patch.oddsFormat).toBe('american')
+  })
+
+  it('rows not there when asked can be asked again: Check again is offered', () => {
+    const e = restore({ parts: {}, restore: { ...restore().restore!, settings: undefined }, made: ['b1'], missing: ['b2'], madeMoves: ['m1'] })
+    const st = batchStatus(e, live({ bets: [], moves: [] }))
+    expect(st.actions).toContain('check')
+  })
+
+  it('a closed window’s journal: an operation’s write only while that part is still to be queued, at its time', () => {
+    const b = restore()
+    const queued = restore({ restore: { ...b.restore!, settings: { ...b.restore!.settings!, phase: 'queued' } } })
+    expect(journalWanted([b], { origin: 'R', editedAt: S })).toBe(true)
+    expect(journalWanted([b], { origin: 'R', editedAt: T2 })).toBe(false)
+    expect(journalWanted([queued], { origin: 'R', editedAt: S })).toBe(false)
+    expect(journalWanted([{ ...b, undone: true }], { origin: 'R', editedAt: S })).toBe(false)
+    expect(journalWanted([], { origin: 'R', editedAt: S })).toBe(false)
+    expect(journalWanted([], { editedAt: S })).toBe(true)
+    const undone: ImportBatch = {
+      ...queued,
+      undone: true,
+      undo: { at: T3, stamp: S, bets: [], moves: [], changedHere: 0, goneHere: 0, removed: [], kept: [], settings: { asked: ['oddsFormat'], keptHere: [], editedAt: T3, phase: 'prepared' } }
+    }
+    expect(journalWanted([undone], { origin: undoOrigin('R'), editedAt: T3 })).toBe(true)
+    expect(journalWanted([{ ...undone, undo: { ...undone.undo!, settings: { ...undone.undo!.settings!, phase: 'queued' } } }], { origin: undoOrigin('R'), editedAt: T3 })).toBe(false)
   })
 })

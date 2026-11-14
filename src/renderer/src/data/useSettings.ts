@@ -17,6 +17,7 @@ import { backoff, migrationNotice, pushSettings, retryPlan, syncStatus, type Set
 import { classifySyncError, SignedOutError } from './errors'
 import { getSettings, saveSettings, subscribeToSettings } from './settings'
 import { journalEntry, journalRemove, newerSettings, replayJournals, type JournalEdit, type SettingsSaveState } from './settingsJournal'
+import { freshImports, journalWanted } from './imports'
 import { queueStore, withLock } from './store'
 
 export type { SettingsSaveState }
@@ -323,8 +324,12 @@ export function useSettings(
     // Edits a window closed (or reloaded) before it could queue them, kept in
     // its journal: queued now, then out of the journal.
     let live = true
-    void replayJournals(userId, async (edits) => {
+    void replayJournals(userId, async (all) => {
       if (!live || !store) return false
+      // An operation's write only while that part is still to be queued (see journalWanted).
+      const history = all.some((e) => e.origin) ? await freshImports(userId) : []
+      const edits = all.filter((e) => journalWanted(history, e))
+      if (edits.length === 0) return true
       const r = await store.update((current) => edits.reduce<PendingSettings | null>((acc, e) => editSettings(acc, e.patch, e.editedAt, e.guard, e.origin), current))
       if (live) mirror(r.value)
       if (r.saved) setTimeout(() => void syncNowRef.current(), 0)
