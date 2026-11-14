@@ -74,12 +74,14 @@ describe('restore and Undo: only what the batch wrote, and nobody changed since'
 
   it('an Undo that never needs the server (its add had not gone out) says what it did at once', async () => {
     const told: BatchEvent[] = []
+    // The queue the Undo's deletes were queued onto.
     const queue: PendingOp[] = [
-      // Cancelled outright: no op for it is left.
-      // Kept: an edit queued since keeps it (its add is still there).
+      // Cancelled outright: its add had not gone out.
+      { opId: 'a1', kind: 'add', id: 'cancelled', input, queuedAt: S, batch: 'B' },
+      // Kept: an edit folded into its add since keeps it.
       { opId: 'a2', kind: 'add', id: 'kept', input, queuedAt: S, editedAt: 'later', batch: 'B' },
-      // Goes to the server: its answer will tell.
-      { opId: 'd3', kind: 'delete', id: 'sent', ifStamp: S, batch: 'B' },
+      // Its add went out: the delete goes to the server, whose answer will tell.
+      { opId: 'a3', kind: 'add', id: 'sent', input, queuedAt: S, batch: 'B', sent: true },
       // In an import still queued: its delete goes after it.
       { opId: 'imp', kind: 'bulk-add', entries: [{ id: 'imported', input }], queuedAt: S, batch: 'B' }
     ]

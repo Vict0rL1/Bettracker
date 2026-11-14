@@ -123,6 +123,9 @@ if (typeof window !== 'undefined') {
   })
 }
 /** Store something of `userId`'s, unless they have signed out in this window since. */
+/** Whether this user's data may still be written on this device (not signed out). */
+export const writable = (userId: string): boolean => !signedOut.has(userId)
+
 const forUser = (userId: string, write: () => void): void => {
   if (!signedOut.has(userId)) write()
 }
@@ -587,14 +590,15 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
 
 /**
  * Where the generation of a row that `stamp` names starts in the queue: its
- * own add, when that is queued; else just past what an earlier generation of
- * the batch left for the row (an earlier Undo's delete, an add with another
- * stamp); else the start.
+ * own add (or the batch's import holding it), when that is queued; else just
+ * past what an earlier generation of the batch left for the row (an earlier
+ * Undo's delete, an add with another stamp); else the start.
  */
 export function generationStart<I>(outbox: readonly PendingOp<I>[], id: string, stamp: string, batch?: string): number {
   for (let i = outbox.length - 1; i >= 0; i--) {
     const o = outbox[i]
     if (o.kind === 'add' && o.id === id && o.queuedAt === stamp) return i
+    if (o.kind === 'bulk-add' && o.queuedAt === stamp && (!batch || (o.batch ?? o.opId) === batch) && o.entries.some((e) => e.id === id)) return i
   }
   for (let i = outbox.length - 1; i >= 0; i--) {
     const o = outbox[i]

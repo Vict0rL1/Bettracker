@@ -274,7 +274,8 @@ export function batchStatus(b: ImportBatch, live: BatchLive): BatchStatus {
   const watched = [...own, ...(undo ? [undo.state] : [])]
   const actions: RecoveryAction[] = []
   if (watched.includes('preparing')) actions.push('resume')
-  if (watched.includes('unknown')) actions.push('check')
+  // Not there when asked, or no answer: the server can be asked (again).
+  if (watched.includes('unknown') || (!undone && bets.missing + moves.missing > 0)) actions.push('check')
   if (watched.includes('held')) actions.push('saveAgain')
   if (bets.rejectedOpen || moves.rejectedOpen || undo?.failedOpen) actions.push('sendAgain')
   // Could not be queued, or not on the server when asked again: picking the file again adds what is missing.

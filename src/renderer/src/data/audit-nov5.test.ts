@@ -19,7 +19,7 @@ import {
   type ImportBatch,
   type SettingsField
 } from './imports'
-import { afterSettingsAnswer, editSettings, enqueueOp, pendingWrite, supersededBy, type MoveOp, type PendingOp, type PendingSettings } from './offline'
+import { afterSettingsAnswer, applyOutbox, editSettings, enqueueOp, pendingWrite, supersededBy, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 import {
   checkSettings,
   continueOperation,
@@ -35,7 +35,7 @@ import {
 } from './operations'
 import { oneAtATime } from './oneAtATime'
 import { evictExpendable } from './store'
-import { addsQueued, queuedByBatch, removalsQueued, settledHere } from './useOpQueue'
+import { addsQueued, queuedByBatch, removalsQueued, settledHere, undoQueued } from './useOpQueue'
 import { settingsOutcomes } from './useSettings'
 
 const U = 'u-nov5'
@@ -336,9 +336,11 @@ describe('1 · generations: a batch undone and put back is a new one; late answe
   })
 
   it('an Undo whose own re-add was cancelled here is told removed; one kept by an edit folded in, kept', async () => {
+    // The queue the second Undo's deletes were queued onto.
     const q: PendingOp[] = [
       { opId: 'add1', kind: 'add', id: 'M', input: input(1), queuedAt: S, batch: 'R', sent: true },
       { opId: 'del1', kind: 'delete', id: 'M', ifStamp: S, batch: 'R' },
+      { opId: 'add2', kind: 'add', id: 'M', input: input(1), queuedAt: T3, batch: 'R' },
       { opId: 'a', kind: 'add', id: 'N', input: input(2), queuedAt: T3, editedAt: '2026-11-05T10:40:00.000Z', batch: 'R' }
     ]
     const told: unknown[] = []
@@ -780,3 +782,97 @@ describe('4 · what the history and the details say', () => {
 
 /** The fields a test names: typed for SettingsField lists. */
 export type { SettingsField }
+
+describe('review of the rebuild — queues and generations', () => {
+  it('an Undo after the user deleted the row (still queued) and a restore put it back: its delete goes after the restore’s import', () => {
+    const q: PendingOp[] = [
+      { opId: 'd', kind: 'delete', id: 'X' },
+      { opId: 'b', kind: 'bulk-add', entries: [{ id: 'X', input: input(1) }], queuedAt: S, batch: 'R' }
+    ]
+    const undo: PendingOp = { opId: 'u', kind: 'delete', id: 'X', ifStamp: S, batch: 'R' }
+    const after = enqueueOp(q, undo)
+    expect(after.map((o) => o.opId)).toEqual(['d', 'b', 'u'])
+    expect(applyOutbox([], after).map((b) => b.id)).toEqual([])
+    // An edit of the user's queued after the restore still keeps it.
+    const edited = [...q, { opId: 'e', kind: 'update' as const, id: 'X', input: input(2), editedAt: T2 }]
+    expect(enqueueOp(edited, undo).map((o) => o.opId)).toEqual(['d', 'b', 'e'])
+  })
+
+  it('an Undo after an Undo of the Undo: an earlier Undo’s delete left in the queue is not its business', () => {
+    const q: PendingOp[] = [
+      { opId: 'd1', kind: 'delete', id: 'X', ifStamp: S, batch: 'R' },
+      { opId: 'b2', kind: 'bulk-add', entries: [{ id: 'X', input: input(1) }], queuedAt: T3, batch: 'R' }
+    ]
+    expect(enqueueOp(q, { opId: 'd2', kind: 'delete', id: 'X', ifStamp: T3, batch: 'R' }).map((o) => o.opId)).toEqual(['d1', 'b2', 'd2'])
+    // The same with single adds (moves): an earlier generation's add left in the queue.
+    const moves: PendingOp[] = [
+      { opId: 'a1', kind: 'add', id: 'M', input: input(1), queuedAt: S, batch: 'R', sent: true },
+      { opId: 'd1', kind: 'delete', id: 'M', ifStamp: S, batch: 'R', sent: true }
+    ]
+    expect(enqueueOp(moves, { opId: 'd2', kind: 'delete', id: 'M', ifStamp: T3, batch: 'R' }).map((o) => o.opId)).toEqual(['a1', 'd1', 'd2'])
+  })
+
+  it('what an Undo’s delete did is read from the queue it was queued onto: an earlier plain delete is not "kept"', () => {
+    // The user deleted M (queued), a restore re-added it, the Undo cancels the re-add: removed.
+    const before: PendingOp[] = [
+      { opId: 'd', kind: 'delete', id: 'M' },
+      { opId: 'a', kind: 'add', id: 'M', input: input(1), queuedAt: S, batch: 'R' }
+    ]
+    expect(undoQueued(before, { opId: 'u', kind: 'delete', id: 'M', ifStamp: S, batch: 'R' })).toEqual({ removed: true })
+    // An edit queued after the row's confirmed add keeps it (the delete is left out).
+    const edited: PendingOp[] = [{ opId: 'e', kind: 'update', id: 'N', input: input(2), editedAt: T2 }]
+    expect(undoQueued(edited, { opId: 'u', kind: 'delete', id: 'N', ifStamp: S, batch: 'R' })).toEqual({ removed: false })
+    // Queued: the server answers.
+    expect(undoQueued([], { opId: 'u', kind: 'delete', id: 'Z', ifStamp: S, batch: 'R' })).toBeNull()
+  })
+
+  it('a refusal of a restored deposit with an edit folded in is told for its generation (the add’s, not the edit’s time)', () => {
+    const op: PendingOp = { opId: 'a', kind: 'add', id: 'm1', input: input(1), queuedAt: S, editedAt: T2, batch: 'R' }
+    const [e] = opsAsEvents('rejected', 'moves', [op], 'no')
+    expect(e).toMatchObject({ stamp: S, ids: ['m1'] })
+    expect(foldBatchEvent([restore()], e)[0].rejectedMoves).toEqual(['m1'])
+    // Its answer the same way: made by it, whatever the edit.
+    expect(foldBatchEvent([restore()], addAnswer(op as Extract<PendingOp<unknown>, { kind: 'add' }>, 'moves', { updatedAt: T2 })!)[0].madeMoves).toEqual(['m1'])
+  })
+
+  it('late answers of an earlier Undo never land on the Undo after it', () => {
+    const undo2 = restore({ undone: true, undo: { at: T3, stamp: T3, bets: ['b1'], moves: [], removed: [], kept: [], changedHere: 0, goneHere: 0, settings: { asked: ['oddsFormat'], editedAt: T3 } } })
+    let list = foldBatchEvent([undo2], { kind: 'undo', batch: 'R', table: 'bets', stamp: S, id: 'b1', removed: false })
+    list = foldBatchEvent(list, { kind: 'rejected', batch: 'R', table: 'bets', undo: true, stamp: S, ids: ['b1'], reason: 'no' })
+    list = foldBatchEvent(list, { kind: 'settings', batch: 'R', undo: true, editedAt: T2, confirmed: ['oddsFormat'] })
+    expect(list[0].undo).toMatchObject({ removed: [], kept: [] })
+    expect(list[0].undo?.failed ?? []).toEqual([])
+    expect(list[0].undo?.settings?.confirmed ?? []).toEqual([])
+    // Its own are taken.
+    list = foldBatchEvent(list, { kind: 'undo', batch: 'R', table: 'bets', stamp: T3, id: 'b1', removed: true })
+    expect(list[0].undo?.removed).toEqual(['b1'])
+  })
+
+  it('an Undo recorded by the previous version for an import with no stamps takes its answers', () => {
+    const legacy = { id: 'L', at: S, file: 'old.csv', fingerprint: 'f', ids: ['a'], undone: true, undo: { at: S, stamp: '', bets: ['a'], moves: [], removed: [], kept: [], changedHere: 0, goneHere: 0 } } as ImportBatch
+    expect(foldBatchEvent([legacy], { kind: 'undo', batch: 'L', table: 'bets', stamp: '2026-01-01T00:00:00.000Z', id: 'a', removed: true })[0].undo?.removed).toEqual(['a'])
+  })
+
+  it('an Undo of an import from before stamps removes each row by the stamp this device saw, never unguarded', async () => {
+    const { ports, bets } = fakePorts()
+    const legacy = { id: 'L', at: S, file: 'old.csv', fingerprint: 'f', ids: ['a', 'b'], undone: true, undo: { at: T2, stamp: '', stamps: { a: S, b: T2 }, phase: 'prepared', bets: ['a', 'b'], moves: [], removed: [], kept: [], changedHere: 0, goneHere: 0 } } as ImportBatch
+    await prepare(U, legacy)
+    await queueParts(ports, 'L')
+    expect(bets.map((o) => (o.kind === 'delete' ? [o.id, o.ifStamp] : []))).toEqual([
+      ['a', S],
+      ['b', T2]
+    ])
+  })
+
+  it('settledHere: a confirmed add with an edit of the user’s queued after it keeps the row', async () => {
+    const told: unknown[] = []
+    await settledHere([{ opId: 'e', kind: 'update', id: 'X', input: input(1), editedAt: T2 }], [{ id: 'X', stamp: S }], 'R', 'bets', async (e) => void told.push(e))
+    expect(told).toEqual([{ kind: 'undo', batch: 'R', table: 'bets', stamp: S, id: 'X', removed: false }])
+  })
+
+  it('afterSettingsAnswer keeps the origin of what is left pending', () => {
+    const sent = editSettings(null, { unitSize: 5 }, S)
+    const current = editSettings(sent, { oddsFormat: 'american' }, T2, undefined, 'R')
+    expect(afterSettingsAnswer(current, sent)?.fieldOrigin).toEqual({ oddsFormat: 'R' })
+  })
+})

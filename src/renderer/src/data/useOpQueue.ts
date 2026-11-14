@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { drainOutbox, type DrainHooks, type DrainResult } from './drain'
-import { enqueueOp, headAsSent, insertStamp, keepRefused, markHeadSent, requeueRefused, type PendingOp, type Refused } from './offline'
+import { enqueueOp, generationStart, headAsSent, insertStamp, keepRefused, markHeadSent, requeueRefused, type PendingOp, type Refused } from './offline'
 import { batchOf, type BatchEvent } from './imports'
 import { queueStore, withLock } from './store'
 
@@ -48,6 +48,8 @@ export interface OpQueue<I> {
    * Resolves with whether storage holds the queue, and whether they were queued now.
    */
   enqueueIf: (already: (q: readonly PendingOp<I>[]) => boolean, ops: readonly PendingOp<I>[]) => Promise<{ saved: boolean; queued: boolean }>
+  /** Queue ops, and say what the queue was just before (as stored then, under the lock): what they were queued onto. */
+  enqueueSeen: (ops: readonly PendingOp<I>[]) => Promise<{ saved: boolean; before: PendingOp<I>[] }>
   /** The queue as stored, read under its lock. */
   fresh: () => Promise<PendingOp<I>[]>
   /** Send the queue, holding the lock that lets one window at a time do it. Null with no user. */
@@ -56,6 +58,8 @@ export interface OpQueue<I> {
   retryRefused: () => Promise<boolean>
   /** Let the refused changes go. */
   discardRefused: () => Promise<void>
+  /** Let go the refused adds of a batch (it was undone: sending them again would put back what the Undo took out). */
+  discardBatchRefused: (batch: string) => Promise<void>
   /** Try storage again for a held queue and refused list (after room was made), and a refusal that found no room. */
   saveAgain: () => Promise<boolean>
 }
@@ -90,27 +94,40 @@ export function removalsQueued<I>(queue: readonly PendingOp<I>[], batch: string,
 }
 
 /**
- * An Undo's deletes that never needed the server: the batch's add of that
- * row (of this generation) had not gone out yet, so queueing the delete
- * cancelled it (removed), or a change queued since kept it (see enqueueOp).
- * Told to the batch now, as the server's answer is for the rest.
+ * What queueing an Undo's delete did, on the queue it was queued onto: it is
+ * in the queue (the server answers: null); it cancelled the batch's own add
+ * of that generation, which had not gone out (removed: the row never reaches
+ * the server); or it was left out, because a change queued since for the row
+ * keeps it (kept). See enqueueOp.
+ */
+export function undoQueued<I>(before: readonly PendingOp<I>[], op: Extract<PendingOp<I>, { kind: 'delete' }>): { removed: boolean } | null {
+  const after = enqueueOp(before, op)
+  if (after.some((o) => o.opId === op.opId)) return null
+  const stamp = op.ifStamp ?? ''
+  const from = generationStart(before, op.id, stamp, op.batch)
+  const own = (o: PendingOp<I>): boolean => o.kind === 'add' && o.id === op.id && !o.sent && o.queuedAt === stamp && insertStamp(o) === stamp
+  return { removed: before.slice(from).some(own) && !after.some(own) }
+}
+
+/**
+ * An Undo's deletes that never needed the server (see undoQueued), told to
+ * the batch now, as the server's answer is for the rest. `before` is the
+ * queue the deletes were queued onto, in order.
  */
 export async function settledHere<I>(
-  queue: readonly PendingOp<I>[],
+  before: readonly PendingOp<I>[],
   targets: readonly { id: string; stamp: string }[],
   batch: string,
   table: 'bets' | 'moves',
   tell: (e: BatchEvent) => Promise<void>
 ): Promise<void> {
+  let q: PendingOp<I>[] = [...before]
+  let n = 0
   for (const { id, stamp } of targets) {
-    const forRow = queue.filter((o) => o.kind !== 'bulk-add' && o.id === id)
-    if (forRow.some((o) => o.kind === 'delete' && o.batch === batch && o.ifStamp === stamp)) continue
-    // In an import still queued, the delete goes after it: it is in the queue.
-    if (queue.some((o) => o.kind === 'bulk-add' && o.entries.slice(o.done ?? 0).some((e) => e.id === id))) continue
-    // What keeps the row: an add of its own generation (an edit folded in), or a change of the user's.
-    const ownAdd = forRow.some((o) => o.kind === 'add' && (o.queuedAt === stamp || insertStamp(o) === stamp))
-    const changed = forRow.some((o) => o.kind === 'update' || (o.kind === 'delete' && !o.ifStamp))
-    await tell({ kind: 'undo', batch, table, stamp, id, removed: !ownAdd && !changed })
+    const op = { opId: `settled-${n++}`, kind: 'delete', id, ifStamp: stamp, batch } as Extract<PendingOp<I>, { kind: 'delete' }>
+    const r = undoQueued(q, op)
+    q = enqueueOp(q, op)
+    if (r) await tell({ kind: 'undo', batch, table, stamp, id, removed: r.removed })
   }
 }
 
@@ -290,6 +307,19 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     [update]
   )
 
+  const enqueueSeen = useCallback(
+    async (ops: readonly PendingOp<I>[]): Promise<{ saved: boolean; before: PendingOp<I>[] }> => {
+      // As stored when they were queued onto it (decided once: a replay gives the same).
+      let before: PendingOp<I>[] | null = null
+      const r = await update((q) => {
+        before ??= [...q]
+        return ops.reduce((acc, op) => enqueueOp<I>(acc, op), q)
+      })
+      return { saved: r.saved, before: before ?? [] }
+    },
+    [update]
+  )
+
   const fresh = useCallback(async (): Promise<PendingOp<I>[]> => (stores ? stores.queue.fresh() : outboxRef.current), [stores])
 
   const drain = useCallback(
@@ -374,6 +404,19 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     showRefused(r.value)
   }, [stores, showRefused, shownRefused])
 
+  const discardBatchRefused = useCallback(
+    async (batch: string): Promise<void> => {
+      if (!stores) return
+      const ofBatch = (r: Refused<I>): boolean => r.ops.some((op) => {
+        const of = batchOf(op)
+        return of !== null && of.batch === batch && !of.undo
+      })
+      const r = await stores.refused.update((list) => list.filter((x) => !ofBatch(x)))
+      showRefused(r.value)
+    },
+    [stores, showRefused]
+  )
+
   const saveAgain = useCallback(async (): Promise<boolean> => {
     // The next drain tries to set the refused change apart again.
     setRefusalBlocked(false)
@@ -384,5 +427,5 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     return saved && r.saved
   }, [update, stores, showRefused])
 
-  return { outbox, outboxRef, held, refused, refusedHeld, refusalBlocked, enqueue, enqueueIf, fresh, drain, retryRefused, discardRefused, saveAgain }
+  return { outbox, outboxRef, held, refused, refusedHeld, refusalBlocked, enqueue, enqueueIf, enqueueSeen, fresh, drain, retryRefused, discardRefused, discardBatchRefused, saveAgain }
 }

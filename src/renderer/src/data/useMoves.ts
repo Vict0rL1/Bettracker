@@ -64,6 +64,8 @@ export interface MoveSync {
   queueBatch: (payload: readonly MovePayload[], o: { batch: string; stamp: string }) => Promise<{ saved: boolean; queued: boolean }>
   /** The queue as stored, read under its lock. */
   queueFresh: () => Promise<MoveOp[]>
+  /** As useBetSync's. */
+  discardBatchRefused: (batch: string) => Promise<void>
   /** True while storage refuses the queue (it is in this window only). */
   held: boolean
   /** As useBetSync's. */
@@ -502,11 +504,14 @@ export function useMoves(
 
   const undoMoves = useCallback(
     async (targets: readonly { id: string; stamp: string }[], batch: string): Promise<boolean> => {
-      const saved = await mutateMany(targets.map(({ id, stamp }) => ({ opId: newId(), kind: 'delete', id, ifStamp: stamp, batch })))
-      await settledHere(await queue.fresh(), targets, batch, 'moves', tell)
-      return saved
+      // An Undo's delete without its stamp would remove the row whatever it holds: never queued.
+      if (targets.some((t) => !t.stamp)) throw new Error('An Undo needs the stamp of each row it removes')
+      const r = await queue.enqueueSeen(targets.map(({ id, stamp }) => ({ opId: newId(), kind: 'delete', id, ifStamp: stamp, batch })))
+      setTimeout(() => void syncNowRef.current(), 0)
+      await settledHere(r.before, targets, batch, 'moves', tell)
+      return r.saved
     },
-    [mutateMany, queue.fresh, tell]
+    [queue.enqueueSeen, tell]
   )
 
   const queueBatch = useCallback(
@@ -559,6 +564,7 @@ export function useMoves(
     undoMoves,
     queueBatch,
     queueFresh: queue.fresh,
+    discardBatchRefused: queue.discardBatchRefused,
     held: queue.held,
     batchQueued,
     batchRefused,

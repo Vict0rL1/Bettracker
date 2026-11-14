@@ -14,7 +14,7 @@ import {
   type UndoLog,
   undoOrigin
 } from './imports'
-import { pendingWrite, type MoveOp, type PendingOp, type PendingSettings } from './offline'
+import { fieldTime, pendingWrite, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 import { addsQueued, removalsQueued } from './useOpQueue'
 
 /**
@@ -376,7 +376,9 @@ export async function queuePart(ports: OperationPorts, id: string, part: Operati
           // Undone meanwhile: what it would write is no longer wanted.
           if (now.undone) return await mark(ports, id, part, 'queued')
           const open = openFields(s, Object.keys(s.after) as SettingsField[]).filter((f) => !(s.rejected ?? []).includes(f) && (!s.write || s.write.includes(f)))
-          const taken = s.guard ? foreign(open) : []
+          // Guarded: any change of its own pending keeps a field. Not guarded: a newer one does
+          // (the write, made earlier, would lose to it field by field: see editSettings).
+          const taken = foreign(open).filter((f) => s.guard !== undefined || (pending !== null && fieldTime(pending, f) > s.editedAt))
           await keep(taken, s.editedAt)
           const fields = open.filter((f) => !taken.includes(f))
           if (fields.length === 0) return await mark(ports, id, part, 'queued')

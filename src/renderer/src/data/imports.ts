@@ -405,9 +405,13 @@ function ofThisGeneration(b: ImportBatch, e: BatchEvent): boolean {
   if (e.stamp === undefined) return true
   const undo = e.kind === 'undo' || ((e.kind === 'rejected' || e.kind === 'requeued') && e.undo)
   if (undo) {
-    if (!b.undo) return false
-    if (e.kind === 'undo') return sameStamp(e.stamp, b.undo.stamps?.[e.id] ?? b.undo.stamp) || e.stamp === (b.undo.stamps?.[e.id] ?? b.undo.stamp)
-    return true
+    const u = b.undo
+    if (!u) return false
+    // An Undo of an entry from before stamps, by a version that kept no stamp per row: no generation to tell.
+    if (!u.stamp && !u.stamps) return true
+    const asked = (id: string): string => u.stamps?.[id] ?? u.stamp
+    const same = (id: string): boolean => e.stamp === asked(id) || sameStamp(e.stamp, asked(id))
+    return e.kind === 'undo' ? same(e.id) : e.ids.every(same)
   }
   return b.stamp === undefined || sameStamp(e.stamp, b.stamp) || e.stamp === b.stamp
 }
@@ -478,7 +482,8 @@ export function opsAsEvents<I>(kind: 'rejected' | 'requeued', table: 'bets' | 'm
   for (const op of ops) {
     const of = batchOf(op)
     if (!of) continue
-    const stamp = op.kind === 'bulk-add' || op.kind === 'add' ? insertStamp(op) : op.kind === 'delete' ? op.ifStamp : undefined
+    // The generation the op is of (an edit folded into an add does not change it).
+    const stamp = op.kind === 'bulk-add' || op.kind === 'add' ? op.queuedAt : op.kind === 'delete' ? op.ifStamp : undefined
     const ids = op.kind === 'bulk-add' ? op.entries.slice(op.done ?? 0).map((e) => e.id) : op.kind === 'update' ? [] : [op.id]
     const key = `${of.batch}|${of.undo}|${stamp ?? ''}`
     const cur = by.get(key) ?? { ...of, ...(stamp ? { stamp } : {}), ids: [] }
