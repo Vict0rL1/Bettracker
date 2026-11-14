@@ -215,6 +215,38 @@ Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
+### Auditoría del 5 de noviembre (base 2bc6310)
+
+Informe en `docs/audit-2026-11-06.md`. En corto:
+
+- Importar, restaurar y Deshacer son **operaciones durables**
+  (`data/operations.ts`): cada parte se escribe en el historial con lo que va
+  a encolar (`prepared`), se encola y se marca (`queued`). Cualquier ventana
+  reanuda lo que quedó preparado (al arrancar y cada 20 s), una sola vez, bajo
+  el candado de la operación; no encola si la cola ya tiene esa generación
+  (por sello e ids) o si el servidor ya respondió por ella.
+- El historial guarda **qué dijo el servidor de cada fila** (`made`,
+  `present`, `absent`, `rejected`, `missing`) y de cada ajuste (`confirmed`,
+  `kept`, `rejected`, `missing`); `lib/batchStatus.ts` no deduce nada de una
+  cola vacía.
+- Cada respuesta lleva su **generación**: el sello de las filas
+  (`BatchEvent.stamp`) o el `editedAt` de la escritura de ajustes
+  (`settingsAnswer`). Tras un Deshacer del Deshacer (`redoBatch`), una
+  respuesta tardía del envío anterior no completa el nuevo (`ofThisGeneration`),
+  y el borrado de un Deshacer solo mira su generación (`generationStart`).
+- Los ajustes pendientes llevan su **origen** (`PendingSettings.fieldOrigin`):
+  solo la respuesta a esa escritura cuenta para esa restauración o su Deshacer.
+  Qué hace un Deshacer con cada ajuste lo decide `undoSettingsPlan` (y lo anota
+  `undoSettingsLog`): el valor de la copia se devuelve; el de antes, si nunca
+  se confirmó el reemplazo, no se toca ni se llama «tu cambio posterior».
+- **«Comprobar de nuevo»** solo dice lo que el servidor tiene; si falta algo,
+  ofrece reintentar, nunca lo hace solo.
+- El **registro de confirmaciones entre pestañas** (`data/confirmed.ts`) va
+  numerado con suelo y época; una lectura que no puede verificarse se descarta
+  y se repite, y un fallo al escribirlo se avisa a las demás ventanas.
+- Un primer trabajo de esta auditoría se perdió con un reinicio del contenedor
+  (commits locales sin subir); se rehízo y desde entonces se sube a la rama.
+
 ### Auditoría del 2 de noviembre (base df13583)
 
 Los informes de auditoría no estaban en este contenedor (están en el Mac del
