@@ -725,11 +725,9 @@ test.describe('what the history and the details say, as it is', () => {
     expect((await serverSettings(page))?.odds_format).toBe('decimal')
   })
 
-  test('a batch with something to do, in a desktop window, in Spanish: its buttons go under its name, which keeps its width', async ({ page }) => {
-    await page.setViewportSize({ width: 1024, height: 800 })
-    await page.addInitScript(() => localStorage.setItem('bettracker:lang', 'es'))
-    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
-    await page.evaluate(
+  /** A restore with something to do: rows with no answer, and settings refused. */
+  const seedNeeds = (page: Page): Promise<void> =>
+    page.evaluate(
       ({ uid, ids }) => {
         localStorage.setItem(
           `bettracker:imports:${uid}`,
@@ -758,6 +756,12 @@ test.describe('what the history and the details say, as it is', () => {
       },
       { uid: USER.id, ids: [id(1), id(2)] }
     )
+
+  test('a batch with something to do, in a desktop window, in Spanish: its buttons go under its name, which keeps its width', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 })
+    await page.addInitScript(() => localStorage.setItem('bettracker:lang', 'es'))
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await seedNeeds(page)
     await reload(page)
     await menu(page, '.data-btn')
     const batch = page.locator('.data-batch').first()
@@ -768,6 +772,82 @@ test.describe('what the history and the details say, as it is', () => {
     const actions = await batch.locator('.data-batch-actions').boundingBox()
     expect(name?.width ?? 0).toBeGreaterThan(300)
     expect(actions?.y ?? 0).toBeGreaterThanOrEqual((name?.y ?? 0) + (name?.height ?? 0) - 1)
+  })
+
+  test('the same batch on a 360px phone, in Spanish: each button at least as wide as its words, none past the dialog’s edge', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 740 })
+    await page.addInitScript(() => localStorage.setItem('bettracker:lang', 'es'))
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await seedNeeds(page)
+    await reload(page)
+    await menu(page, '.data-btn')
+    const batch = page.locator('.data-batch').first()
+    await expect(batch.locator('.data-recover-check')).toHaveText('Comprobar de nuevo')
+    const buttons = batch.locator('.data-batch-actions > .btn')
+    expect(await buttons.count()).toBeGreaterThanOrEqual(3)
+    // No label spills out of its button…
+    expect(await buttons.evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent))).toEqual([])
+    // …nor any button out of the dialog, and nothing scrolls sideways.
+    const box = await page.locator('.data-modal').boundingBox()
+    for (const b of await buttons.all()) {
+      const r = await b.boundingBox()
+      expect((r?.x ?? 0) + (r?.width ?? 0)).toBeLessThanOrEqual((box?.x ?? 0) + (box?.width ?? 0) + 0.5)
+    }
+    expect(await page.locator('.data-modal').evaluate((m) => [m, ...Array.from(m.querySelectorAll('*:not(.visually-hidden)'))].filter((e) => e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX !== 'visible' && getComputedStyle(e).overflowX !== 'hidden').map((e) => `${e.tagName}.${e.className} ${e.scrollWidth}/${e.clientWidth}`))).toEqual([])
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360)
+  })
+
+  test('each text names a button that is there: the backup (not "the file"), no retry once undone, and an Undo that could not remove all of it', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    const at = '2026-11-05T10:00:00.000Z'
+    const restoreOf = (over: Record<string, unknown>): Record<string, unknown> => ({
+      kind: 'restore',
+      at,
+      fingerprint: `fp-${over.id as string}`,
+      stamp: at,
+      parts: { bets: { phase: 'queued' } },
+      restore: { skippedBets: 0, skippedMoves: 0, skippedDuplicates: 0, failed: [], held: [] },
+      ...over
+    })
+    const undo = (over: Record<string, unknown>): Record<string, unknown> => ({ at, stamp: at, phase: 'queued', moves: [], changedHere: 0, goneHere: 0, kept: [], ...over })
+    await page.evaluate(
+      ({ uid, list }) => localStorage.setItem(`bettracker:imports:${uid}`, JSON.stringify(list)),
+      {
+        uid: USER.id,
+        list: [
+          restoreOf({ id: 'miss', file: 'backup-missing.json', ids: [id(1), id(9)], made: [id(1)], missing: [id(9)] }),
+          restoreOf({
+            id: 'refused',
+            file: 'backup-refused.json',
+            ids: [id(2)],
+            made: [id(2)],
+            undone: true,
+            undo: undo({ bets: [id(2)], removed: [id(2)], settings: { asked: [], keptHere: [], already: ['oddsFormat'], editedAt: at, phase: 'queued' } }),
+            restore: {
+              skippedBets: 0,
+              skippedMoves: 0,
+              skippedDuplicates: 0,
+              settings: { before: { oddsFormat: 'decimal' }, after: { oddsFormat: 'american' }, editedAt: at, phase: 'queued', rejected: ['oddsFormat'] },
+              failed: [],
+              held: []
+            }
+          }),
+          restoreOf({ id: 'stuck', file: 'backup-stuck.json', ids: [id(3)], made: [id(3)], undone: true, undo: undo({ bets: [id(3)], removed: [], failed: [id(3)] }) })
+        ]
+      }
+    )
+    await reload(page)
+    await menu(page, '.data-btn')
+    const dialog = page.locator('.data-modal')
+    await expect(dialog.locator('.data-batch', { hasText: 'backup-stuck.json' })).toContainText('undone — part was not removed (see details)')
+    await dialog.locator('.data-batch', { hasText: 'backup-missing.json' }).locator('.data-details').click()
+    await expect(dialog.locator('.result-bets')).toContainText('To add them, pick the backup again: what is already here is skipped.')
+    await expect(dialog.locator('.result-recover-pickAgain')).toHaveText('Pick the backup again')
+    await dialog.locator('.result-done').click()
+    await dialog.locator('.data-batch', { hasText: 'backup-refused.json' }).locator('.data-details').click()
+    await expect(dialog.locator('.result-settings')).toContainText('Refused by the server, not replaced: odds format.')
+    await expect(dialog.locator('.result-settings')).not.toContainText('Try the settings again')
+    await expect(dialog.locator('.result-recover-retrySettings')).toHaveCount(0)
   })
 
   test('the Add bet button and the first steps say a bet can be for any day', async ({ page }) => {

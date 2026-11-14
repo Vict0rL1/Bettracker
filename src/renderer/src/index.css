@@ -3625,9 +3625,10 @@ tbody tr.is-selected {
     justify-content: stretch;
   }
 
+  /* As wide as their words at least: they wrap onto a new line before they squeeze them. */
   .data-batch-actions > .btn {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }
 

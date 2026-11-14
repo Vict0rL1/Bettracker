@@ -816,6 +816,12 @@ export const en = {
   'undo.restoreNothing': 'Nothing to undo: nothing this restore added or set is left to take back.',
   'undo.notLoaded': 'Not yet: your data is still loading. Undo it once it has loaded.',
   'undo.already': 'Already done: nothing more to change.',
+  'result.undoHeld': 'Removals only in this window (this device’s storage is full): {n}. Free up space, then choose Save again.',
+  'result.settingsRefusedNoRetry': 'Refused by the server, not replaced: {fields}.',
+  'data.batchUndoNotRemoved': 'undone — part was not removed (see details)',
+  'result.missingBackup': 'Not on the server (never arrived, or deleted since): {items}. To add them, pick the backup again: what is already here is skipped.',
+  'result.undoneWaiting': 'Waiting to sync; the Undo removes them after it: {items}.',
+  'result.undoneOpen': 'No answer from the server before the Undo: {items}. What the Undo did with them is below.',
   ...envStrings.en
 } as const
 
@@ -1604,5 +1610,11 @@ export const es: Record<StringKey, string> = {
   'undo.restoreNothing': 'Nada que deshacer: no queda nada de lo que añadió o cambió esta restauración.',
   'undo.notLoaded': 'Aún no: tus datos todavía se están cargando. Deshazlo cuando terminen de cargar.',
   'undo.already': 'Ya está hecho: no queda nada que cambiar.',
+  'result.undoHeld': 'Eliminaciones solo en esta ventana (el almacenamiento del dispositivo está lleno): {n}. Libera espacio y elige «Guardar de nuevo».',
+  'result.settingsRefusedNoRetry': 'Rechazados por el servidor, no se reemplazaron: {fields}.',
+  'data.batchUndoNotRemoved': 'deshecha: una parte no se quitó (ver detalles)',
+  'result.missingBackup': 'No están en el servidor (no llegaron o se borraron después): {items}. Para añadirlos, elige la copia otra vez: lo que ya está aquí se omite.',
+  'result.undoneWaiting': 'Pendientes de sincronizar; el Deshacer los quita después: {items}.',
+  'result.undoneOpen': 'Sin respuesta del servidor antes del Deshacer: {items}. Lo que hizo el Deshacer con ellos está abajo.',
   ...envStrings.es
 }

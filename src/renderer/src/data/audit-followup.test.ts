@@ -370,7 +370,8 @@ describe('restore result: what is known, never more', () => {
 
   it('a part that failed, was refused, or is only in this window says so, and the whole is not complete', () => {
     const failed = { ...entry, restore: { ...entry.restore!, failed: ['moves' as const], held: ['bets' as const] } }
-    const st = batchStatus(failed, live({ bets: { adds: 3, removals: 0 } }))
+    // Held while this window's storage refuses its queue (see audit-nov5: once stored, it waits).
+    const st = batchStatus(failed, live({ bets: { adds: 3, removals: 0 }, betsHeld: true }))
     expect(st.bets.state).toBe('held')
     expect(st.moves.state).toBe('failed')
     expect(st.complete).toBe(false)

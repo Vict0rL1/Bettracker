@@ -387,6 +387,8 @@ export default function DataDialog(props: Props) {
     if (states.includes('waiting')) return t(b.undone ? 'data.batchUndoWaiting' : 'data.batchWaiting')
     // Undone, but a setting it was to put back is not back on the server (asked again).
     if (b.undone && (st.undo?.settings?.missing.length ?? 0) > 0) return t('data.batchUndoPartial')
+    // Undone, but removals the server refused were let go: those rows are still there.
+    if (b.undone && (st.undo?.failed ?? 0) > 0 && !st.undo?.failedOpen) return t('data.batchUndoNotRemoved')
     if (b.undone) return t('data.batchUndone')
     // Finished, but part of it never reached the server: never called imported or restored.
     if (st.notAdded > 0) return t(st.addedAny ? 'data.batchNotAdded' : 'data.batchNoneAdded')
@@ -836,20 +838,27 @@ function RestoreResult({
   const names = (fields: readonly string[]): string => fields.map((f) => t(`settingName.${f}` as StringKey)).join(', ')
   const lines = (p: PartStatus, items: (n: number) => string): string[] => {
     if (p.state === 'none') return [t('result.none')]
-    return [
+    const out = [
       p.made > 0 ? t('result.added', { items: items(p.made) }) : '',
       p.present > 0 ? t('result.alreadyThere', { n: p.present }) : '',
       p.absent > 0 ? t('result.absent', { n: p.absent }) : '',
       p.untracked > 0 ? t('result.untracked', { items: items(p.untracked) }) : '',
-      p.waiting > 0 ? (p.state === 'held' ? t('result.held', { items: items(p.waiting) }) : t(offline ? 'result.waitingOffline' : 'result.waiting', { items: items(p.waiting) })) : '',
+      p.waiting > 0
+        ? p.state === 'held'
+          ? t('result.held', { items: items(p.waiting) })
+          : t(batch.undone ? 'result.undoneWaiting' : offline ? 'result.waitingOffline' : 'result.waiting', { items: items(p.waiting) })
+        : '',
       p.preparing > 0 ? t('result.preparing', { items: items(p.preparing) }) : '',
       p.unknown > 0 ? t('result.unknown', { items: items(p.unknown) }) : '',
       // Still in the refused list: it can be sent again; let go (or undone): said as it is.
       p.rejected > 0 ? t(p.rejectedOpen ? 'result.refused' : 'result.refusedFinal', { items: items(p.rejected) }) : '',
       p.failed > 0 ? t(batch.kind === 'restore' ? 'result.failed' : 'result.failedFile', { items: items(p.failed) }) : '',
       // Picking the file again is offered only while the batch stands (not undone).
-      p.missing > 0 ? t(st.actions.includes('pickAgain') ? 'result.missing' : 'result.missingNoPick', { items: items(p.missing) }) : ''
+      p.missing > 0 ? t(st.actions.includes('pickAgain') ? (batch.kind === 'restore' ? 'result.missingBackup' : 'result.missing') : 'result.missingNoPick', { items: items(p.missing) }) : ''
     ].filter(Boolean)
+    // Undone before the server said anything of them: the Undo's section says what became of them.
+    if (out.length === 0 && batch.undone) return [t('result.undoneOpen', { items: items(p.planned) })]
+    return out
   }
   const settingsLines = (s: SettingsStatus, undo: boolean): string[] => [
     s.confirmed.length > 0 ? t(undo ? 'result.undoSettingsBack' : 'result.settingsDone', { fields: names(s.confirmed) }) : '',
@@ -861,7 +870,9 @@ function RestoreResult({
     s.preparing.length > 0 ? t('result.settingsPreparing', { fields: names(s.preparing) }) : '',
     s.unknown.length > 0 ? t('result.settingsUnknown', { fields: names(s.unknown) }) : '',
     s.kept.length > 0 ? t(undo ? 'result.undoSettingsKept' : 'result.settingsKept', { fields: names(s.kept) }) : '',
-    s.rejected.length > 0 ? t(undo ? 'result.undoSettingsRefused' : 'result.settingsRefused', { fields: names(s.rejected) }) : '',
+    s.rejected.length > 0
+      ? t(undo ? 'result.undoSettingsRefused' : !batch.undone && st.actions.includes('retrySettings') ? 'result.settingsRefused' : 'result.settingsRefusedNoRetry', { fields: names(s.rejected) })
+      : '',
     s.failed.length > 0 ? t('result.settingsFailed', { fields: names(s.failed) }) : '',
     s.missing.length > 0
       ? t(undo ? 'result.undoSettingsMissing' : !batch.undone && st.actions.includes('retrySettings') ? 'result.settingsMissing' : 'result.settingsMissingNoRetry', { fields: names(s.missing) })
@@ -945,7 +956,7 @@ function RestoreResult({
         {batch.undone && undo ? (
           <p className="result-undo-state" aria-live="polite">
             {show([
-              undo.waiting > 0 ? t('result.undoWaiting', { n: undo.waiting }) : '',
+              undo.waiting > 0 ? t(undo.held ? 'result.undoHeld' : 'result.undoWaiting', { n: undo.waiting }) : '',
               undo.preparing > 0 ? t('result.undoPreparing', { n: undo.preparing }) : '',
               undo.unknown > 0 ? t('result.undoUnknown', { n: undo.unknown }) : '',
               undo.removed > 0 ? t('result.undoRemoved', { n: undo.removed }) : '',

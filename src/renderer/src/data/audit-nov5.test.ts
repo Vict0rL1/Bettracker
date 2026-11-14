@@ -918,6 +918,41 @@ describe('4 · what the history and the details say', () => {
     expect(batchStatus(imp([], [], [], { ids: ['a', 'b'], made: ['a'], absent: ['b'] }), quiet)).toMatchObject({ complete: true, skippedLater: true, notAdded: 0 })
   })
 
+  it('"only in this window" while storage refuses the queue, and no longer once it took it (Save again worked, or a reload)', () => {
+    const held = restore({ parts: { bets: { phase: 'held' }, moves: { phase: 'queued' } }, restore: { ...restore().restore!, settings: { ...restore().restore!.settings!, phase: 'held' } } })
+    const queue = { bets: [{ opId: 'imp', kind: 'bulk-add', entries: [{ id: 'b1', input: input(1) }, { id: 'b2', input: input(2) }], queuedAt: S, batch: 'R' }] as PendingOp[], moves: [] }
+    const refusing = batchStatus(held, live(queue, { betsHeld: true, settingsOrigins: { oddsFormat: 'R' }, settingsHeld: true }))
+    expect(refusing.bets.state).toBe('held')
+    expect(refusing.settings.state).toBe('held')
+    expect(refusing.actions).toContain('saveAgain')
+    const stored = batchStatus(held, live(queue, { settingsOrigins: { oddsFormat: 'R' } }))
+    expect(stored.bets).toMatchObject({ state: 'waiting', waiting: 2 })
+    expect(stored.settings.state).toBe('waiting')
+    expect(stored.actions).not.toContain('saveAgain')
+    // After a reload that lost them (never stored): no answer, ask the server.
+    expect(batchStatus(held, live({ bets: [], moves: [] })).bets.state).toBe('unknown')
+  })
+
+  it('an Undo’s removals only in this window say so; an undone batch’s adds still queued wait, before its Undo', () => {
+    const undone = restore({
+      parts: { bets: { phase: 'queued' } },
+      undone: true,
+      undo: { at: T2, stamp: S, phase: 'held', bets: ['b1', 'b2'], moves: [], changedHere: 0, goneHere: 0, removed: [], kept: [] }
+    })
+    const queue = {
+      bets: [
+        { opId: 'imp', kind: 'bulk-add', entries: [{ id: 'b1', input: input(1) }, { id: 'b2', input: input(2) }], queuedAt: S, batch: 'R' },
+        { opId: 'd1', kind: 'delete', id: 'b1', ifStamp: S, batch: 'R' },
+        { opId: 'd2', kind: 'delete', id: 'b2', ifStamp: S, batch: 'R' }
+      ] as PendingOp[],
+      moves: []
+    }
+    const st = batchStatus(undone, live(queue, { betsHeld: true }))
+    expect(st.undo).toMatchObject({ waiting: 2, held: true, state: 'held' })
+    expect(st.bets).toMatchObject({ waiting: 2 })
+    expect(batchStatus(undone, live(queue)).undo).toMatchObject({ held: false, state: 'waiting' })
+  })
+
   it('an undone batch: only its Undo can still need something', () => {
     const u = imp(['a'], [], [], { undone: true, undo: { at: T2, stamp: S, bets: ['a'], moves: [], removed: [], kept: [], changedHere: 0, goneHere: 0, phase: 'queued' } })
     const st = batchStatus(u, quiet)

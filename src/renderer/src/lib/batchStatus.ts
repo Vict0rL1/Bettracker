@@ -91,6 +91,8 @@ export interface UndoStatus {
   /** ...and still in the refused list (they can be sent again). */
   failedOpen: boolean
   waiting: number
+  /** The removals waiting are only in this window: storage refused the queue. */
+  held: boolean
   unknown: number
   preparing: number
   settings?: SettingsStatus & { keptHere: SettingsField[]; already: SettingsField[] }
@@ -170,7 +172,8 @@ function rows(b: ImportBatch, table: 'bets' | 'moves', queued: number, held: boo
   if (s.rejectedOpen) states.push('refused')
   if (s.preparing > 0) states.push('preparing')
   if (s.unknown > 0) states.push('unknown')
-  if (s.waiting > 0) states.push(held || phase === 'held' ? 'held' : 'waiting')
+  // Held: only while this window's storage refuses its queue (once stored, it waits to sync).
+  if (s.waiting > 0) states.push(held ? 'held' : 'waiting')
   return { ...s, state: worst(states) }
 }
 
@@ -211,7 +214,7 @@ function settings(
   if (s.rejected.length > 0) states.push('refused')
   if (s.preparing.length > 0) states.push('preparing')
   if (s.unknown.length > 0) states.push('unknown')
-  if (s.waiting.length > 0) states.push(live.settingsHeld || phase === 'held' ? 'held' : 'waiting')
+  if (s.waiting.length > 0) states.push(live.settingsHeld ? 'held' : 'waiting')
   return { ...s, state: worst(states) }
 }
 
@@ -233,6 +236,7 @@ function undoStatus(b: ImportBatch, live: BatchLive): UndoStatus | undefined {
     failed: (u.failed ?? []).length,
     failedOpen: live.refused && (u.failed ?? []).length > 0,
     waiting: inQueue,
+    held: inQueue > 0 && (live.betsHeld || live.movesHeld),
     unknown: phase === 'prepared' ? 0 : rest,
     preparing: phase === 'prepared' ? rest : 0,
     state: 'none'
@@ -241,7 +245,7 @@ function undoStatus(b: ImportBatch, live: BatchLive): UndoStatus | undefined {
   if (s.failedOpen) states.push('refused')
   if (s.preparing > 0) states.push('preparing')
   if (s.unknown > 0) states.push('unknown')
-  if (s.waiting > 0) states.push(live.betsHeld || live.movesHeld || phase === 'held' ? 'held' : 'waiting')
+  if (s.waiting > 0) states.push(s.held ? 'held' : 'waiting')
   if (u.settings) {
     // From before outcomes were recorded, `reverted` and `kept` (left here): read as now (see currentUndoSettings).
     const us = currentUndoSettings(u.settings)
@@ -254,8 +258,9 @@ function undoStatus(b: ImportBatch, live: BatchLive): UndoStatus | undefined {
 
 export function batchStatus(b: ImportBatch, live: BatchLive): BatchStatus {
   const undone = b.undone === true && b.undo !== undefined
-  const bets = rows(b, 'bets', undone ? 0 : live.bets.adds, live.betsHeld, live.refused)
-  const moves = rows(b, 'moves', undone ? 0 : live.moves.adds, live.movesHeld, live.refused)
+  // Undone: what it added still in the queue waits (its Undo removes them after); nothing else is asked of it.
+  const bets = rows(b, 'bets', live.bets.adds, live.betsHeld, live.refused)
+  const moves = rows(b, 'moves', live.moves.adds, live.movesHeld, live.refused)
   const r = b.restore?.settings
   const settingsPart = settings(
     r ? (Object.keys(r.after) as SettingsField[]) : [],
