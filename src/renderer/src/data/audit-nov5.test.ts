@@ -427,6 +427,33 @@ describe('2 · settings restored: reported as the server answered', () => {
     ])
   })
 
+  it('the user’s own older edit goes at its own time: an Undo made later here does not carry it over a newer edit from another device', async () => {
+    // 10:00 here (offline): default stake 10. 10:05 on the laptop: 25 (synced). 10:10 here: an Undo puts the odds format back.
+    let row: Settings = { ...DEFAULT_SETTINGS, defaultStake: 25, oddsFormat: 'american', updatedAt: '2026-11-05T10:05:00.000Z' }
+    const save = async (patch: SettingsPatch, editedAt: string): Promise<Settings | null> => {
+      if (row.updatedAt > editedAt) return null
+      row = { ...row, ...patch, updatedAt: editedAt }
+      return row
+    }
+    let p = editSettings(null, { defaultStake: 10 }, '2026-11-05T10:00:00.000Z')
+    p = editSettings(p, { oddsFormat: 'decimal' }, '2026-11-05T10:10:00.000Z', { oddsFormat: 'american' }, undoOrigin('R'))
+    expect(settingsGroups(p).map((g) => [g.origin ?? 'own', g.editedAt])).toEqual([
+      ['own', '2026-11-05T10:00:00.000Z'],
+      [undoOrigin('R'), '2026-11-05T10:10:00.000Z']
+    ])
+    await saveGroups(p, save, [])
+    expect(row.defaultStake).toBe(25)
+    expect(row.oddsFormat).toBe('decimal')
+  })
+
+  it('a write that lost while the row could not be read: no answer (Check again asks), never "changed later"', () => {
+    const p = sent({ oddsFormat: 'fractional' })
+    const groups: GroupAnswer[] = [{ origin: 'R', fields: ['oddsFormat'], row: null }]
+    expect(settingsOutcomes(p, { stop: 'conflict' }, { groups })).toEqual([])
+    const latest = { ...DEFAULT_SETTINGS, oddsFormat: 'decimal', updatedAt: T2 } as Settings
+    expect(settingsOutcomes(p, { stop: 'conflict' }, { groups, latest })).toEqual([{ origin: 'R', editedAt: S, confirmed: [], kept: ['oddsFormat'], rejected: [], row: latest }])
+  })
+
   it('a statement refused for good does not stop the others; the refusal comes after them', async () => {
     const saved: SettingsPatch[] = []
     const save = async (patch: SettingsPatch, editedAt: string): Promise<Settings | null> => {

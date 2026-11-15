@@ -97,10 +97,11 @@ export interface SettingsGroup {
 
 /**
  * The statements a pending patch is sent as: each operation's write (see
- * PendingSettings.fieldOrigin) at the time it was made, oldest first, then
- * the user's own fields at the patch's time. Sent as one at the latest time,
- * a restore's older write would land over a change made on another device
- * after it, only because the user changed something else here later.
+ * PendingSettings.fieldOrigin) at the time it was made, and the user's own
+ * fields at the latest time one of them was edited, oldest first. Sent as one
+ * at the latest time, an older write — a restore's, or the user's own — would
+ * land over a change made on another device after it, only because something
+ * else was changed here later.
  */
 export function settingsGroups(p: PendingSettings): SettingsGroup[] {
   const by = new Map<string, SettingsGroup>()
@@ -121,12 +122,15 @@ export function settingsGroups(p: PendingSettings): SettingsGroup[] {
     if (p.guard && k in p.guard) put((g.guard ??= {}), k, p.guard[k])
     by.set(key, g)
   }
-  const groups = [...by.values()].sort((a, b) => (a.editedAt < b.editedAt ? -1 : a.editedAt > b.editedAt ? 1 : 0))
-  if (Object.keys(own).length > 0) {
+  const groups = [...by.values()]
+  const ownFields = Object.keys(own) as (keyof SettingsPatch)[]
+  if (ownFields.length > 0) {
     const guard = p.guard ? (Object.fromEntries(Object.entries(p.guard).filter(([k]) => k in own)) as SettingsPatch) : undefined
-    groups.push({ editedAt: p.editedAt, patch: own, ...(guard && Object.keys(guard).length > 0 ? { guard } : {}) })
+    const editedAt = ownFields.map((k) => fieldTime(p, k)).reduce((a, b) => (b > a ? b : a))
+    groups.push({ editedAt, patch: own, ...(guard && Object.keys(guard).length > 0 ? { guard } : {}) })
   }
-  return groups
+  // Oldest first: a statement made later never makes an earlier one lose.
+  return groups.sort((a, b) => (a.editedAt < b.editedAt ? -1 : a.editedAt > b.editedAt ? 1 : 0))
 }
 
 /** What one statement of a patch came to: the row it answered with (null: a newer edit won), or a refusal. */
@@ -178,7 +182,9 @@ export async function saveGroups(
  * land: App tells them apart by `row`); a refusal, rejected. A field the user
  * set (no origin) is nobody's to hear. `groups`: the answer of each statement
  * (see saveGroups), over the patch's; `latest`: the row read after a
- * statement lost (null: none).
+ * statement lost (null: none). A statement that lost while the row could not
+ * be read tells nothing of its fields: without the row, "changed later" and
+ * "did not land" can't be told apart, and Check again asks the server.
  */
 export function settingsOutcomes(
   sent: PendingSettings,
@@ -207,6 +213,8 @@ export function settingsOutcomes(
       else e.kept.push(k)
       e.row = a.row
     } else {
+      // Lost, and the row is not known: no answer for it (see above).
+      if (opts.groups && opts.latest === undefined) continue
       e.kept.push(k)
       if (opts.latest !== undefined && e.row === undefined) e.row = opts.latest
     }
@@ -544,7 +552,10 @@ export function useSettings(
         } else if (entry) heldJournalRef.current = [...heldJournalRef.current, entry]
         else setJournalFailed(true)
         setTimeout(() => void syncNowRef.current(), 0)
-        return saved || entry !== null
+        // The user's edit, journaled, is on this device (the next start queues
+        // it). An operation's is held: its journal entry is replayed only while
+        // the operation says so (see journalWanted), and it says so for held.
+        return opts.origin !== undefined ? saved : saved || entry !== null
       } finally {
         setStoring((xs) => xs.filter((x) => x !== item))
       }

@@ -370,6 +370,29 @@ test.describe('settings restored: reported as the server answered', () => {
     await expect(result.locator('.result-settings')).not.toContainText('Replaced:')
   })
 
+  test('restored while storage would not take the settings queue: held here, and after a reload the journal still sends them', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    const backup = withOdds(await download(page), 'american')
+    await setFlag(page, 'down', '1')
+    // This window's storage refuses the settings queue (not the journal): until the reload.
+    await page.evaluate((uid) => {
+      const setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key === `bettracker:settings-outbox:${uid}`) throw new DOMException('full', 'QuotaExceededError')
+        return setItem.call(this, key, value)
+      }
+    }, USER.id)
+    const dialog = await pickBackup(page, backup, true)
+    await dialog.locator('.restore-go').click()
+    await expect(dialog.locator('.result-settings')).toContainText('Only in this window', { timeout: 15_000 })
+    await setFlag(page, 'down', null)
+    await reload(page)
+    await expect.poll(async () => (await serverSettings(page))?.odds_format, { timeout: 15_000 }).toBe('american')
+    const result = await details(page)
+    await expect(result.locator('.result-settings')).toContainText('Replaced: odds format.', { timeout: 15_000 })
+  })
+
   test('a later edit here, before the restore synced: not replaced, and the later edit is what reaches the server', async ({ page }) => {
     await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
