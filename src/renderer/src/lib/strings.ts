@@ -820,8 +820,9 @@ export const en = {
   'result.settingsRefusedNoRetry': 'Refused by the server, not replaced: {fields}.',
   'data.batchUndoNotRemoved': 'undone — part was not removed (see details)',
   'result.missingBackup': 'Not on the server (never arrived, or deleted since): {items}. To add them, pick the backup again: what is already here is skipped.',
-  'result.undoneWaiting': 'Waiting to sync; the Undo removes them after it: {items}.',
+  'result.undoneWaiting': 'Waiting to sync: {items}. What the Undo does with them is below.',
   'result.undoneOpen': 'No answer from the server before the Undo: {items}. What the Undo did with them is below.',
+  'result.settingsUndoneOpen': 'No answer from the server before the Undo: {fields}. What the Undo did with them is below.',
   ...envStrings.en
 } as const
 
@@ -1614,7 +1615,8 @@ export const es: Record<StringKey, string> = {
   'result.settingsRefusedNoRetry': 'Rechazados por el servidor, no se reemplazaron: {fields}.',
   'data.batchUndoNotRemoved': 'deshecha: una parte no se quitó (ver detalles)',
   'result.missingBackup': 'No están en el servidor (no llegaron o se borraron después): {items}. Para añadirlos, elige la copia otra vez: lo que ya está aquí se omite.',
-  'result.undoneWaiting': 'Pendientes de sincronizar; el Deshacer los quita después: {items}.',
+  'result.undoneWaiting': 'Pendientes de sincronizar: {items}. Lo que hace el Deshacer con ellas está abajo.',
   'result.undoneOpen': 'Sin respuesta del servidor antes del Deshacer: {items}. Lo que hizo el Deshacer con ellos está abajo.',
+  'result.settingsUndoneOpen': 'Sin respuesta del servidor antes del Deshacer: {fields}. Lo que hizo el Deshacer con ellos está abajo.',
   ...envStrings.es
 }

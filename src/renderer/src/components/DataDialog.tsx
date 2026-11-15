@@ -938,7 +938,16 @@ function RestoreResult({
         {batch.kind === 'restore' && (
           <div className={`result-part is-${st.settings.state}${st.settings.gap ? ' has-gap' : ''} result-settings`}>
             <dt>{t('result.settingsLabel')}</dt>
-            <dd>{st.settings.state === 'none' ? t('result.settingsNone') : show(settingsLines(st.settings, false))}</dd>
+            <dd>
+              {st.settings.state === 'none'
+                ? t('result.settingsNone')
+                : settingsLines(st.settings, false).some(Boolean)
+                  ? show(settingsLines(st.settings, false))
+                  : batch.undone
+                    ? // Undone before the server said anything of them: the Undo's section says what became of them.
+                      t('result.settingsUndoneOpen', { fields: names(st.settings.fields) })
+                    : null}
+            </dd>
           </div>
         )}
       </dl>

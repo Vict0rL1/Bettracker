@@ -664,55 +664,47 @@ export default function App() {
       }
       if (!first.stamp && first.kind === 'restore') return false
       const at = new Date().toISOString()
-      let goneBets: Bet[] = []
-      let goneMoves: BankrollMove[] = []
-      let changedHere = 0
-      let why: 'wait' | 'already' | null = null
-      // Planned and written down under the operation's lock, from its entry as
-      // it is then: a second click, or another window, that got there first
-      // leaves it as it is (see continueOperation).
-      const plan = (entry: ImportBatch): ImportBatch => {
-        why = null
-        if (entry.undone) {
-          why = 'already'
-          return entry
-        }
+      type Plan = { why: 'wait' | 'already' | null; undo?: NonNullable<ImportBatch['undo']>; bets: Bet[]; moves: BankrollMove[]; changedHere: number }
+      // What to take back, from the entry as it is under the operation's lock:
+      // a second click, or another window, that got there first leaves it as
+      // it is (see continueOperation).
+      const decide = (entry: ImportBatch): Plan => {
+        if (entry.undone) return { why: 'already', bets: [], moves: [], changedHere: 0 }
         // A part not queued yet would be queued after the Undo, and stay: it waits for it.
-        if (preparedParts(entry).some((p) => p === 'bets' || p === 'moves' || p === 'settings')) {
-          why = 'wait'
-          return entry
-        }
+        if (preparedParts(entry).some((p) => p === 'bets' || p === 'moves' || p === 'settings')) return { why: 'wait', bets: [], moves: [], changedHere: 0 }
         const stampOf = (row: { updatedAt: string }): string => entry.stamp ?? row.updatedAt
         const here = new Map((betsRef.current ?? []).map((b) => [b.id, b]))
         const hereMoves = new Map(movesRef.current.map((m) => [m.id, m]))
         let goneHere = 0
-        goneBets = []
-        goneMoves = []
-        changedHere = 0
+        let changedHere = 0
+        const bets: Bet[] = []
+        const moves: BankrollMove[] = []
         for (const id of entry.ids) {
           const row = here.get(id)
           if (!row) goneHere++
-          else if (sameStamp(row.updatedAt, stampOf(row))) goneBets.push(row)
+          else if (sameStamp(row.updatedAt, stampOf(row))) bets.push(row)
           else changedHere++
         }
         for (const id of entry.moveIds ?? []) {
           const row = hereMoves.get(id)
           if (!row) goneHere++
-          else if (sameStamp(row.updatedAt, stampOf(row))) goneMoves.push(row)
+          else if (sameStamp(row.updatedAt, stampOf(row))) moves.push(row)
           else changedHere++
         }
         // Settings: back where they still hold what the restore set (see undoSettingsLog).
         const settingsPlan = undoSettingsLog(entry.restore?.settings, settingsRef.current as unknown as Partial<Record<SettingsField, unknown>>, at)
         return {
-          ...entry,
-          undone: true,
+          why: null,
+          bets,
+          moves,
+          changedHere,
           undo: {
             at,
             stamp: entry.stamp ?? '',
-            ...(entry.stamp ? {} : { stamps: Object.fromEntries([...goneBets, ...goneMoves].map((r) => [r.id, r.updatedAt])) }),
-            phase: goneBets.length + goneMoves.length > 0 ? 'prepared' : 'queued',
-            bets: goneBets.map((r) => r.id),
-            moves: goneMoves.map((r) => r.id),
+            ...(entry.stamp ? {} : { stamps: Object.fromEntries([...bets, ...moves].map((r) => [r.id, r.updatedAt])) }),
+            phase: bets.length + moves.length > 0 ? 'prepared' : 'queued',
+            bets: bets.map((r) => r.id),
+            moves: moves.map((r) => r.id),
             changedHere,
             goneHere,
             removed: [],
@@ -721,12 +713,21 @@ export default function App() {
           }
         }
       }
+      // Decided once, the first time: a history storage refused replays the
+      // change on later writes (see store.ts), after the rows are gone here.
+      let decided: Plan | null = null
+      const plan = (entry: ImportBatch): ImportBatch => {
+        const d = (decided ??= decide(entry))
+        return d.undo && !entry.undone ? { ...entry, undone: true, undo: d.undo } : entry
+      }
       const ports = portsFor(uid)
       const after = await continueOperation(ports, first.id, plan)
-      if (!after?.undone || after.undo?.at !== at) {
-        setToast({ kind: 'ok', text: t(why === 'wait' ? 'undo.wait' : 'undo.already') })
+      const d = decided as Plan | null
+      if (!d || !after?.undone || after.undo?.at !== at) {
+        setToast({ kind: 'ok', text: t(d?.why === 'wait' ? 'undo.wait' : 'undo.already') })
         return null
       }
+      const { bets: goneBets, moves: goneMoves, changedHere } = d
       // Its adds the server refused would, sent again, put back what it took out.
       await Promise.all([syncRef.current.discardBatchRefused(first.id), movesHookRef.current.discardBatchRefused(first.id)])
       // The settings as queued (a change of the user's own still pending keeps one: see queuePart).
@@ -747,23 +748,23 @@ export default function App() {
         reverted.length > 0 ? t('undo.settingsBack', { fields: reverted.map((f) => t(`settingName.${f}`)).join(', ') }) : '',
         keptFields.length > 0 ? t('undo.settingsKept', { fields: keptFields.map((f) => t(`settingName.${f}`)).join(', ') }) : ''
       ]
-      const bets = goneBets
-      const moved = goneMoves
       done(saved, savedNote(parts.filter(Boolean).join(' · ')), async () => {
         // Put back what it removed, all under one new stamp: the next Undo
         // takes them by it (see readdStamp for why it is new). Written down,
         // then queued, as the batch was; only over this Undo (a second click,
-        // or one undone again since, leaves the entry as it is).
-        const stamp = readdStamp([...bets, ...moved])
-        let applied = false
+        // or one undone again since, leaves the entry as it is). Decided
+        // once, as the Undo was.
+        const stamp = readdStamp([...goneBets, ...goneMoves])
+        const now = new Date().toISOString()
+        let applied: boolean | null = null
         const back = await continueOperation(portsFor(uid), first.id, (b) => {
-          applied = b.undone === true && b.undo?.at === at
+          applied ??= b.undone === true && b.undo?.at === at
           if (!applied) return b
           return redoBatch(b, {
             stamp,
-            now: new Date().toISOString(),
-            bets: bets.map((r) => ({ id: r.id, input: toInput(r) })),
-            moves: moved.map((m) => ({ id: m.id, input: { date: m.date, amount: m.amount, note: m.note } })),
+            now,
+            bets: goneBets.map((r) => ({ id: r.id, input: toInput(r) })),
+            moves: goneMoves.map((m) => ({ id: m.id, input: { date: m.date, amount: m.amount, note: m.note } })),
             reverted
           })
         })
@@ -773,7 +774,9 @@ export default function App() {
         }
         return back?.parts?.bets?.phase !== 'held' && back?.parts?.moves?.phase !== 'held' && back?.restore?.settings?.phase !== 'held'
       })
-      return saved
+      // It said what happened itself (with the offer to put it back): the
+      // caller adds nothing (see done).
+      return null
     },
     [activeUserId, portsFor, done, savedNote, t, tn]
   )

@@ -611,6 +611,60 @@ test.describe('what the history and the details say, as it is', () => {
     await expect.poll(imported, { timeout: 15_000 }).toBe(0)
   })
 
+  test('Undo while storage will not take the history: it still says what it removed, and offers to put it back', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await importFile(page, CSV, 'full.csv')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced', { timeout: 15_000 })
+    const imported = async (): Promise<number> => (await serverRows(page)).filter((r) => r.note.startsWith('imported')).length
+    // From now on this window's storage refuses the history (it stays in this window).
+    await page.evaluate((uid) => {
+      const setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key === `bettracker:imports:${uid}`) throw new DOMException('full', 'QuotaExceededError')
+        return setItem.call(this, key, value)
+      }
+    }, USER.id)
+    await menu(page, '.data-btn')
+    await page.locator('.data-batch', { hasText: 'full.csv' }).locator('.data-undo').click()
+    await expect(page.locator('.toast')).toContainText('Removed 2 bets of that import')
+    await expect(page.locator('.toast-action')).toBeVisible()
+    await expect.poll(imported, { timeout: 15_000 }).toBe(0)
+    await page.keyboard.press('Escape')
+    await page.locator('.toast-action').click()
+    await expect.poll(imported, { timeout: 15_000 }).toBe(2)
+  })
+
+  test('the import toast’s Undo says what it removed and offers to put it back (it is not replaced by a bare "Undone")', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await importFile(page, CSV, 'toast.csv')
+    await page.locator('.toast-action').click()
+    await expect(page.locator('.toast')).toContainText('Removed 2 bets of that import')
+    await expect(page.locator('.toast-action')).toBeVisible()
+  })
+
+  test('imported and undone offline, then the import refused for good: let go, nothing to send again, never put back', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await setFlag(page, 'down', '1')
+    await importFile(page, CSV, 'offline.csv')
+    await menu(page, '.data-btn')
+    await page.locator('.data-batch', { hasText: 'offline.csv' }).locator('.data-undo').click()
+    await expect(page.locator('.toast')).toContainText('Removed 2 bets of that import')
+    await page.keyboard.press('Escape')
+    // Back online: the server refuses the import for good; the Undo's removals find nothing.
+    await setFlag(page, 'fail', JSON.stringify({ status: 400, message: 'new row violates check constraint', code: '23514', times: 1 }))
+    await setFlag(page, 'down', null)
+    await online(page)
+    await expect(page.locator('.sync-badge')).toHaveText('Synced', { timeout: 15_000 })
+    await expect(page.locator('.refused-notice')).toHaveCount(0)
+    expect((await serverRows(page)).filter((r) => r.note.startsWith('imported'))).toHaveLength(0)
+    const result = await details(page)
+    await expect(result.locator('.result-recover-sendAgain')).toHaveCount(0)
+    await expect(result.locator('.result-undo-state')).toBeVisible()
+  })
+
   test('an entry from before this version: no answer was kept, and it does not say all of it is on the server', async ({ page }) => {
     await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
     await page.evaluate((uid) => localStorage.setItem(`bettracker:imports:${uid}`, JSON.stringify([{ id: 'old', at: '2026-10-01T10:00:00.000Z', file: 'old.csv', fingerprint: 'fp-old', ids: ['a', 'b'] }])), USER.id)

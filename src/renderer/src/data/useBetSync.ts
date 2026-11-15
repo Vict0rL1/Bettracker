@@ -247,9 +247,9 @@ export function useBetSync(
   const fold = useCallback(
     async (change: (rows: readonly Bet[]) => Bet[], told: { op: PendingOp; row: Bet | null } | null) => {
       if (userRef.current !== userId) return
-      confirmedRef.current.confirmed(change)
+      const tag = confirmedRef.current.confirmed(change)
       // Into the shared log before anything shows or caches it (see confirmed.ts).
-      await shared?.record(told)
+      await shared?.record(told, tag)
       if (userRef.current !== userId) return
       const next = foldApplied(serverRef.current, landedRef.current, change)
       if (next.server !== null) setServer(next.server)
@@ -313,8 +313,8 @@ export function useBetSync(
       }
       let installed = true
       try {
-        // This window's changes meanwhile, then every window's since, in the server's order (see confirmed.ts).
-        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcile(acc, c.op, c.row), install, read.over)
+        // Every change confirmed since, in the server's order: this window's from its own log, by tag (see confirmed.ts).
+        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcile(acc, c.op, c.row), install, read.since)
         else install(read.over(got))
       } finally {
         read.end()

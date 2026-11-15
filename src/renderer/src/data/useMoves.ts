@@ -255,8 +255,8 @@ export function useMoves(
       }
       let installed = true
       try {
-        // This window's changes meanwhile, then every window's since, in the server's order (see confirmed.ts).
-        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcileMove(acc, c.op, c.row), install, read.over)
+        // Every change confirmed since, in the server's order: this window's from its own log, by tag (see confirmed.ts).
+        if (elsewhere) installed = await elsewhere.finish(got, (acc, c) => reconcileMove(acc, c.op, c.row), install, read.since)
         else install(read.over(got))
       } finally {
         read.end()
@@ -302,9 +302,9 @@ export function useMoves(
           // Folded only into a snapshot this device has (see foldApplied).
           // The refresh after the drain brings the whole list.
           const change = (rows: readonly BankrollMove[]): BankrollMove[] => reconcileMove(rows, op, row)
-          confirmedRef.current.confirmed(change)
+          const tag = confirmedRef.current.confirmed(change)
           // Into the shared log before anything shows or caches it (see confirmed.ts).
-          await shared?.record({ op, row })
+          await shared?.record({ op, row }, tag)
           if (userRef.current !== userId) return
           const next = foldApplied(serverRef.current, landedRef.current, change)
           if (next.server !== null) setServer(next.server)

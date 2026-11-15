@@ -12,12 +12,13 @@
  *
  * So each confirmation is also written here, numbered (`seq`), before the
  * window that got it shows it or caches it; a read notes the number it went
- * out at. Once it is in, it lays over what it got this window's own changes
- * meanwhile, then every change confirmed since in the order the server
- * confirmed them (this window's in their place too: a later change of another
- * window to the same row ends on top), and is installed, all under the log's
- * lock (no confirmation slips in between) — but only when the log still holds
- * every one of them:
+ * out at. Once it is in, it lays over what it got every change confirmed
+ * since, in the order the server confirmed them — this window's too, each in
+ * its place, from this window's own log (which has even what this one keeps
+ * only as "read again"), by the tag it was recorded with — then this window's
+ * changes not recorded here yet (the latest), and is installed, all under the
+ * log's lock (no confirmation slips in between) — but only when the log still
+ * holds every one of them:
  *  - it keeps the newest MAX_ENTRIES of the last KEEP_MS. What it lets go
  *    raises its `floor`: a read that went out below the floor can't know what
  *    it missed (more confirmations than are kept, or older than kept);
@@ -48,6 +49,8 @@ export interface ConfirmedEntry<C> {
   win: string
   /** What changed, to lay over a read; null: too big to keep, a read that overlaps it reads again. */
   change: C | null
+  /** Its tag in its window's own log (see confirmedLog): that window lays it from there, in its place. */
+  local?: string
 }
 
 export interface ConfirmedLogState<C> {
@@ -124,40 +127,47 @@ export interface ReadStart {
 
 /**
  * What a read that went out at `start` can lay over what it got, from the log
- * as it is now: every change confirmed since, in the order they were (this
- * window's too, but not its own "read again": its own log has those); or null
- * when the log cannot vouch for them all (it started over, let some go, or
- * keeps one of another window's only as "read again").
+ * as it is now: every entry since, in the order the changes were confirmed
+ * (this window's own included: it lays those from its own log, see finish);
+ * or null when the log cannot vouch for them all (it started over, let some
+ * go, or keeps one of another window's only as "read again").
  */
-export function changesSince<C>(state: ConfirmedLogState<C>, start: ReadStart, win: string): C[] | null {
+export function changesSince<C>(state: ConfirmedLogState<C>, start: ReadStart, win: string): ConfirmedEntry<C>[] | null {
   if (state.epoch !== start.epoch) return null
   if (state.floor > start.seq) return null
-  const since = state.entries.filter((e) => e.seq > start.seq && !(e.win === win && e.change === null)).sort((a, b) => a.seq - b.seq)
-  if (since.some((e) => e.change === null)) return null
-  return since.map((e) => e.change as C)
+  const since = state.entries.filter((e) => e.seq > start.seq).sort((a, b) => a.seq - b.seq)
+  if (since.some((e) => e.win !== win && e.change === null)) return null
+  return since
 }
 
 /** A read out (see SharedLog.begin). */
 export interface SharedRead<C> {
   /**
-   * The read is in: under the log's lock, lay over `rows` this window's own
-   * changes meanwhile (`local`: its own log, which has what this log keeps
-   * only as "read again"), then every change confirmed since, in order, and
-   * `install` the result. Resolves false, installing nothing, when the log
-   * cannot vouch for them: the caller reads again.
+   * The read is in: under the log's lock, lay over `rows` every change
+   * confirmed since, in order — this window's from `local` (its own log since
+   * the read went out, by tag: it has what this log keeps only as "read
+   * again") — then this window's not recorded here yet, and `install` the
+   * result. Resolves false, installing nothing, when the log cannot vouch for
+   * them: the caller reads again.
    */
-  finish: <T>(rows: T[], apply: (rows: readonly T[], change: C) => T[], install: (rows: T[]) => void, local?: (rows: T[]) => T[]) => Promise<boolean>
+  finish: <T>(
+    rows: T[],
+    apply: (rows: readonly T[], change: C) => T[],
+    install: (rows: T[]) => void,
+    local?: () => readonly { tag: string; change: (rows: readonly T[]) => T[] }[]
+  ) => Promise<boolean>
   /** The read failed: forget it. */
   cancel: () => void
 }
 
 export interface SharedLog<C> {
   /**
-   * A change the server confirmed in this window (null: too big to keep).
-   * Awaited before the window shows or caches it. Resolves with whether the
-   * log holds it; when it does not, the other windows heard of the gap.
+   * A change the server confirmed in this window (null: too big to keep),
+   * with its tag in this window's own log (see confirmedLog). Awaited before
+   * the window shows or caches it. Resolves with whether the log holds it;
+   * when it does not, the other windows heard of the gap.
    */
-  record: (change: C | null) => Promise<boolean>
+  record: (change: C | null, local?: string) => Promise<boolean>
   /** A read going out. */
   begin: () => Promise<SharedRead<C>>
   /** Called when another window could not record a change (a read made before may miss it). Returns a way to stop. */
@@ -225,11 +235,11 @@ export function sharedLog<C>(key: string, opts: SharedLogOptions = {}): SharedLo
   let epochs = 0
   const newEpoch = (): string => `${win}-${now().toString(36)}-${(epochs++).toString(36)}`
   return {
-    async record(change) {
+    async record(change, local) {
       // Signed out: nothing kept, and nobody to tell (the other windows sign out too).
       if (!canWrite()) return false
       const at = now()
-      const r = await store.update((state) => appendConfirmed(state, { at, win, change }, newEpoch), { hold: false })
+      const r = await store.update((state) => appendConfirmed(state, { at, win, change, ...(local !== undefined ? { local } : {}) }, newEpoch), { hold: false })
       if (!r.saved) {
         // Not kept: a read out anywhere may be missing this change.
         taint()
@@ -254,9 +264,23 @@ export function sharedLog<C>(key: string, opts: SharedLogOptions = {}): SharedLo
           try {
             return await store.within((current) => {
               if (mark.tainted) return false
-              const changes = changesSince(current, start, win)
-              if (changes === null) return false
-              install(changes.reduce((acc, c) => apply(acc, c), local ? local(rows) : rows))
+              const entries = changesSince(current, start, win)
+              if (entries === null) return false
+              // This window's own changes since the read went out, by tag, in order.
+              const mine = new Map((local?.() ?? []).map((l) => [l.tag, l.change]))
+              let acc = rows
+              for (const e of entries) {
+                const own = e.win === win && e.local !== undefined ? mine.get(e.local) : undefined
+                if (own) {
+                  acc = own(acc)
+                  mine.delete(e.local as string)
+                } else if (e.change !== null) acc = apply(acc, e.change)
+                // One of this window's own "read again" that its own log does not have for this read.
+                else return false
+              }
+              // Confirmed here but not recorded yet (waiting for this lock): the latest, last.
+              for (const change of mine.values()) acc = change(acc)
+              install(acc)
               return true
             })
           } finally {

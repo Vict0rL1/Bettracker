@@ -281,7 +281,8 @@ export function batchStatus(b: ImportBatch, live: BatchLive): BatchStatus {
   if (watched.includes('preparing')) actions.push('resume')
   // Not there when asked, or no answer: the server can be asked (again).
   if (watched.includes('unknown') || (!undone && bets.missing + moves.missing > 0)) actions.push('check')
-  if (watched.includes('held')) actions.push('saveAgain')
+  // Storing the queue is harmless: offered whenever any part waits only in this window (an undone batch's too).
+  if ([...states, ...watched].includes('held')) actions.push('saveAgain')
   if (bets.rejectedOpen || moves.rejectedOpen || undo?.failedOpen) actions.push('sendAgain')
   // Could not be queued, or not on the server when asked again: picking the file again adds what is missing.
   if (!undone && bets.failed + moves.failed + bets.missing + moves.missing > 0) actions.push('pickAgain')

@@ -396,9 +396,17 @@ export function foldApplied<T>(
  * is kept.
  */
 export function confirmedLog<T>(): {
-  confirmed: (change: (rows: readonly T[]) => T[]) => void
-  read: () => { over: (rows: T[]) => T[]; end: () => void }
+  /** Keeps the change for the reads out; resolves its tag (this log's, see SharedLog.record). */
+  confirmed: (change: (rows: readonly T[]) => T[]) => string
+  read: () => {
+    over: (rows: T[]) => T[]
+    /** The changes confirmed since this read went out, in order, with their tags. */
+    since: () => { tag: string; change: (rows: readonly T[]) => T[] }[]
+    end: () => void
+  }
 } {
+  // Tags name a change of this log only (a log made again, for another user, has another id).
+  const id = Math.random().toString(36).slice(2, 10)
   let seq = 0
   let out = 0
   let log: { seq: number; change: (rows: readonly T[]) => T[] }[] = []
@@ -406,6 +414,7 @@ export function confirmedLog<T>(): {
     confirmed(change) {
       seq++
       if (out > 0) log.push({ seq, change })
+      return `${id}:${seq}`
     },
     read() {
       const since = seq
@@ -413,6 +422,7 @@ export function confirmedLog<T>(): {
       let open = true
       return {
         over: (rows) => log.filter((l) => l.seq > since).reduce<T[]>((acc, l) => l.change(acc), rows),
+        since: () => log.filter((l) => l.seq > since).map((l) => ({ tag: `${id}:${l.seq}`, change: l.change })),
         end() {
           if (!open) return
           open = false

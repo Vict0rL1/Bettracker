@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { drainOutbox, type DrainHooks, type DrainResult } from './drain'
 import { enqueueOp, generationStart, headAsSent, insertStamp, keepRefused, markHeadSent, requeueRefused, type PendingOp, type Refused } from './offline'
-import { batchOf, type BatchEvent } from './imports'
+import { batchOf, freshImports, type BatchEvent } from './imports'
 import { queueStore, withLock } from './store'
 
 export interface OpQueueOptions<I> {
@@ -144,6 +144,31 @@ export function refusedBatches<I>(list: readonly Refused<I>[]): Set<string> {
 const sameRefused = <I>(a: Refused<I>, b: Refused<I>): boolean => a.at === b.at && a.ops[0]?.opId === b.ops[0]?.opId
 
 /** Takes these entries off the refused list, by identity: replayed later (see store.ts), it takes no others. */
+/**
+ * A refused change that is only adds of batches since undone: sent again, it
+ * would put back what the Undo took out (with no Undo left to offer). A change
+ * with anything else in it (an edit of the user's) stays theirs to send.
+ */
+export function onlyUndoneAdds<I>(ops: readonly PendingOp<I>[], undone: (batch: string) => boolean): boolean {
+  return (
+    ops.length > 0 &&
+    ops.every((op) => {
+      const of = batchOf(op)
+      return of !== null && !of.undo && undone(of.batch)
+    })
+  )
+}
+
+/** The batches of this user's history that are undone. */
+async function undoneBatches(userId: string | null): Promise<Set<string>> {
+  if (!userId) return new Set()
+  try {
+    return new Set((await freshImports(userId)).filter((b) => b.undone).map((b) => b.id))
+  } catch {
+    return new Set()
+  }
+}
+
 const without =
   <I>(entries: readonly Refused<I>[]) =>
   (list: Refused<I>[]): Refused<I>[] =>
@@ -342,6 +367,10 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
                 // The history is not in the way of the queue.
               }
             }
+            // Adds of a batch undone meanwhile (an Undo queued behind them):
+            // let go, never kept to be sent again (see onlyUndoneAdds).
+            const undone = await undoneBatches(userId)
+            if (onlyUndoneAdds(ops, (b) => undone.has(b))) return true
             // Stored, or not made: never kept in this window alone, since the
             // queue lets it go only once it is stored (see drainOutbox).
             const r = await stores.refused.update((list) => keepRefused(list, ops, reason, at, revised), { hold: false })
@@ -371,7 +400,12 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
     // leaves them in both (sent twice at worst), never in neither. As new
     // changes, with ids given once here (the queue change may be replayed,
     // see store.ts), never over what was queued since (see requeueRefused).
-    const entries = await shownRefused()
+    const shown = await shownRefused()
+    // Adds of batches undone since they were refused: let go, not sent (see onlyUndoneAdds).
+    const undone = await undoneBatches(userId)
+    const letGo = shown.filter((x) => onlyUndoneAdds(x.ops, (b) => undone.has(b)))
+    if (letGo.length > 0) showRefused((await stores.refused.update(without(letGo))).value)
+    const entries = shown.filter((x) => !letGo.includes(x))
     if (entries.length === 0) return true
     const stories = entries.map((x) => x.ops.map((op) => ({ ...op, opId: optsRef.current.newId(), sent: undefined, sentBy: undefined }) as PendingOp<I>))
     const r = await update((q) => requeueRefused<I>(q, stories))
@@ -395,7 +429,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
       // as above
     }
     return true
-  }, [stores, update, showRefused, shownRefused])
+  }, [stores, update, showRefused, shownRefused, userId])
 
   const discardRefused = useCallback(async (): Promise<void> => {
     if (!stores) return
@@ -407,11 +441,7 @@ export function useOpQueue<I>(o: OpQueueOptions<I>): OpQueue<I> {
   const discardBatchRefused = useCallback(
     async (batch: string): Promise<void> => {
       if (!stores) return
-      const ofBatch = (r: Refused<I>): boolean => r.ops.some((op) => {
-        const of = batchOf(op)
-        return of !== null && of.batch === batch && !of.undo
-      })
-      const r = await stores.refused.update((list) => list.filter((x) => !ofBatch(x)))
+      const r = await stores.refused.update((list) => list.filter((x) => !onlyUndoneAdds(x.ops, (b) => b === batch)))
       showRefused(r.value)
     },
     [stores, showRefused]

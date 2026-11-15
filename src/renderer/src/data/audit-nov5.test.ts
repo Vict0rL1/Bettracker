@@ -36,7 +36,7 @@ import {
 } from './operations'
 import { oneAtATime } from './oneAtATime'
 import { evictExpendable } from './store'
-import { addsQueued, queuedByBatch, removalsQueued, settledHere, undoQueued } from './useOpQueue'
+import { addsQueued, onlyUndoneAdds, queuedByBatch, removalsQueued, settledHere, undoQueued } from './useOpQueue'
 import { saveGroups, settingsGroups, settingsOutcomes, type GroupAnswer } from './useSettings'
 
 const U = 'u-nov5'
@@ -702,24 +702,52 @@ describe('3 · reads in other windows: a read the log can not vouch for is read 
     const clock = { t: 1000 }
     const { here, there } = two(clock)
     const read = await here.begin()
-    await here.record(1) // this window: the row becomes v1 (also in its own log)
+    await here.record(1, 'L:1') // this window: the row becomes v1 (also in its own log)
     await there.record(2) // another window, after it: v2
     const last = (_: readonly number[], c: number): number[] => [c]
     let installed: number[] = []
-    // This window's own log lays v1 first; then the shared log, in order.
-    expect(await read.finish([0], last, (r) => (installed = r), () => [1])).toBe(true)
+    expect(await read.finish([0], last, (r) => (installed = r), () => [{ tag: 'L:1', change: () => [1] }])).toBe(true)
     expect(installed).toEqual([2])
   })
 
-  it('this window’s own "read again" (a chunk too big to keep) does not throw its own read away: its own log has it', async () => {
+  it('this window’s own "read again" (a chunk too big to keep) does not throw its own read away: its own log has it, in its place', async () => {
     const clock = { t: 1000 }
     const { here, there } = two(clock)
     const read = await here.begin()
-    await here.record(null)
+    await here.record(null, 'L:1')
     await there.record(5)
     let installed: number[] = []
-    expect(await read.finish([0], apply, (r) => (installed = r), (r) => [...r, 42])).toBe(true)
+    expect(await read.finish([0], apply, (r) => (installed = r), () => [{ tag: 'L:1', change: (r) => [...r, 42] }])).toBe(true)
     expect(installed).toEqual([0, 42, 5])
+  })
+
+  it('removed here, then put back here by a chunk too big to keep: laid in that order, so the rows are there', async () => {
+    const clock = { t: 1000 }
+    const { here } = two(clock)
+    const read = await here.begin()
+    const remove = (rows: readonly number[], c: number): number[] => rows.filter((x) => x !== c)
+    await here.record(7, 'L:1') // an Undo's delete of 7 (kept: small)
+    await here.record(null, 'L:2') // the Undo undone: 7 back, in a chunk kept only here
+    let installed: number[] = []
+    const local = () => [
+      { tag: 'L:1', change: (r: readonly number[]) => r.filter((x) => x !== 7) },
+      { tag: 'L:2', change: (r: readonly number[]) => [...r.filter((x) => x !== 7), 7] }
+    ]
+    expect(await read.finish([7], remove, (r) => (installed = r), local)).toBe(true)
+    expect(installed).toEqual([7])
+  })
+
+  it('a change confirmed here but not written to the log yet goes last; an own "read again" this read’s own log lacks: read again', async () => {
+    const clock = { t: 1000 }
+    const { here, there } = two(clock)
+    const read = await here.begin()
+    await there.record(2)
+    let installed: number[] = []
+    expect(await read.finish([0], apply, (r) => (installed = r), () => [{ tag: 'L:9', change: (r) => [...r, 9] }])).toBe(true)
+    expect(installed).toEqual([0, 2, 9])
+    const again = await here.begin()
+    await here.record(null, 'L:old')
+    expect(await again.finish([0], apply, () => undefined, () => [])).toBe(false)
   })
 
   it('signed out here: nothing is written to the log, nor an epoch, and nobody is told of a gap', async () => {
@@ -816,11 +844,13 @@ describe('3 · reads in other windows: a read the log can not vouch for is read 
     state = appendConfirmed(state, { at: 1, win: 'a', change: 1 }, () => 'E')
     state = appendConfirmed(state, { at: 2, win: 'b', change: 2 }, () => 'X')
     expect(state.epoch).toBe('E')
-    expect(changesSince(state, { epoch: 'E', seq: 0 }, 'a')).toEqual([1, 2])
-    expect(changesSince(state, { epoch: 'E', seq: 1 }, 'a')).toEqual([2])
+    const changes = (s: typeof state, seq: number, win: string) => changesSince(s, { epoch: 'E', seq }, win)?.map((e) => e.change) ?? null
+    expect(changes(state, 0, 'a')).toEqual([1, 2])
+    expect(changes(state, 1, 'a')).toEqual([2])
     expect(changesSince(state, { epoch: 'other', seq: 0 }, 'a')).toBeNull()
-    state = appendConfirmed(state, { at: 3, win: 'a', change: null }, () => 'X')
-    expect(changesSince(state, { epoch: 'E', seq: 0 }, 'a')).toEqual([1, 2])
+    // Its own "read again": the window lays it from its own log (see finish); another window can't.
+    state = appendConfirmed(state, { at: 3, win: 'a', change: null, local: 'L:3' }, () => 'X')
+    expect(changes(state, 0, 'a')).toEqual([1, 2, null])
     expect(changesSince(state, { epoch: 'E', seq: 0 }, 'b')).toBeNull()
   })
 
@@ -978,6 +1008,9 @@ describe('4 · what the history and the details say', () => {
     expect(st.undo).toMatchObject({ waiting: 2, held: true, state: 'held' })
     expect(st.bets).toMatchObject({ waiting: 2 })
     expect(batchStatus(undone, live(queue)).undo).toMatchObject({ held: false, state: 'waiting' })
+    // Its adds held here while its Undo asks nothing (every row changed here): Save again is still offered.
+    const nothingAsked = restore({ parts: { bets: { phase: 'queued' } }, undone: true, undo: { at: T2, stamp: S, phase: 'queued', bets: [], moves: [], changedHere: 2, goneHere: 0, removed: [], kept: [] } })
+    expect(batchStatus(nothingAsked, live({ bets: queue.bets.slice(0, 1), moves: [] }, { betsHeld: true })).actions).toContain('saveAgain')
   })
 
   it('an undone batch: only its Undo can still need something', () => {
@@ -1071,6 +1104,19 @@ describe('review of the rebuild — queues and generations', () => {
       ['a', S],
       ['b', T2]
     ])
+  })
+
+  it('a refused change that is only adds of an undone batch is let go; one with an edit of the user’s stays theirs to send', () => {
+    const undone = (b: string): boolean => b === 'R'
+    const bulk: PendingOp = { opId: 'imp', kind: 'bulk-add', entries: [{ id: 'b1', input: input(1) }], queuedAt: S, batch: 'R' }
+    const deposit: MoveOp = { opId: 'm', kind: 'add', id: 'm1', input: { date: '2026-07-31', amount: 500, note: '' }, queuedAt: S, batch: 'R' }
+    const edit: MoveOp = { opId: 'e', kind: 'update', id: 'm1', input: { date: '2026-07-31', amount: 600, note: '' }, editedAt: T2 }
+    expect(onlyUndoneAdds([bulk], undone)).toBe(true)
+    expect(onlyUndoneAdds([deposit], undone)).toBe(true)
+    expect(onlyUndoneAdds([deposit, edit], undone)).toBe(false)
+    expect(onlyUndoneAdds([bulk], () => false)).toBe(false)
+    expect(onlyUndoneAdds([{ opId: 'd', kind: 'delete', id: 'b1', ifStamp: S, batch: 'R' }], undone)).toBe(false)
+    expect(onlyUndoneAdds([], undone)).toBe(false)
   })
 
   it('settledHere: a confirmed add with an edit of the user’s queued after it keeps the row', async () => {
