@@ -215,6 +215,26 @@ Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
+### Rediseño visual «Graphite Ledger» (noviembre 2026)
+
+Detalle en `docs/design-2026-11.md`. En corto:
+
+- **El color es dinero:** verde ganado, rojo perdido, ámbar en juego. El botón
+  principal es tinta invertida (blanco en oscuro, negro en claro), no verde;
+  el foco, la selección y los segmentos son neutros.
+- **Paleta grafito** (`#0e0f11` / `#f7f7f8`), tarjetas planas con borde fino,
+  KPI en dos franjas con divisores, estados como punto + palabra, etiquetas
+  como texto con «·», controles segmentados con «pulgar».
+- **Inter Variable** incluida (`assets/fonts`, OFL), pesos 400/500/600, sin
+  versalitas espaciadas, cifras tabulares.
+- **Movimiento:** solo entradas cortas con `ease-out` (diálogos, hoja en
+  móvil, menú, avisos, cifras nuevas, acordeón); nada se mueve en reposo; con
+  «reducir movimiento» solo quedan fundidos.
+- **JSX tocado:** `HeroStats` (`key` por cifra), `BalanceChartInner` (eje de
+  P/L con marcas redondas), `CalendarView` (`data-heat` por tercios),
+  `App`/`Toast` (región `role="status"` siempre montada).
+- Mismas clases, textos y orden en el DOM: las 232 e2e pasan sin cambios.
+
 ### Auditoría del 5 de noviembre (base 2bc6310)
 
 Informe en `docs/audit-2026-11-06.md`. En corto:
@@ -811,6 +831,8 @@ src/renderer/src/lib/useMedia.ts    media queries (tarjetas del historial en mó
 src/renderer/src/data/drafts.ts     borradores de los formularios
 src/renderer/src/data/imports.ts    lotes de importación (para deshacerlos)
 src/renderer/src/auth/NewPassword.tsx  contraseña nueva desde el enlace de recuperación
+src/renderer/src/index.css    todo el estilo: tokens grafito arriba, móvil al final (docs/design-2026-11.md)
+src/renderer/src/assets/fonts/   Inter Variable (woff2) y su licencia OFL
 src/renderer/src/components/
   DataDialog (importar/exportar/copias), FirstRun (primeros pasos), FieldError,
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,

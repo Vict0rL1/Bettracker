@@ -1,48 +1,120 @@
+/* ---------- font ---------- */
+/* Inter Variable ships with the app (OFL, see assets/fonts/OFL.txt). The URL is
+   relative: Electron loads from file://, the CSP allows only 'self', and the
+   PWA caches woff2. */
+@font-face {
+  font-family: 'Inter';
+  src: url('./assets/fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ---------- tokens ---------- */
+/* Graphite: a neutral, barely cool palette. Colour means money only — green
+   won, red lost, amber still at risk. Buttons, focus, selection and segments
+   use the neutral ink below. */
 :root {
   color-scheme: dark;
 
-  --bg: #0a0f14;
-  --card-solid: #121820;
-  --card-top: #141b24;
-  --card-bottom: #10161d;
+  --bg: #0e0f11;
+  /* One flat card level: top and bottom are the same, so no gradient. */
+  --card-solid: #16171a;
+  --card-top: #16171a;
+  --card-bottom: #16171a;
+  /* Raised layers: modal, menu, toast, tooltip, bulk bar. */
+  --surface-2: #1c1d21;
+  /* The thumb of a segmented control. */
+  --seg-active: #2b2d32;
+  /* A recessed well for fields. */
+  --input-bg: #121316;
+  /* Opaque, so the sticky .td-actions cell matches its row. */
+  --row-hover: #1b1c1f;
+  --row-selected: #212226;
+
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.12);
-
-  --text: #e8eef4;
-  --text-2: #94a3b3;
-  --text-3: #8290a5;
-
-  --green: #00e57d;
-  --green-dim: rgba(0, 229, 125, 0.1);
-  --green-dim-2: rgba(0, 229, 125, 0.18);
-  --green-glow: rgba(0, 229, 125, 0.22);
-  --red: #ff4d67;
-  --red-dim: rgba(255, 77, 103, 0.1);
-  --red-dim-2: rgba(255, 77, 103, 0.18);
-  --red-glow: rgba(255, 77, 103, 0.2);
-  --push: #94a3b3;
-  --push-dim: rgba(148, 163, 179, 0.09);
-  --amber: #f0c46a;
-  --amber-dim: rgba(240, 196, 106, 0.09);
-
-  --grid: rgba(255, 255, 255, 0.05);
-  --grid-strong: rgba(255, 255, 255, 0.16);
-  --today-ring: rgba(232, 238, 244, 0.4);
+  --border-hover: rgba(255, 255, 255, 0.2);
+  --divider: rgba(255, 255, 255, 0.055);
 
   /* Neutral overlays layered on the background — the light theme flips these
      from white-on-dark to ink-on-light so every raised surface still reads. */
   --tint-1: rgba(255, 255, 255, 0.03);
-  --tint-2: rgba(255, 255, 255, 0.06);
-  --tint-3: rgba(255, 255, 255, 0.1);
-  --tint-4: rgba(255, 255, 255, 0.18);
-  --input-bg: #0b1117;
-  --backdrop: rgba(4, 8, 13, 0.72);
-  --red-text: #ff8a9c;
-  --shadow-pop: rgba(0, 0, 0, 0.4);
-  --tip-bg: rgba(13, 19, 25, 0.96);
-  --focus: rgba(0, 229, 125, 0.55);
-  --focus-ring: rgba(0, 229, 125, 0.14);
+  --tint-2: rgba(255, 255, 255, 0.05);
+  --tint-3: rgba(255, 255, 255, 0.08);
+  --tint-4: rgba(255, 255, 255, 0.12);
+
+  --text: #ededf0;
+  --text-2: #a3a6ae;
+  --text-3: #8b8e97;
+
+  /* The primary action is inverse ink, never green. */
+  --primary: #ededf0;
+  --on-primary: #0e0f11;
+  --primary-hover: #ffffff;
+  /* Solid outline colour for focus rings; the halo is for fields only. */
+  --focus: #a3a6ae;
+  --focus-ring: rgba(237, 237, 240, 0.1);
+
+  --green: #4cc38a;
+  --green-dim: rgba(76, 195, 138, 0.1);
+  --green-dim-2: rgba(76, 195, 138, 0.16);
+  --red: #f07a7d;
+  --red-text: #f07a7d;
+  --red-dim: rgba(240, 122, 125, 0.1);
+  --red-dim-2: rgba(240, 122, 125, 0.16);
+  --amber: #e2b45c;
+  --amber-dim: rgba(226, 180, 92, 0.1);
+  --on-amber: #1a1406;
+  --push: #a3a6ae;
+  --push-dim: rgba(255, 255, 255, 0.05);
+
+  --grid: rgba(255, 255, 255, 0.05);
+  --grid-strong: rgba(255, 255, 255, 0.14);
+  --today-ring: rgba(237, 237, 240, 0.45);
+  /* A decided day's tint by its size in the month, smallest third to largest. */
+  --heat-1: 8%;
+  --heat-2: 14%;
+  --heat-3: 22%;
+
+  --tip-bg: #1c1d21;
+  --backdrop: rgba(0, 0, 0, 0.6);
+
+  /* Icons drawn by CSS in the field colour (text-3): a select's chevron and
+     the search box's magnifier. A data URI can't read a variable, so each
+     theme carries its own. */
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238b8e97' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b8e97' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.75'/%3E%3Cpath d='M10.5 10.5L14 14'/%3E%3C/svg%3E");
+  /* A checkbox's tick, in the background colour on its ink fill. */
+  --check-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%230e0f11' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.25l2.25 2.25L9.5 3.75'/%3E%3C/svg%3E");
+
+  /* Cards are flat in the dark; only floating layers are lifted. */
+  --shadow: none;
+  --shadow-thumb: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-raised: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-modal: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 24px 64px rgba(0, 0, 0, 0.55);
+  --shadow-pop: rgba(0, 0, 0, 0.45);
+
+  /* Shared by both themes. */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-full: 999px;
+  --radius: var(--r-lg);
+  --radius-sm: var(--r-md);
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* 44px inside the phone block. */
+  --control-h: 36px;
 
   --fs-xs: 11px;
   --fs-sm: 12px;
@@ -51,66 +123,93 @@
   --fs-lg: 16px;
   --fs-xl: 20px;
   --fs-2xl: 24px;
-  --fs-big: clamp(28px, 2.9vw, 40px);
-  --fs-hero: clamp(36px, 3.9vw, 54px);
+  /* The month figure no longer outranks the headline P/L. */
+  --fs-big: clamp(24px, 2.2vw, 28px);
+  --fs-hero: var(--fs-big);
+  --fs-display: clamp(32px, 3vw, 40px);
 
-  --radius: 16px;
-  --radius-sm: 12px;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 
-  --font:
-    'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    'Helvetica Neue', Arial, sans-serif;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --dur-press: 90ms;
+  --dur-hover: 140ms;
+  --dur-sm: 160ms;
+  --dur-md: 220ms;
+  --dur-lg: 260ms;
 }
 
-/* Light theme. Every token above is redefined here, so no rule needs a
+/* Light theme. Every colour token above is redefined here, so no rule needs a
    theme-specific variant — set data-theme on <html> and the palette swaps.
-   The greens and reds are darkened because the vivid dark-theme versions do
-   not carry enough contrast against white. */
+   The greens, reds and amber are darkened to keep 4.5:1 on white; don't
+   lighten them, light text-3, or push light tints past .15. */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --bg: #f6f7f9;
+  --bg: #f7f7f8;
   --card-solid: #ffffff;
   --card-top: #ffffff;
-  --card-bottom: #fafbfd;
-  --border: rgba(15, 23, 42, 0.1);
-  --border-strong: rgba(15, 23, 42, 0.17);
-
-  --text: #0f172a;
-  --text-2: #475569;
-  --text-3: #626f81;
-
-  --green: #00733f;
-  --green-dim: rgba(0, 115, 63, 0.1);
-  --green-dim-2: rgba(0, 115, 63, 0.2);
-  --green-glow: rgba(0, 115, 63, 0.14);
-  --red: #d02043;
-  --red-dim: rgba(208, 32, 67, 0.09);
-  --red-dim-2: rgba(208, 32, 67, 0.18);
-  --red-glow: rgba(208, 32, 67, 0.12);
-  --push: #606f85;
-  --push-dim: rgba(96, 111, 133, 0.1);
-  --amber: #805a12;
-  --amber-dim: rgba(128, 90, 18, 0.12);
-
-  --grid: rgba(15, 23, 42, 0.07);
-  --grid-strong: rgba(15, 23, 42, 0.2);
-
-  --tint-1: rgba(15, 23, 42, 0.028);
-  --tint-2: rgba(15, 23, 42, 0.055);
-  --tint-3: rgba(15, 23, 42, 0.1);
-  --tint-4: rgba(15, 23, 42, 0.18);
+  --card-bottom: #ffffff;
+  --surface-2: #ffffff;
+  --seg-active: #ffffff;
   --input-bg: #ffffff;
-  --backdrop: rgba(15, 23, 42, 0.38);
-  --red-text: #b3183a;
-  --tip-bg: rgba(255, 255, 255, 0.97);
-  --focus: rgba(0, 115, 63, 0.6);
-  --focus-ring: rgba(0, 115, 63, 0.16);
-  --today-ring: rgba(15, 23, 42, 0.5);
+  --row-hover: #f9f9fa;
+  --row-selected: #f1f2f4;
 
-  --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-  --shadow-pop: rgba(15, 23, 42, 0.18);
+  --border: rgba(15, 17, 22, 0.08);
+  --border-strong: rgba(15, 17, 22, 0.14);
+  --border-hover: rgba(15, 17, 22, 0.22);
+  --divider: rgba(15, 17, 22, 0.06);
+
+  --tint-1: rgba(15, 17, 22, 0.025);
+  --tint-2: rgba(15, 17, 22, 0.045);
+  --tint-3: rgba(15, 17, 22, 0.075);
+  --tint-4: rgba(15, 17, 22, 0.11);
+
+  --text: #17181c;
+  --text-2: #50535b;
+  --text-3: #686b74;
+
+  --primary: #17181c;
+  --on-primary: #ffffff;
+  --primary-hover: #2c2e34;
+  --focus: #50535b;
+  --focus-ring: rgba(23, 24, 28, 0.08);
+
+  --green: #0f7046;
+  --green-dim: rgba(15, 112, 70, 0.08);
+  --green-dim-2: rgba(15, 112, 70, 0.13);
+  --red: #b8333a;
+  --red-text: #b8333a;
+  --red-dim: rgba(184, 51, 58, 0.08);
+  --red-dim-2: rgba(184, 51, 58, 0.13);
+  --amber: #8a5a08;
+  --amber-dim: rgba(138, 90, 8, 0.09);
+  --on-amber: #ffffff;
+  --push: #50535b;
+  --push-dim: rgba(15, 17, 22, 0.045);
+
+  --grid: rgba(15, 17, 22, 0.06);
+  --grid-strong: rgba(15, 17, 22, 0.16);
+  --today-ring: rgba(23, 24, 28, 0.5);
+  --heat-1: 6%;
+  --heat-2: 10%;
+  --heat-3: 15%;
+
+  --tip-bg: #ffffff;
+  --backdrop: rgba(15, 17, 22, 0.28);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23686b74' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23686b74' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.75'/%3E%3Cpath d='M10.5 10.5L14 14'/%3E%3C/svg%3E");
+  --check-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.25l2.25 2.25L9.5 3.75'/%3E%3C/svg%3E");
+
+  --shadow: 0 1px 2px rgba(16, 17, 22, 0.04), 0 1px 1px rgba(16, 17, 22, 0.02);
+  --shadow-thumb: 0 1px 2px rgba(16, 17, 22, 0.08), 0 0 0 0.5px rgba(16, 17, 22, 0.06);
+  --shadow-raised: 0 0 0 1px rgba(16, 17, 22, 0.06), 0 2px 6px rgba(16, 17, 22, 0.06), 0 12px 32px rgba(16, 17, 22, 0.1);
+  --shadow-modal: 0 0 0 1px rgba(16, 17, 22, 0.06), 0 4px 12px rgba(16, 17, 22, 0.06), 0 24px 56px rgba(16, 17, 22, 0.16);
+  --shadow-pop: rgba(16, 17, 22, 0.14);
 }
 
 /* ---------- base ---------- */
@@ -124,12 +223,17 @@ body {
   padding: env(safe-area-inset-top) 0 0;
 }
 
+/* cv05: an l with a tail, so l, I and 1 differ in odds and notes. Tabular
+   figures come only from font-variant-numeric: a font-feature-settings list
+   on a child would replace this one, not add to it. */
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
   font-size: var(--fs-base);
   line-height: 1.45;
+  font-optical-sizing: auto;
+  font-feature-settings: 'cv05' 1;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
@@ -139,8 +243,18 @@ textarea {
   user-select: text;
 }
 
+/* Three weights only: 400, 500, 600. */
+h1,
+h2,
+h3,
+h4,
+b,
+strong {
+  font-weight: 600;
+}
+
 ::selection {
-  background: var(--green-dim-2);
+  background: var(--tint-4);
 }
 
 ::-webkit-scrollbar {
@@ -159,14 +273,73 @@ textarea {
   background: var(--tint-4);
 }
 
-button {
+/* The UA's font shorthand on controls resets the body's features; take them
+   back so buttons and fields get the same l as the text around them. */
+button,
+input,
+select,
+textarea {
   font-family: inherit;
+  font-feature-settings: inherit;
 }
 
+/* A solid neutral ring, never a colour. Fields swap it for their own border
+   and halo (see fields). */
 button:focus-visible,
-input:focus-visible {
+a:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* A drawn box, not the native one (a flat grey block in the dark): a
+   recessed well with a text-3 edge (over 5:1, so it reads as a control), an
+   ink fill and a tick when checked. 16px, 20px on a phone. The UA margin
+   stays, so nothing beside it moves. Native again in forced colours, where
+   a drawn fill would vanish. */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--text-3);
+  border-radius: var(--r-xs);
+  background: var(--input-bg) none center / 75% no-repeat;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out);
+}
+
+input[type='checkbox']:checked {
+  border-color: var(--text);
+  background-color: var(--text);
+  background-image: var(--check-icon);
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  input[type='checkbox']:not(:checked, :disabled):hover {
+    border-color: var(--text-2);
+  }
+}
+
+@media (forced-colors: active) {
+  input[type='checkbox'] {
+    appearance: auto;
+    -webkit-appearance: auto;
+  }
+}
+
+input[type='radio'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--text);
 }
 
 h1,
@@ -174,11 +347,127 @@ h2 {
   margin: 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-    animation: none !important;
+/* ---------- motion ---------- */
+/* Quiet and entrance-only: ease-out, 90–260ms, transform and opacity. Each
+   keyframe sets only `from`, so the resting style is always the visible one.
+   Nothing loops while the app is idle (a test waits for getAnimations() to
+   reach 0), and nothing animates on its way out: dialogs, the menu and the
+   toast unmount at once. Fills are `backwards`, never `both`: a finished
+   animation that fills forwards still counts as running. The one `forwards`
+   is the toast's end-of-life fade, so its hidden end state holds for the
+   moment until it unmounts. Reduced motion is
+   at the end of the file, after every keyframe, just before the last phone
+   block. Never transform, filter or will-change .app, #root or body: the
+   dialogs, the + button and the toast are positioned inside .app. */
+:root {
+  /* Lets the analytics section's height run to and from auto. */
+  interpolate-size: allow-keywords;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
   }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise, 8px));
+  }
+}
+
+/* No sideways movement and no scale above 1: tests measure dialogs and the
+   menu inside the window while they open. */
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+
+/* A figure that changed settles in; its text is final at once (no count-up). */
+@keyframes num-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.12em);
+    filter: blur(2px);
+  }
+}
+
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes fab-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+/* The sync dot, only while something is actually syncing. */
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* The toast's end of life: it fades just before it unmounts. Hidden at the
+   end, so a toast left up a moment longer can't take a click unseen. */
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+    visibility: hidden;
+  }
+}
+
+/* First paint: the dashboard's sections fade in one after another. Opacity
+   only, so nothing moves under a click. */
+.range-bar,
+.key-stats,
+.hero-2,
+.grid-mid,
+.advanced,
+.history-card {
+  animation: fade-in 240ms var(--ease-out) backwards;
+}
+
+.key-stats {
+  animation-delay: 40ms;
+}
+
+.hero-2 {
+  animation-delay: 80ms;
+}
+
+.grid-mid {
+  animation-delay: 120ms;
+}
+
+.advanced {
+  animation-delay: 160ms;
+}
+
+.history-card {
+  animation-delay: 200ms;
 }
 
 /* ---------- app frame ---------- */
@@ -191,24 +480,35 @@ h2 {
   gap: 16px;
 }
 
-/* The demo's line across the top (`npm run demo` only). */
+/* The demo's line across the top (`npm run demo` only): a neutral strip with
+   an amber dot, like the other notices. */
 .demo-banner {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 6px 12px;
+  gap: 6px 10px;
   padding: 6px 16px;
-  background: var(--amber-dim);
+  background: var(--card-solid);
   border-bottom: 1px solid var(--border);
-  color: var(--amber);
+  color: var(--text-2);
   font-size: var(--fs-sm);
   text-align: center;
 }
 
+.demo-banner::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
 .demo-banner .btn {
   flex: none; /* not stretched like the toolbar's buttons on a phone */
-  padding: 3px 10px;
+  min-height: 28px;
+  padding: 0 10px;
   font-size: var(--fs-sm);
 }
 
@@ -217,12 +517,12 @@ h2 {
   display: grid;
   place-items: center;
   font-size: var(--fs-2xl);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.019em;
 }
 
 .boot-accent {
-  color: var(--green);
+  color: inherit;
 }
 
 /* ---------- top bar ---------- */
@@ -241,107 +541,89 @@ h2 {
   gap: 12px;
 }
 
+/* The mark's green glyph is the brand's only colour that isn't money. */
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
   color: var(--green);
-  background: var(--green-dim);
-  box-shadow: inset 0 0 0 1px var(--green-dim-2);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .brand h1 {
-  font-size: var(--fs-xl);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.011em;
 }
 
 .brand h1 span {
-  color: var(--green);
+  color: inherit;
 }
 
+/* A dot and a word, no capsule. The dot is still at rest; it pulses only
+   while something is actually moving. */
 .sync-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-left: 4px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  background: var(--green-dim);
-  color: var(--green);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  padding: 0 4px;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
   white-space: nowrap;
-  transition:
-    background 0.2s ease,
-    color 0.2s ease;
+  transition: color var(--dur-hover) var(--ease-out);
 }
 
 .sync-dot {
-  width: 7px;
-  height: 7px;
+  flex: none;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 8px var(--green-glow);
-  animation: pulse 2.4s ease-in-out infinite;
+  background: var(--text-3);
+  box-shadow: none;
+  animation: none;
+}
+
+.sync-badge.synced .sync-dot {
+  background: var(--green);
 }
 
 .sync-badge.syncing {
-  background: var(--amber-dim);
-  color: var(--amber);
-}
-
-.sync-badge.syncing .sync-dot {
-  box-shadow: 0 0 8px rgba(240, 196, 106, 0.35);
-  animation-duration: 1.1s;
-}
-
-.sync-badge.offline {
-  background: var(--tint-2);
   color: var(--text-2);
 }
 
-.sync-badge.offline .sync-dot {
-  box-shadow: none;
-  animation: none;
+.sync-badge.syncing .sync-dot {
+  background: var(--amber);
+  animation: pulse 1.2s var(--ease-in-out) infinite;
 }
 
-/* Waiting on a migration: amber like syncing, but still — nothing is moving. */
+/* Offline, waiting on a migration, retrying, or waiting on a key: amber, but
+   still — nothing is moving until the connection or the user acts. */
+.sync-badge.offline,
 .sync-badge.behind,
-.sync-badge.retrying {
-  background: var(--amber-dim);
-  color: var(--amber);
-}
-
-.sync-badge.behind .sync-dot {
-  box-shadow: none;
-  animation: none;
-}
-
-/* Waiting on a sign-in or a key: nothing moves until the user acts. */
+.sync-badge.retrying,
 .sync-badge.paused,
 .sync-badge.signedout {
-  background: var(--red-dim);
-  color: var(--red-text);
+  color: var(--text-2);
 }
 
-.sync-badge.paused .sync-dot,
+.sync-badge.offline .sync-dot,
+.sync-badge.behind .sync-dot,
+.sync-badge.retrying .sync-dot,
+.sync-badge.paused .sync-dot {
+  background: var(--amber);
+}
+
+/* Signed out: the dot goes grey. */
 .sync-badge.signedout .sync-dot {
-  box-shadow: none;
-  animation: none;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
+  background: var(--text-3);
 }
 
 .topbar-actions {
@@ -362,23 +644,35 @@ h2 {
   position: relative;
   display: inline-grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
+  border-radius: var(--r-md);
+  background: transparent;
   color: var(--text-2);
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
-.menu-btn:hover,
 .menu-btn.is-open {
   background: var(--tint-2);
   color: var(--text);
+}
+
+/* Background hovers for a mouse only: a tap would leave them behind. */
+@media (hover: hover) and (pointer: fine) {
+  .menu-btn:hover {
+    background: var(--tint-2);
+    color: var(--text);
+  }
+}
+
+.menu-btn:active {
+  transform: scale(0.92);
 }
 
 .menu-btn:focus-visible,
@@ -387,27 +681,34 @@ h2 {
   outline-offset: 2px;
 }
 
-/* The bets still waiting for a result, on the closed menu. */
+/* The bets still waiting for a result, on the closed menu. The ring in the
+   page colour keeps the badge clear of the button's edge. */
 .menu-btn .pending-badge {
   position: absolute;
-  top: -7px;
-  right: -7px;
+  top: -4px;
+  right: -4px;
   margin: 0;
-  background: var(--card-solid);
+  box-shadow: 0 0 0 2px var(--bg);
 }
 
-.app-menu {
+/* A raised layer: .card.app-menu so these beat the .card rules further down. */
+.card.app-menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 45;
   width: 260px;
   max-width: calc(100vw - 32px);
-  padding: 6px;
+  padding: 4px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  box-shadow: var(--shadow);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-raised);
+  transform-origin: top right;
+  animation: pop-in var(--dur-sm) var(--ease-out);
 }
 
 .menu-account {
@@ -415,13 +716,13 @@ h2 {
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--divider);
   margin-bottom: 4px;
   min-width: 0;
 }
 
 .menu-account-label {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -438,20 +739,23 @@ h2 {
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 40px;
-  padding: 8px 10px;
+  min-height: 34px;
+  padding: 0 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   background: none;
   color: var(--text);
   font: inherit;
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
 }
 
 .menu-item svg {
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
   color: var(--text-3);
 }
 
@@ -460,15 +764,21 @@ h2 {
   min-width: 0;
 }
 
-.menu-item:hover,
+/* No transition: arrow-key navigation should feel crisp. */
 .menu-item:focus {
-  background: var(--tint-2);
+  background: var(--tint-3);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .menu-item:hover {
+    background: var(--tint-3);
+  }
 }
 
 .menu-sep {
   height: 1px;
   margin: 4px 6px;
-  background: var(--border);
+  background: var(--divider);
 }
 
 .menu-item.btn-signout.confirming,
@@ -503,12 +813,12 @@ h2 {
 
 .auth-brand h1 {
   font-size: var(--fs-xl);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.017em;
 }
 
 .auth-brand h1 span {
-  color: var(--green);
+  color: inherit;
 }
 
 .auth-tag {
@@ -531,6 +841,7 @@ h2 {
   font-size: var(--fs-md);
   cursor: pointer;
   padding: 2px;
+  transition: color var(--dur-hover) var(--ease-out);
 }
 
 .auth-toggle:hover {
@@ -547,10 +858,10 @@ h2 {
 }
 
 .auth-notice {
-  background: var(--green-dim);
-  border: 1px solid var(--green-dim-2);
+  background: var(--tint-1);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  color: var(--green);
+  color: var(--text);
   font-size: var(--fs-md);
   padding: 8px 12px;
 }
@@ -611,25 +922,30 @@ h2 {
 }
 
 /* ---------- buttons ---------- */
+/* One height with the fields (--control-h: 36px, 44px on a phone). A floor,
+   not a fixed height, so a long Spanish label can still wrap. */
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  min-height: var(--control-h);
+  padding: 6px 14px;
+  border-radius: var(--r-md);
   border: 1px solid transparent;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1.2;
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease,
-    filter 0.12s ease,
-    transform 0.06s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
+/* Press feedback: a small give, never a jump. */
 .btn:active:not(:disabled) {
-  transform: translateY(1px);
+  transform: scale(0.98);
 }
 
 .btn:disabled {
@@ -637,71 +953,66 @@ h2 {
   cursor: default;
 }
 
+/* Inverse ink, never green: a green button would read like a winning bet. */
 .btn-primary {
-  background: var(--green);
-  color: #04150c;
+  background: var(--primary);
+  color: var(--on-primary);
+  border-color: transparent;
 }
 
-:root[data-theme='light'] .btn-primary,
-:root[data-theme='light'] .fab {
-  color: #fff;
-}
-
-.btn-primary:hover:not(:disabled) {
-  filter: brightness(1.09);
-}
-
+/* Everything that isn't the one primary: an outline, full ink text. */
 .btn-ghost {
-  background: var(--tint-1);
-  border-color: var(--border);
-  color: var(--text-2);
-}
-
-.btn-ghost:hover:not(:disabled) {
-  background: var(--tint-2);
+  background: transparent;
+  border-color: var(--border-strong);
   color: var(--text);
 }
 
-.btn-danger {
-  background: transparent;
-  border-color: var(--red-dim-2);
-  color: var(--red);
-}
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+  }
 
-.btn-danger:hover:not(:disabled),
-.btn-danger.confirming {
-  background: var(--red-dim);
-}
-
-.btn-danger.confirming {
-  border-color: var(--red);
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--tint-2);
+  }
 }
 
 .btn-icon {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
-.btn-icon:hover {
-  background: var(--tint-2);
-  color: var(--text);
-}
-
-.btn-icon.danger:hover,
 .btn-icon.danger.confirming {
   background: var(--red-dim);
-  color: var(--red);
+  color: var(--red-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn-icon:hover {
+    background: var(--tint-3);
+    color: var(--text);
+  }
+
+  .btn-icon.danger:hover {
+    background: var(--red-dim);
+    color: var(--red-text);
+  }
+}
+
+.btn-icon:active {
+  transform: scale(0.92);
 }
 
 .btn-icon.danger.confirming {
@@ -711,54 +1022,155 @@ h2 {
 
 .confirm-text {
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
+  animation: fade-in var(--dur-sm) var(--ease-out);
 }
 
+/* A small ghost button in sentence case: Today, Clear. */
 .chip {
+  height: 28px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  background: var(--tint-1);
+  border-radius: var(--r-sm);
+  background: transparent;
   color: var(--text-2);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 4px 8px;
-  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
-.chip:hover {
+@media (hover: hover) and (pointer: fine) {
+  .chip:hover {
+    color: var(--text);
+    background: var(--tint-2);
+  }
+}
+
+.chip:active {
+  transform: scale(0.97);
+}
+
+/* ---------- fields ---------- */
+/* Every text box, date and select: a recessed well as tall as a button, a
+   hairline that firms up on hover, and a neutral 2px ring and halo on focus
+   (red when the box has a problem). Sections further down set only what
+   differs: width, font size, a smaller height. */
+.field input,
+select,
+textarea,
+.filter-search,
+.quick-date-input,
+.quick-tags input,
+.bulk-group input,
+.range-custom input {
+  height: var(--control-h);
+  padding: 0 12px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
   color: var(--text);
-  background: var(--tint-2);
+  font-size: var(--fs-base);
+  transition:
+    border-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
+}
+
+textarea {
+  height: auto;
+  padding: 8px 12px;
+}
+
+/* Same weight as the focus and problem rules below, which win by order. */
+:is(.field input, select, textarea, .filter-search, .quick-date-input, .quick-tags input, .bulk-group input, .range-custom input):hover {
+  border-color: var(--border-hover);
+}
+
+:is(.field input, select, textarea, .filter-search, .quick-date-input, .quick-tags input, .bulk-group input, .range-custom input):focus-visible {
+  /* The border and a 1px ring make 2px of focus colour. The transparent
+     outline shows only in forced colours, where shadows are dropped. */
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  border-color: var(--focus);
+  box-shadow:
+    0 0 0 1px var(--focus),
+    0 0 0 4px var(--focus-ring);
+}
+
+:is(.field input, select, textarea, .quick-tags input, .bulk-group input)[aria-invalid='true'] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px var(--red-dim);
+}
+
+/* A box with a problem still shows where focus is: the red stays, and the
+   solid ring every control gets sits around it. */
+:is(.field input, select, textarea, .quick-tags input, .bulk-group input)[aria-invalid='true']:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+/* A drawn chevron, so a select matches the boxes beside it on every OS. */
+select {
+  appearance: none;
+  padding-right: 32px;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+  cursor: pointer;
+}
+
+/* Amounts are typed, not stepped: no spinner arrows. */
+input[type='number'] {
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* ---------- cards ---------- */
+/* One flat level: a hairline, no gradient, and a shadow only in light. */
 .card {
-  background: linear-gradient(180deg, var(--card-top) 0%, var(--card-bottom) 100%);
+  background: var(--card-solid);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--r-lg);
   box-shadow: var(--shadow);
-  padding: 20px 20px;
+  padding: 20px 24px;
 }
 
+/* Centred, with a minimum height: titles line up across the cards whatever
+   sits at their right (a note, or a toggle). */
 .card-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  min-height: 32px;
+  margin-bottom: 12px;
 }
 
 .card-head h2 {
-  font-size: var(--fs-base);
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.009em;
 }
 
 .card-note {
   font-size: var(--fs-sm);
+  line-height: 16px;
   color: var(--text-3);
 }
 
@@ -769,91 +1181,152 @@ h2 {
   gap: 16px;
 }
 
+/* Two stat strips instead of five boxes: one bordered card each, split by
+   inset hairlines that stop short of the top and bottom edges. */
+.hero.key-stats,
+.hero.hero-2 {
+  gap: 0;
+  background: var(--card-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  overflow: clip;
+}
+
+.hero.key-stats {
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+}
+
 .stat-card {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  min-height: 150px;
+  min-height: 132px;
 }
 
+.hero > .stat-card {
+  position: relative;
+  min-height: 132px;
+  padding: 20px 24px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.hero > .stat-card + .stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 20px;
+  bottom: 20px;
+  width: 1px;
+  background: var(--divider);
+}
+
+/* The label, then what it covers as a plain suffix: "Bankroll · All dates". */
 .stat-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 26px;
+  align-items: baseline;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-height: 28px;
 }
 
 .stat-label {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--text-2);
 }
 
+/* The arrows centre on the label's line, not on the taller row: the label
+   (18px) sits on the head's baseline at the top, so the 28px buttons hang
+   5px over each side of it (9px for the 36px phone buttons). */
 .month-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
+  align-self: flex-start;
+  gap: 4px;
+  margin-block: -5px;
+  margin-left: auto;
 }
 
 .nav-btn {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--tint-1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
   color: var(--text-2);
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
-.nav-btn:hover {
-  background: var(--tint-2);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .nav-btn:hover {
+    background: var(--tint-2);
+    color: var(--text);
+  }
 }
 
-.hero-value {
-  font-size: var(--fs-hero);
-  font-weight: 800;
-  letter-spacing: -0.025em;
-  line-height: 1.05;
-  margin: 12px 0 8px;
+.nav-btn:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
+/* "today" reads "Today". */
+.month-nav .chip::first-letter {
+  text-transform: uppercase;
+}
+
+/* KPI figures; the headline P/L is the one display size. Each is keyed by
+   its text (HeroStats.tsx), so a new figure mounts and settles in (num-in);
+   the text is final at once, never counted up. */
+.hero-value,
 .life-value {
   font-size: var(--fs-big);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 600;
   line-height: 1.1;
-  margin: 16px 0 8px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  margin: 12px 0 8px;
+  animation: num-in var(--dur-md) var(--ease-out);
+}
+
+.pl-card .life-value {
+  font-size: var(--fs-display);
+  line-height: 1.05;
+  letter-spacing: -0.022em;
 }
 
 .hero-value.win,
 .life-value.win {
   color: var(--green);
-  text-shadow: 0 0 28px var(--green-glow);
 }
 
 .hero-value.loss,
 .life-value.loss {
   color: var(--red);
-  text-shadow: 0 0 28px var(--red-glow);
 }
 
 .hero-value.flat,
 .life-value.flat {
-  color: var(--text-2);
+  color: var(--text-3);
+  font-weight: 500;
 }
 
 .stat-sub {
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
+  line-height: 16px;
   color: var(--text-3);
 }
 
@@ -862,7 +1335,7 @@ h2 {
   grid-column: 1 / -1;
   /* Eight tiles: they fill the 8-, 4- and 2-column layouts exactly. */
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 16px 16px;
+  gap: 20px 24px;
   align-content: center;
 }
 
@@ -873,17 +1346,15 @@ h2 {
   min-width: 0;
 }
 
-.mini .stat-label {
-  font-size: var(--fs-xs);
-}
-
 .mini-value {
   font-size: var(--fs-xl);
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  letter-spacing: -0.017em;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  animation: num-in var(--dur-md) var(--ease-out);
 }
 
 .mini-value.win {
@@ -895,7 +1366,8 @@ h2 {
 }
 
 .mini-sub {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  line-height: 16px;
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
@@ -927,14 +1399,13 @@ h2 {
   .grid-mid {
     grid-template-columns: minmax(0, 1fr);
   }
-
 }
 
 /* ---------- calendar ---------- */
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .cal-weekdays {
@@ -943,71 +1414,116 @@ h2 {
 
 .cal-weekdays span {
   text-align: center;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
   color: var(--text-3);
 }
 
+/* Cells remount with each month: they fade in, all at once (no slide, no
+   stagger). Opacity only, so a cell is clickable where it stands. */
 .cal-blank {
   min-height: 56px;
+  animation: fade-in var(--dur-sm) var(--ease-out);
 }
 
+/* Quiet cells: a hairline outline on an empty day, a faint tint on a day with
+   a result. No lift on hover, so the grid never jitters. */
 .cal-cell {
+  animation: fade-in var(--dur-sm) var(--ease-out);
+  position: relative;
   min-height: 56px;
-  padding: 8px 8px;
+  padding: 8px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-md);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
   cursor: pointer;
-  background: var(--tint-1);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--divider);
   transition:
-    background 0.12s ease,
-    transform 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
 }
 
-.cal-cell:hover {
-  transform: translateY(-1px);
-}
-
-.cal-cell.none:hover {
-  background: var(--tint-2);
-}
-
-.cal-cell.win {
-  background: var(--green-dim);
-}
-
-.cal-cell.win:hover {
-  background: var(--green-dim-2);
-}
-
+.cal-cell.win,
 .cal-cell.loss {
-  background: var(--red-dim);
-}
-
-.cal-cell.loss:hover {
-  background: var(--red-dim-2);
+  box-shadow: none;
 }
 
 .cal-cell.push {
   background: var(--push-dim);
+  box-shadow: none;
 }
 
-.cal-cell.push:hover {
-  background: rgba(148, 163, 179, 0.16);
+/* A won or lost day's tint deepens with its size among the month's decided
+   days so far (data-heat, by thirds, from CalendarView; never on a day still
+   to come). Each step keeps the amount on it above 4.6:1. */
+.cal-cell[data-heat='1'] {
+  --heat: var(--heat-1);
 }
 
+.cal-cell[data-heat='2'] {
+  --heat: var(--heat-2);
+}
+
+.cal-cell[data-heat='3'] {
+  --heat: var(--heat-3);
+}
+
+.cal-cell.win[data-heat] {
+  background: color-mix(in srgb, var(--green) var(--heat), transparent);
+}
+
+.cal-cell.loss[data-heat] {
+  background: color-mix(in srgb, var(--red) var(--heat), transparent);
+}
+
+/* Days still to come: no outline, no tint, and the number in text-3 (they
+   open the day dialog, so it keeps 5.3:1). */
+.cal-cell.is-future {
+  background: transparent;
+  box-shadow: none;
+}
+
+.cal-cell.is-future .cal-day {
+  color: var(--text-3);
+}
+
+/* After the tones, so a winning or losing today keeps its ring. */
 .cal-cell.is-today {
   box-shadow: inset 0 0 0 1.5px var(--today-ring);
 }
 
-.cal-cell.is-future {
-  opacity: 0.42;
+/* Focus in full ink, so it can't be taken for today's grey ring. */
+.cal-cell:focus-visible {
+  outline-color: var(--text);
+}
+
+/* After the states above, so every day answers the pointer; a mouse only,
+   so a tap doesn't leave a tint behind. */
+@media (hover: hover) and (pointer: fine) {
+  .cal-cell:hover {
+    background: var(--tint-2);
+  }
+
+  /* A won or lost day keeps its tint (any deeper would take its amount
+     under 4.5:1) and gains a ring; today keeps its own. */
+  .cal-cell.win:hover,
+  .cal-cell.loss:hover {
+    box-shadow: inset 0 0 0 1px var(--border-hover);
+  }
+
+  .cal-cell.is-today:hover {
+    box-shadow: inset 0 0 0 1.5px var(--today-ring);
+  }
+
+  .cal-cell.push:hover {
+    background: var(--tint-3);
+  }
 }
 
 .cal-top {
@@ -1019,31 +1535,29 @@ h2 {
 }
 
 .cal-day {
-  font-size: var(--fs-xs);
-  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
 
-.cal-count {
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: 999px;
-  background: var(--tint-3);
-  color: var(--text-2);
+.cal-cell.is-today .cal-day {
+  color: var(--text);
+  font-weight: 600;
 }
 
-.cal-cell.win .cal-day,
-.cal-cell.loss .cal-day,
-.cal-cell.push .cal-day {
-  color: var(--text-2);
+/* The bet count stays in the cell's title; no badge on every day. */
+.cal-count {
+  display: none;
 }
 
 .cal-amt {
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1060,42 +1574,49 @@ h2 {
 
 .cal-cell.push .cal-amt {
   color: var(--push);
-  font-size: var(--fs-xs);
-  letter-spacing: 0.08em;
 }
 
+/* All five entries stay: the words are the cue that doesn't rely on colour. */
 .cal-legend {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   margin-top: 16px;
 }
 
 .lg {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: var(--fs-xs);
+  gap: 6px;
+  font-size: var(--fs-sm);
+  line-height: 16px;
   color: var(--text-3);
 }
 
+/* Swatches carry the tone at more strength than a cell does: at 8px a cell's
+   faint tint would not show. An empty day is the cell's outline. */
 .lg-swatch {
   position: relative;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: var(--tint-2);
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-hover);
 }
 
 .lg-swatch.win {
-  background: var(--green-dim-2);
+  background: color-mix(in srgb, var(--green) 55%, transparent);
+  box-shadow: none;
 }
 
 .lg-swatch.loss {
-  background: var(--red-dim-2);
+  background: color-mix(in srgb, var(--red) 55%, transparent);
+  box-shadow: none;
 }
 
 .lg-swatch.push {
-  background: rgba(148, 163, 179, 0.2);
+  background: var(--tint-4);
+  box-shadow: none;
 }
 
 /* ---------- chart ---------- */
@@ -1104,48 +1625,79 @@ h2 {
   flex-direction: column;
 }
 
+/* The chart fills whatever height the card gets beside the calendar. The
+   drawing is taken out of flow, so it never props the row open: the row's
+   height comes from the calendar, or from the 272px floor on its own. */
 .chart-wrap {
+  position: relative;
   flex: 1;
   min-height: 272px;
 }
 
+.chart-wrap > .recharts-responsive-container {
+  position: absolute;
+  inset: 0;
+}
+
+/* Once, when the lazy chart mounts: the wrapper stays through data changes.
+   The series never draw in (isAnimationActive={false}). */
+.chart-wrap .recharts-wrapper {
+  animation: fade-in 240ms var(--ease-out);
+}
+
+/* One sentence, centred in the space it fills; no extra Add bet button. */
 .chart-empty,
 .empty-state {
   display: grid;
-  place-items: center;
-  min-height: 200px;
+  place-content: center;
+  gap: 8px;
+  min-height: 160px;
+  text-align: center;
   color: var(--text-3);
   font-size: var(--fs-md);
+}
+
+.chart-card .chart-empty {
+  flex: 1;
 }
 
 .chart-card .recharts-cartesian-axis-tick text {
   font-variant-numeric: tabular-nums;
 }
 
+/* A raised layer, like the menu. */
 .chart-tip {
   background: var(--tip-bg);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  box-shadow: 0 6px 18px var(--shadow-pop);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+  box-shadow: var(--shadow-raised);
 }
 
 .tip-value {
-  font-size: var(--fs-lg);
-  font-weight: 700;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
 }
 
 .tip-sub {
   font-size: var(--fs-sm);
-  color: var(--text-2);
+  line-height: 16px;
+  color: var(--text-3);
   margin-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- history table ---------- */
+/* The scroll box grows with the window (the pager already stops at 25 rows).
+   It keeps overflow:auto: the header and, on a phone, the actions stick to it. */
 .table-wrap {
-  max-height: 440px;
+  max-height: max(440px, calc(100dvh - 160px));
   overflow: auto;
+  /* A row scrolled into view by Shift+Tab stops below the sticky header. */
+  scroll-padding-top: 40px;
   margin: 0 -8px;
   padding: 0 8px;
 }
@@ -1159,15 +1711,16 @@ thead th {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--card-top);
+  height: 36px;
+  background: var(--card-solid);
   text-align: left;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
   color: var(--text-3);
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-strong);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
 }
 
 .th-sort {
@@ -1179,6 +1732,7 @@ thead th {
   letter-spacing: inherit;
   text-transform: inherit;
   cursor: pointer;
+  transition: color var(--dur-hover) var(--ease-out);
 }
 
 .th-sort:hover {
@@ -1189,14 +1743,38 @@ thead th {
   text-align: right;
 }
 
+/* 44px rows split by hairlines; the last row leaves its line to the pager. */
 tbody td {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--divider);
   font-size: var(--fs-md);
 }
 
-tbody tr:hover {
-  background: var(--tint-1);
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Rows remount with a page, a filter or a new bet: they fade in together,
+   opacity only (no slide, no stagger). */
+.history-card tbody tr {
+  animation: fade-in var(--dur-sm) var(--ease-out);
+}
+
+/* Hover and selection paint the cells, in opaque colours, so a sticky
+   actions cell matches the rest of its row. Selected beats hover. */
+.history-card tbody td {
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .history-card tbody tr:hover > td {
+    background: var(--row-hover);
+  }
+}
+
+.history-card tbody tr.is-selected > td {
+  background: var(--row-selected);
 }
 
 .td-date {
@@ -1206,7 +1784,7 @@ tbody tr:hover {
 
 .td-amt {
   text-align: right;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1244,28 +1822,43 @@ tbody tr:hover {
   margin-left: 4px;
 }
 
+/* A status is a dot and a word, not a capsule. Inline-block with an absolute
+   dot, so the sentence-case ::first-letter still applies (see shared). */
 .pill {
   display: inline-block;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 4px 8px;
-  border-radius: 999px;
+  position: relative;
+  padding: 0 0 0 12px;
+  border-radius: 0;
+  background: none;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .pill.win {
-  background: var(--green-dim);
   color: var(--green);
 }
 
 .pill.loss {
-  background: var(--red-dim);
-  color: var(--red);
+  color: var(--red-text);
 }
 
 .pill.push {
-  background: var(--push-dim);
-  color: var(--push);
+  color: var(--text-2);
 }
 
 /* ---------- modal ---------- */
@@ -1278,35 +1871,42 @@ tbody tr:hover {
   place-items: center;
   padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   background: var(--backdrop);
-  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  /* No fade: each dialog brings its own shade, and one dialog handing over
+     to the next (Quick add's More details, Settings to Bankroll, a pending
+     bet's Edit) would blink the page through it. The dialog's own entrance
+     is the cue. */
 }
 
+/* The dialog is its own scroll box (overflow-y), so the day dialog can open
+   at its top on a phone. */
 .modal {
-  width: 400px;
+  width: 440px;
   max-width: 100%;
   max-height: 100%;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  animation: modal-in 0.16s ease;
+  gap: 16px;
+  /* A raised layer, not a card: the lifted surface and the modal shadow. */
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-modal);
+  /* In only; it leaves at once (a second .modal would trap focus twice).
+     The phone's sheet rises instead (phone layout). */
+  animation: dialog-in var(--dur-md) var(--ease-out) backwards;
+}
+
+:root[data-theme='light'] .modal {
+  border-color: var(--border);
 }
 
 /* The day dialog takes focus itself on a touch screen; no ring for that. */
 .modal:focus {
   outline: none;
-}
-
-@keyframes modal-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
 }
 
 .modal-head {
@@ -1318,7 +1918,9 @@ tbody tr:hover {
 
 .modal-head h2 {
   font-size: var(--fs-lg);
-  font-weight: 700;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: -0.011em;
 }
 
 .amount-wrap {
@@ -1329,7 +1931,6 @@ tbody tr:hover {
   width: 100%;
   padding-left: 28px;
   font-weight: 600;
-  font-size: var(--fs-lg);
 }
 
 .amount-cur {
@@ -1352,54 +1953,106 @@ tbody tr:hover {
   gap: 8px;
 }
 
+/* Result buttons: outlined, a tone dot before the word, and the chosen one
+   tinted in its tone. display:block and an absolute dot keep the
+   sentence-case ::first-letter working (see shared). */
 .seg-btn {
-  padding: 8px 0;
+  display: block;
+  min-height: 44px;
+  padding: 0 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  letter-spacing: 0;
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease,
-    border-color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
-.seg-btn:hover {
-  color: var(--text);
+.seg-btn:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 
-.seg-btn.win.active {
-  background: var(--green-dim);
-  border-color: var(--green);
-  color: var(--green);
+.seg-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
-.seg-btn.loss.active {
-  background: var(--red-dim);
-  border-color: var(--red);
-  color: var(--red);
+.seg-btn.win {
+  --tone: var(--green);
 }
 
-.seg-btn.push.active {
-  background: var(--push-dim);
-  border-color: var(--push);
-  color: var(--push);
+.seg-btn.loss {
+  --tone: var(--red);
+}
+
+.seg-btn.pending {
+  --tone: var(--amber);
+}
+
+.seg-btn.push {
+  --tone: var(--text-2);
+}
+
+.seg-btn.void {
+  --tone: var(--text-3);
+}
+
+/* Dot then word, left-aligned, so the gap between them is the same on every
+   button whatever the word's length. */
+.seg-btn:is(.win, .loss, .push, .void, .pending) {
+  position: relative;
+  padding-left: 26px;
+  text-align: left;
+}
+
+.seg-btn:is(.win, .loss, .push, .void, .pending)::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+
+/* The chosen result: its tone as the edge (5:1 and up on the dialog) and a
+   12% tint, so the choice shows without relying on the tint alone. */
+.seg-btn.active:is(.win, .loss, .push, .void, .pending) {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  color: var(--tone);
+}
+
+/* Void's tone is text-3, under 4.5:1 on its own tint: the word goes a step
+   brighter, the dot and edge keep the tone. */
+.seg-btn.active.void {
+  color: var(--text-2);
+}
+
+/* The day form's five results on one row; a phone keeps three per row. */
+.bet-form .seg {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .hint {
   margin: -4px 0 0;
   font-size: var(--fs-sm);
+  line-height: 16px;
   color: var(--text-3);
 }
 
 .warn {
   background: var(--amber-dim);
-  border: 1px solid rgba(240, 196, 106, 0.25);
-  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--amber) 25%, transparent);
+  border-radius: var(--r-md);
   color: var(--amber);
   font-size: var(--fs-md);
   padding: 8px 12px;
@@ -1416,28 +2069,30 @@ tbody tr:hover {
   color: var(--text-3);
 }
 
+/* The day's total: a label and the amount on one line over a hairline, no box. */
 .day-total-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
-  border: 1px solid var(--border);
+  gap: 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--divider);
 }
 
 .day-total-label {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
   color: var(--text-2);
 }
 
 .day-total {
   font-size: var(--fs-2xl);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.019em;
+  font-variant-numeric: tabular-nums;
 }
 
 .day-total.win {
@@ -1458,7 +2113,7 @@ tbody tr:hover {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   max-height: 240px;
   overflow-y: auto;
   /* A scroll container in a flex column may shrink to nothing when the modal
@@ -1466,23 +2121,28 @@ tbody tr:hover {
   flex-shrink: 0;
 }
 
+/* Bets, moves and pending bets are rows split by hairlines, not boxes. The
+   small side padding leaves room for the tint of the one being edited. */
 .bet-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
-  border: 1px solid transparent;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.bet-item:last-child {
+  border-bottom: 0;
 }
 
 .bet-item.editing {
-  border-color: var(--border-strong);
-  background: var(--tint-2);
+  border-radius: var(--r-md);
+  border-bottom-color: transparent;
+  background: var(--tint-1);
 }
 
 .bet-amt {
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   min-width: 84px;
 }
@@ -1498,7 +2158,6 @@ tbody tr:hover {
 .bet-amt.push {
   color: var(--push);
   font-size: var(--fs-sm);
-  letter-spacing: 0.06em;
 }
 
 .bet-note {
@@ -1529,24 +2188,23 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
   color: var(--text-2);
 }
 
 .bet-add {
   flex-shrink: 0;
-  padding: 8px 16px;
 }
 
-
+/* The way out sits at the right. */
 .modal-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .spacer {
@@ -1555,6 +2213,10 @@ tbody tr:hover {
 
 /* ---------- phone layout ---------- */
 @media (max-width: 640px) {
+  :root {
+    --control-h: 44px;
+  }
+
   .app {
     padding: 12px max(16px, env(safe-area-inset-right)) calc(88px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
     gap: 12px;
@@ -1585,10 +2247,20 @@ tbody tr:hover {
     justify-content: center;
   }
 
+  /* Tonal here, so the + button is the one solid primary on a phone. */
   .topbar-actions .add-bet-btn {
     order: 3;
     flex: 1 1 100%;
     min-height: 44px;
+    background: var(--tint-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .topbar-actions .add-bet-btn:hover:not(:disabled) {
+      background: var(--tint-3);
+    }
   }
 
   .hero {
@@ -1604,36 +2276,18 @@ tbody tr:hover {
     grid-template-columns: 1fr 1fr;
   }
 
-  .hero-value {
-    font-size: var(--fs-hero);
-  }
-
-  .life-value {
-    font-size: var(--fs-big);
-  }
-
   .card {
     padding: 16px;
   }
 
-  .cal-grid {
-    gap: 4px;
+  .grid-mid {
+    gap: 12px;
   }
 
+  /* Calendar: shorter cells (gap, padding and type are in the last block). */
   .cal-cell,
   .cal-blank {
     min-height: 46px;
-    border-radius: 8px;
-    padding: 4px 4px;
-  }
-
-  .cal-amt {
-    font-size: var(--fs-xs);
-  }
-
-  .cal-legend {
-    flex-wrap: wrap;
-    gap: 12px 16px;
   }
 
   .table-wrap {
@@ -1648,17 +2302,43 @@ tbody tr:hover {
     max-width: 180px;
   }
 
-  .toast {
-    right: 12px;
-    left: 12px;
-    bottom: 12px;
-    max-width: none;
+  /* History toolbar: the search across the top, the selects sharing the
+     rows under it edge to edge. */
+  .filters .filter-search {
+    flex: 1 1 100%;
+    min-width: 0;
   }
 
-  .modal {
+  .filters select,
+  .hcards-head select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Dialogs are bottom sheets: full width, square at the bottom, the top
+     corners rounded, and the home indicator's inset inside. The dialog is
+     still the scroll box. No grabber: there is no swipe to close. After
+     .card above, so the sheet's padding wins; .modal-backdrop > .modal so a
+     dialog's own width (440px, 580px) can't pull it off the edges. */
+  .modal-backdrop {
+    place-items: end stretch;
+    padding: max(12px, env(safe-area-inset-top)) 0 0;
+  }
+
+  .modal-backdrop > .modal {
     width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 12px - env(safe-area-inset-top));
+    padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+    border-bottom: 0;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    /* Up from the bottom edge: vertical only, so x never moves. */
+    animation: sheet-in var(--dur-lg) var(--ease-sheet) backwards;
   }
 
+  .bet-form .seg {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 
   .bet-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1674,45 +2354,70 @@ tbody tr:hover {
     justify-content: center;
   }
 
+  /* Done takes the sheet's width, like the button above it, instead of
+     half of it pushed right. */
+  .modal-actions .spacer {
+    display: none;
+  }
+
   .bd-list {
     grid-template-columns: 1fr;
   }
 }
 
 /* ---------- toast ---------- */
+/* The always-there live region the toast is put into (App.tsx). Out of the
+   flow, so it adds no gap to .app; not fixed, which would make it a stacking
+   context and put the toast under an open dialog's shade. */
+.toast-region {
+  position: absolute;
+}
+
 .toast {
   position: fixed;
   right: calc(24px + env(safe-area-inset-right));
   bottom: calc(24px + env(safe-area-inset-bottom));
   z-index: 60;
-  max-width: 460px;
-  padding: 12px 16px;
-  background: var(--card-solid);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 14px;
+  background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow);
+  border-radius: 10px;
+  box-shadow: var(--shadow-raised);
   font-size: var(--fs-md);
-  animation: toast-in 0.18s ease;
+  font-weight: 500;
+  line-height: 18px;
   overflow-wrap: break-word;
+  /* Rises in; fades out just before Toast.tsx unmounts it (4200ms, or 8000ms
+     with Undo; App.tsx hands it a stable onDone, so its timer runs from the
+     mount, as the fade does). Each message is its own element (key in
+     App.tsx), so a new one starts both clocks again. */
+  --rise: 12px;
+  animation:
+    rise-in var(--dur-md) var(--ease-out),
+    toast-out 180ms var(--ease-exit) 4020ms forwards;
 }
 
-.toast.ok {
-  border-left: 3px solid var(--green);
+.toast:has(.toast-action) {
+  animation-delay: 0s, 7820ms;
 }
 
+/* A success stays neutral; a problem gets a red dot, not a stripe. */
+.toast.ok,
 .toast.error {
-  border-left: 3px solid var(--red);
+  border-left: 1px solid var(--border-strong);
 }
 
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.toast.error::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
 }
 
 /* ---------- shared: tags, toggles, hidden inputs ---------- */
@@ -1728,17 +2433,47 @@ tbody tr:hover {
   border: 0;
 }
 
+/* Tags are text, separated by "·" (alt text '' keeps the dot out of
+   accessible names): "NBA · FanDuel · Moneyline". */
 .tag {
   display: inline-block;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--tint-2);
-  border: 1px solid var(--border);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
   color: var(--text-2);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: var(--fs-md);
+  font-weight: 400;
+  letter-spacing: 0;
   white-space: nowrap;
+}
+
+.tag + .tag::before,
+.bet-meta > :not(.tag) + .tag::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+  color: var(--text-3);
+}
+
+/* Status words in sentence case. The DOM keeps "WON" or "PENDIENTE" (tests
+   read it); the page shows "Won". These elements must never be display:flex,
+   inline-flex or grid, nor get an in-flow ::before: either kills
+   ::first-letter. Amounts ("+$31") are left as they are. */
+.pill,
+.settle-btn,
+.seg-btn:is(.win, .loss, .push, .void, .pending),
+.cal-cell .cal-amt,
+.bet-amt {
+  text-transform: lowercase;
+}
+
+.pill::first-letter,
+.settle-btn::first-letter,
+.seg-btn:is(.win, .loss, .push, .void, .pending)::first-letter,
+.cal-cell .cal-amt::first-letter,
+.bet-amt::first-letter {
+  text-transform: uppercase;
 }
 
 .chip-static {
@@ -1746,41 +2481,66 @@ tbody tr:hover {
   pointer-events: none;
 }
 
+/* Segmented control: a tinted track, and a raised thumb on the chosen one.
+   Thumb radius (6) plus the track's padding (2) equals the track's radius
+   (8), so the corners are concentric. */
 .scope-toggle {
   display: inline-flex;
   padding: 2px;
-  gap: 2px;
-  border-radius: 999px;
-  background: var(--tint-1);
-  border: 1px solid var(--border);
+  gap: 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--tint-2);
 }
 
 .scope-btn {
+  height: 28px;
+  padding: 0 12px;
   border: none;
+  border-radius: var(--r-sm);
   background: transparent;
-  border-radius: 999px;
-  color: var(--text-3);
+  color: var(--text-2);
   cursor: pointer;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  padding: 4px 12px;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 1;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
 .scope-btn:hover {
   color: var(--text);
 }
 
-.scope-btn.active {
-  background: var(--tint-3);
-  color: var(--text);
+.scope-btn:active {
+  transform: scale(0.97);
 }
 
-/* ---------- ROI card ---------- */
-.roi-card .life-value.flat {
-  color: var(--text-3);
+/* The thumb is quiet (barely above the track in the dark), so the chosen
+   label also goes to 600: a cue that needs no contrast and survives forced
+   colours. The same holds for every segmented control below. */
+.scope-btn.active,
+.scope-btn[aria-pressed='true'] {
+  background: var(--seg-active);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-thumb);
+}
+
+/* Inside a card the toggles are compact. */
+.card .scope-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+}
+
+/* Inside a track the focus ring goes inside the segment: outside it would
+   lie on the track's edge and the next segment's thumb would cover a side. */
+:is(.scope-toggle, .settings-seg, .bank-form .seg, .quick-date-chips, .settle:not(.hcard-settle)) > :focus-visible {
+  outline-offset: -2px;
 }
 
 /* ---------- breakdown ---------- */
@@ -1790,17 +2550,19 @@ tbody tr:hover {
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px 20px;
+  gap: 0 24px;
 }
 
+/* Rows with a divider, not boxes inside the card. */
 .bd-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
-  border: 1px solid var(--border);
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  border-radius: 0;
+  background: none;
   min-width: 0;
 }
 
@@ -1821,7 +2583,7 @@ tbody tr:hover {
 }
 
 .bd-profit {
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
@@ -1845,11 +2607,15 @@ tbody tr:hover {
   overflow: hidden;
 }
 
+/* Grows from the left when its rows mount (a tab change, or the section
+   opening); the width itself never animates. */
 .bd-fill {
   display: block;
   height: 100%;
   border-radius: 2px;
   min-width: 2px;
+  transform-origin: left;
+  animation: grow-x var(--dur-lg) var(--ease-out) backwards;
 }
 
 .bd-fill.win {
@@ -1890,42 +2656,33 @@ tbody tr:hover {
   margin-bottom: 12px;
 }
 
+/* The fields themselves are styled with the others (see fields); here, only
+   their size in the toolbar. */
 .filters input,
 .filters select,
 .hcards-head select {
-  background: var(--input-bg);
-  border: 1px solid var(--tint-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: inherit;
   font-size: var(--fs-md);
-  padding: 8px 12px;
-  transition:
-    border-color 0.12s ease,
-    box-shadow 0.12s ease;
 }
 
-.filters input:focus,
-.filters select:focus,
-.hcards-head select:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-ring);
-}
-
+/* A magnifier inside the box, drawn in the field colour. */
 .filter-search {
   flex: 1;
   min-width: 180px;
+  padding-left: 32px;
+  background-image: var(--search-icon);
+  background-repeat: no-repeat;
+  background-position: left 10px center;
+  background-size: 14px;
 }
 
 .pager {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
   padding-top: 12px;
   margin-top: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--divider);
 }
 
 .pager-label {
@@ -1955,7 +2712,7 @@ tbody tr:hover {
 }
 
 .td-tags .tag {
-  margin: 2px 4px 2px 0;
+  margin: 0;
 }
 
 .td-tags {
@@ -1971,15 +2728,20 @@ tbody tr:hover {
   gap: 4px;
 }
 
+/* The stake, then the tags, run as one line of text split by "·". */
 .bet-meta {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px 0;
   flex-wrap: wrap;
 }
 
+.bet-meta .tag {
+  font-size: var(--fs-sm);
+}
+
 .bet-stake {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2003,38 +2765,40 @@ tbody tr:hover {
 }
 
 .field-label {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
   color: var(--text-2);
 }
 
+/* "optional" on its own line, so "Closing odds" never breaks in two. */
 .field-opt {
-  text-transform: none;
-  letter-spacing: normal;
-  font-weight: 500;
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 16px;
   color: var(--text-3);
+}
+
+/* One field per row: there's room, so it stays beside its label. */
+.settings-modal .field-opt,
+.bank-modal .field-opt {
+  display: inline;
+}
+
+/* Side by side, every label takes two lines' room and sits on its box, so
+   the boxes in a row line up whether or not their label has a hint. */
+.bet-grid .field-label,
+.quick-row:not(.quick-profit) .field-label {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 34px;
 }
 
 .field input {
   width: 100%;
-  background: var(--input-bg);
-  border: 1px solid var(--tint-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-base);
-  padding: 8px 12px;
-  transition:
-    border-color 0.12s ease,
-    box-shadow 0.12s ease;
-}
-
-.field input:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .field input:disabled {
@@ -2063,39 +2827,24 @@ tbody tr:hover {
 
 /* ---------- bet statuses: pending and void ---------- */
 /* Pending is amber: not a result, a bet still in flight. Void reads as push —
-   the stake came back — but dimmer, since it's out of the record entirely. */
-.seg-btn.pending.active {
-  background: var(--amber-dim);
-  border-color: var(--amber);
-  color: var(--amber);
-}
-
-.seg-btn.void.active {
-  background: var(--push-dim);
-  border-color: var(--push);
-  color: var(--text-2);
-}
-
+   the stake came back — but dimmer, since it's out of the record entirely.
+   (The result buttons take their tones in the modal section.) */
 .pill.pending {
-  background: var(--amber-dim);
   color: var(--amber);
 }
 
 .pill.void {
-  background: var(--push-dim);
   color: var(--text-3);
 }
 
 .bet-amt.pending {
   color: var(--amber);
   font-size: var(--fs-sm);
-  letter-spacing: 0.06em;
 }
 
 .bet-amt.void {
   color: var(--text-3);
   font-size: var(--fs-sm);
-  letter-spacing: 0.06em;
 }
 
 .td-amt.pending,
@@ -2103,21 +2852,18 @@ tbody tr:hover {
   color: var(--text-3);
 }
 
-tr.is-pending td {
-  background: var(--amber-dim);
+/* A pending row keeps the table's surface; a 2px amber edge marks it. */
+tr.is-pending td:first-child {
+  box-shadow: inset 2px 0 0 var(--amber);
 }
 
-.cal-cell.pending {
-  background: var(--amber-dim);
-  border-color: var(--amber-dim);
-}
-
+/* A day with only open bets: the outline of an empty day and "Open" in
+   amber, no fill. */
 .cal-cell.pending .cal-amt {
   color: var(--amber);
-  font-size: var(--fs-xs);
-  letter-spacing: 0.08em;
 }
 
+/* Open bets on a day that also has results. */
 .cal-dot {
   position: absolute;
   right: 6px;
@@ -2128,55 +2874,64 @@ tr.is-pending td {
   background: var(--amber);
 }
 
-.cal-cell {
-  position: relative;
-}
-
 .lg-swatch.pending {
+  border-radius: 50%;
   background: var(--amber);
-  opacity: 0.8;
+  box-shadow: none;
 }
 
-/* One-tap settlement for a pending bet, in the day dialog and the history. */
+/* One-tap settlement for a pending bet, in the day dialog and the history:
+   one compact group, not four capsules. margin 0 keeps a table row at 44px.
+   The buttons stay display:block for the sentence-case ::first-letter. */
 .settle {
   display: inline-flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-top: 4px;
+  align-self: flex-start;
+  gap: 0;
+  padding: 2px;
+  margin: 0;
+  border-radius: var(--r-md);
+  background: var(--tint-2);
 }
 
 .settle-btn {
-  border: 1px solid var(--border);
-  background: var(--tint-1);
-  border-radius: 999px;
-  padding: 2px 8px;
+  display: block;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
   font-family: inherit;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: 0;
   color: var(--text-2);
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease,
-    border-color 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
-.settle-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--border-strong);
+@media (hover: hover) and (pointer: fine) {
+  .settle-btn:hover:not(:disabled) {
+    background: var(--seg-active);
+    color: var(--text);
+    box-shadow: var(--shadow-thumb);
+  }
+
+  .settle-btn.win:hover:not(:disabled) {
+    color: var(--green);
+  }
+
+  .settle-btn.loss:hover:not(:disabled) {
+    color: var(--red-text);
+  }
 }
 
-.settle-btn.win:hover:not(:disabled) {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-dim-2);
-}
-
-.settle-btn.loss:hover:not(:disabled) {
-  background: var(--red-dim);
-  color: var(--red);
-  border-color: var(--red-dim-2);
+.settle-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .settle-btn:disabled {
@@ -2184,22 +2939,36 @@ tr.is-pending td {
   cursor: default;
 }
 
+/* What a figure covers and its caveats: plain suffixes after the label. */
 .stat-chips {
   display: inline-flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  align-items: center;
+  align-items: baseline;
+  gap: 0 6px;
 }
 
 .stat-chips .chip {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: inherit;
   white-space: nowrap;
 }
 
-.chip-warn {
-  background: var(--amber-dim);
+.stat-chips .chip::before {
+  content: '·';
+  content: '·' / '';
+  margin-right: 6px;
+}
+
+.chip-warn,
+.stat-chips .chip-warn {
   color: var(--amber);
-  border-color: transparent;
 }
 
 .bonus {
@@ -2218,25 +2987,28 @@ tr.is-pending td {
   border: none;
   display: grid;
   place-items: center;
-  background: var(--green);
-  color: #04150c;
-  box-shadow: var(--shadow);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-raised);
   cursor: pointer;
   transition:
-    transform 0.12s ease,
-    filter 0.12s ease;
+    background-color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+  /* It mounts again after every dialog closes: a small scale-in, no lift. */
+  animation: fab-in var(--dur-sm) var(--ease-out);
 }
 
-.fab:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
+@media (hover: hover) and (pointer: fine) {
+  .fab:hover {
+    background: var(--primary-hover);
+  }
+}
+
+.fab:active {
+  transform: scale(0.94);
 }
 
 /* Keep the toast clear of the button. */
-.toast {
-  right: 96px;
-}
-
 .quick-modal {
   width: 440px;
 }
@@ -2259,27 +3031,10 @@ tr.is-pending td {
 
 .quick-tags input {
   min-width: 0;
-  background: var(--input-bg);
-  border: 1px solid var(--tint-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-md);
-  padding: 8px 12px;
-}
-
-.quick-tags input:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .quick-results {
   grid-template-columns: repeat(4, 1fr);
-}
-
-.quick-results .seg-btn {
-  padding: 12px 0;
 }
 
 .quick-results .seg-btn:disabled {
@@ -2292,20 +3047,11 @@ tr.is-pending td {
   align-items: end;
 }
 
-.quick-save {
-  padding: 8px 16px;
-}
-
-/* Odds are typed as text (+150, 1.91, 3/2) — a plain box, no spinner. */
-.odds-input[aria-invalid='true'] {
-  border-color: var(--red);
-}
-
 /* ---- settings ---- */
 
 .settings-modal {
   width: 440px;
-  gap: 18px;
+  gap: 20px;
 }
 
 .settings-row {
@@ -2318,29 +3064,58 @@ tr.is-pending td {
   margin: 0;
 }
 
+/* Choices that aren't results (odds format, dollars or units, deposit or
+   withdrawal) are segmented controls: a track and a neutral thumb, never
+   green. */
+.settings-seg,
+.bank-form .seg {
+  gap: 0;
+  padding: 2px;
+  border-radius: var(--r-md);
+  background: var(--tint-2);
+}
+
+.settings-seg .seg-btn,
+.bank-form .seg-btn {
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  transition:
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+}
+
 .settings-seg .seg-btn {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 2px;
-  padding: 10px 0;
+  padding: 6px 0;
 }
 
-.settings-seg .seg-btn.active {
-  background: var(--green-dim);
-  border-color: var(--green);
-  color: var(--green);
+.bank-form .seg-btn {
+  min-height: 32px;
+  padding: 0;
 }
 
+.settings-seg .seg-btn.active,
+.bank-form .seg-btn.active {
+  background: var(--seg-active);
+  border-color: transparent;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-thumb);
+}
+
+/* text-2, not text-3: on the track over a dialog text-3 is under 4.5:1. */
 .seg-sample {
   font-size: var(--fs-xs);
   font-weight: 500;
-  color: var(--text-3);
+  color: var(--text-2);
   font-variant-numeric: tabular-nums;
-}
-
-.settings-seg .seg-btn.active .seg-sample {
-  color: inherit;
-  opacity: 0.85;
 }
 
 .settings-stake,
@@ -2354,36 +3129,51 @@ tr.is-pending td {
 }
 
 /* ---- monthly loss limit banner ---- */
+/* Notices are cards like the rest, led by a dot: amber for a warning, red
+   for a limit crossed or a change refused. Only "over" tints the card. */
 
 .loss-banner {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--amber);
-  background: var(--amber-dim);
+  padding: 12px 16px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--card-solid);
+  box-shadow: var(--shadow);
   color: var(--text);
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
+  /* Notices drop in from above. */
+  --rise: -6px;
+  animation: rise-in var(--dur-md) var(--ease-out);
+}
+
+/* Inline with the words, so it stays on the first line when they wrap. */
+.loss-text::before,
+.sync-notice-text::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 10px 0 0;
+  border-radius: 50%;
+  background: var(--amber);
+  vertical-align: 0.1em;
 }
 
 .loss-banner.over {
-  border-color: var(--red);
-  background: var(--red-dim);
+  border-color: color-mix(in srgb, var(--red) 35%, transparent);
+  background: color-mix(in srgb, var(--red) 6%, var(--card-solid));
+}
+
+.loss-banner.over .loss-text::before {
+  background: var(--red);
 }
 
 .loss-text {
   flex: 1;
   min-width: 0;
-}
-
-.loss-banner.near .loss-text {
-  color: var(--amber);
-}
-
-.loss-banner.over .loss-text {
-  color: var(--red);
 }
 
 .loss-change {
@@ -2397,12 +3187,21 @@ tr.is-pending td {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--red);
-  background: var(--red-dim);
+  padding: 12px 16px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--card-solid);
+  box-shadow: var(--shadow);
   color: var(--text);
   font-size: var(--fs-md);
+  --rise: -6px;
+  animation: rise-in var(--dur-md) var(--ease-out);
+}
+
+/* Changes that can't be kept or were turned down: red. Signed out: amber. */
+.unsaved-notice .sync-notice-text::before,
+.refused-notice .sync-notice-text::before {
+  background: var(--red);
 }
 
 .sync-notice-text {
@@ -2416,6 +3215,11 @@ tr.is-pending td {
   gap: 8px;
 }
 
+.sync-notice-actions .btn {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
 /* ---- history: selection + bulk bar ---- */
 
 .td-sel {
@@ -2424,15 +3228,9 @@ tr.is-pending td {
 }
 
 .td-sel input {
-  width: 15px;
-  height: 15px;
   margin: 0;
-  accent-color: var(--green);
+  vertical-align: middle;
   cursor: pointer;
-}
-
-tbody tr.is-selected {
-  background: var(--green-dim);
 }
 
 .bulk-bar {
@@ -2442,14 +3240,15 @@ tbody tr.is-selected {
   gap: 8px 14px;
   margin-bottom: 12px;
   padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--tint-2);
-  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-raised);
 }
 
 .bulk-count {
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -2460,68 +3259,67 @@ tbody tr.is-selected {
   flex-wrap: wrap;
 }
 
+/* The bar's fields and buttons share a compact 32px line (36px on a phone). */
 .bulk-group input {
   width: 110px;
-  padding: 6px 10px;
-  background: var(--input-bg);
-  border: 1px solid var(--tint-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: inherit;
+  height: 32px;
+  padding: 0 10px;
   font-size: var(--fs-sm);
-}
-
-.bulk-group input:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .bulk-label {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--text-2);
 }
 
 .bulk-bar .btn {
-  padding: 6px 10px;
+  min-height: 32px;
+  padding: 0 10px;
   font-size: var(--fs-sm);
 }
 
+/* The same settle group, its label inside the track. */
 .bulk-bar .settle {
-  margin-top: 0;
+  align-self: center;
+  gap: 0;
+}
+
+.bulk-bar .settle .bulk-label {
+  padding: 0 8px;
+  font-size: var(--fs-sm);
 }
 
 .bulk-delete.confirming {
-  color: var(--red);
+  color: var(--red-text);
   border-color: var(--red);
+  background: var(--red-dim);
 }
 
 /* ---- toast with an action (Undo) ---- */
 
-.toast {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .toast-action {
   flex-shrink: 0;
-  padding: 4px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--tint-2);
+  height: 28px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--tint-3);
   color: var(--text);
   font: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 700;
+  font-size: var(--fs-md);
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color var(--dur-hover) var(--ease-out);
 }
 
-.toast-action:hover {
-  background: var(--tint-3);
+@media (hover: hover) and (pointer: fine) {
+  .toast-action:hover {
+    background: var(--tint-4);
+  }
 }
 
 /* Six tabs: let the row wrap under the title on narrow cards. */
@@ -2540,7 +3338,7 @@ tbody tr.is-selected {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 16px;
 }
 
 .range-toggle {
@@ -2559,48 +3357,35 @@ tbody tr.is-selected {
   align-items: center;
   gap: 6px;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-2);
 }
 
+/* Compact beside the range buttons (36px on a phone). The date picker's
+   icon follows the theme through the root's color-scheme. */
 .range-custom input[type='date'] {
-  height: 30px;
-  padding: 0 8px;
-  background: var(--input-bg);
-  border: 1px solid var(--tint-3);
-  border-radius: 999px;
-  color: var(--text);
-  font-family: inherit;
+  height: 32px;
+  padding: 0 10px;
   font-size: var(--fs-sm);
-  color-scheme: dark;
-}
-
-:root[data-theme='light'] .range-custom input[type='date'] {
-  color-scheme: light;
-}
-
-.range-custom input[type='date']:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 /* ---- pending panel ---- */
 
+/* A small solid amber count: bets still at risk. */
 .pending-badge {
   display: inline-grid;
   place-items: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   margin-left: 2px;
-  border-radius: 999px;
-  background: var(--amber-dim);
-  border: 1px solid var(--amber);
-  color: var(--amber);
-  font-size: var(--fs-xs);
-  font-weight: 800;
-  line-height: 1;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--amber);
+  color: var(--on-amber);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2631,22 +3416,23 @@ tbody tr.is-selected {
   white-space: nowrap;
 }
 
-.pend-item.is-past {
-  background: var(--amber-dim);
-}
-
+/* A bet whose day has passed: amber on the date, not on the row. */
 .pend-item.is-past .pend-date {
   color: var(--amber);
 }
 
+/* "Past", a word under the amber date rather than a badge. */
 .pend-past {
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--amber);
-  color: var(--amber);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  padding: 0;
+  border: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
+}
+
+.pend-past::first-letter {
   text-transform: uppercase;
 }
 
@@ -2701,11 +3487,13 @@ tbody tr.is-selected {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background-color var(--dur-hover) var(--ease-out);
 }
 
-.mini-btn:hover {
-  background: var(--tint-2);
+@media (hover: hover) and (pointer: fine) {
+  .mini-btn:hover {
+    background: var(--tint-2);
+  }
 }
 
 .mini-btn:focus-visible {
@@ -2739,10 +3527,6 @@ tbody tr.is-selected {
   cursor: default;
 }
 
-.seg-btn:disabled:hover {
-  color: var(--text-2);
-}
-
 .settings-unit {
   max-width: 200px;
 }
@@ -2756,7 +3540,7 @@ tbody tr.is-selected {
 
 .settings-bankroll-value {
   font-size: var(--fs-lg);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2827,20 +3611,21 @@ tbody tr.is-selected {
   gap: 16px;
 }
 
+/* The current bankroll heads the dialog like the day's total: no box. */
 .bank-current {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 16px;
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
-  border: 1px solid var(--border);
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--divider);
 }
 
 .bank-figure {
   font-size: var(--fs-2xl);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.019em;
+  font-variant-numeric: tabular-nums;
 }
 
 .bank-figure.loss {
@@ -2897,11 +3682,12 @@ tbody tr.is-selected {
 .bank-total {
   padding-top: 8px;
   border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
 }
 
 .bank-total dt {
   color: var(--text);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .bank-start {
@@ -2920,21 +3706,10 @@ tbody tr.is-selected {
   border-top: 1px solid var(--border);
 }
 
-/* Money in or out is not a result: the chosen kind is marked in neutral ink, never win or loss colours. */
-.bank-form .seg-btn.active {
-  background: var(--tint-3);
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
 .bank-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-}
-
-.move-date[aria-invalid='true'] {
-  border-color: var(--red);
 }
 
 .move-hints {
@@ -2955,10 +3730,12 @@ tbody tr.is-selected {
   margin: 0;
 }
 
+/* Right-aligned in its column, so the digits of every move line up. */
 .move-amt {
   min-width: 96px;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  text-align: right;
   color: var(--text);
 }
 
@@ -2994,11 +3771,7 @@ tbody tr.is-selected {
   color: var(--red-text);
   text-transform: none;
   letter-spacing: 0;
-}
-
-.field input[aria-invalid='true'] {
-  border-color: var(--red);
-  box-shadow: 0 0 0 3px var(--red-dim);
+  animation: fade-in var(--dur-sm) var(--ease-out);
 }
 
 /* A change the app refused, above the form's buttons. */
@@ -3006,46 +3779,52 @@ tbody tr.is-selected {
   margin: 0;
   background: var(--red-dim);
   border: 1px solid var(--red-dim-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-md);
   color: var(--red-text);
   font-size: var(--fs-md);
   padding: 8px 12px;
 }
 
-/* "Your unfinished bet is back · Discard". */
+/* "Your unfinished bet is back · Discard": a quiet note, not a warning. */
 .draft-note {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  background: var(--amber-dim);
+  background: var(--tint-1);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-md);
   color: var(--text);
   font-size: var(--fs-md);
   padding: 6px 6px 6px 12px;
+  animation: fade-in var(--dur-sm) var(--ease-out);
 }
 
 .draft-note .auth-toggle {
   padding: 6px 10px;
-  color: var(--amber);
-  font-weight: 600;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.draft-note .auth-toggle:hover {
+  color: var(--text);
 }
 
 .tag.draft-tag {
-  background: var(--amber-dim);
   color: var(--amber);
 }
 
 .free-bet-note {
-  color: var(--text-2);
+  color: var(--text-3);
   white-space: normal;
 }
 
+/* A text link, not a button: text-2, ink on hover. */
 .quick-more {
   align-self: flex-start;
   padding: 4px 0;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
+  font-weight: 500;
 }
 
 .bet-submit-actions {
@@ -3055,24 +3834,52 @@ tbody tr.is-selected {
 }
 
 .bet-form.is-editing {
-  border-color: var(--green-dim-2);
+  border-color: var(--border-strong);
 }
 
 /* ---------- scope: what a number or a list covers ---------- */
+/* A plain suffix after the label: "Bankroll · All dates". The alt text ''
+   keeps the dot out of the bankroll button's accessible name. */
 .scope-tag {
   display: inline-block;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--tint-2);
-  color: var(--text-2);
-  font-size: var(--fs-xs);
-  font-weight: 600;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
   white-space: nowrap;
 }
 
+.scope-tag::before {
+  content: '·';
+  content: '·' / '';
+  margin-right: 6px;
+}
+
+/* In the history's note the scope comes first: "All dates · 77 bets". */
+.history-card .scope-tag::before {
+  content: none;
+}
+
+.hist-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.hist-count::before {
+  content: '·';
+  content: '·' / '';
+  margin-right: 4px;
+}
+
+/* Sits on the toggle's row on a wide screen; its words are asserted. */
 .scope-note {
-  margin: 6px 2px 0;
+  flex: 1 1 320px;
+  margin: 0;
   font-size: var(--fs-sm);
+  line-height: 16px;
   color: var(--text-3);
 }
 
@@ -3089,12 +3896,12 @@ tbody tr.is-selected {
   color: inherit;
   font: inherit;
   cursor: pointer;
-  text-decoration: underline dotted var(--text-3);
+  text-decoration: none;
   text-underline-offset: 3px;
 }
 
 .td-day:hover {
-  color: var(--green);
+  text-decoration: underline;
 }
 
 /* ---------- history on a phone: compact cards ---------- */
@@ -3117,35 +3924,44 @@ tbody tr.is-selected {
 
 .hcards-all input,
 .hcard-sel {
-  width: 22px;
-  height: 22px;
-  accent-color: var(--green);
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
 }
 
+/* A grouped list: rows split by hairlines, not a box per bet. */
 .hcards {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
 }
 
+/* Like the table's rows: a fade when a page, a filter or a new bet mounts them. */
 .hcard {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--tint-1);
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
   min-width: 0;
+  animation: fade-in var(--dur-sm) var(--ease-out);
 }
 
+.hcard:last-child {
+  border-bottom: 0;
+}
+
+/* Pending: the same 2px amber edge as a table row. */
 .hcard.is-pending {
-  background: var(--amber-dim);
+  background: none;
+  box-shadow: inset 2px 0 0 var(--amber);
 }
 
 .hcard.is-selected {
-  border-color: var(--green-dim-2);
-  background: var(--green-dim);
+  background: var(--row-selected);
 }
 
 .hcard-main {
@@ -3180,7 +3996,7 @@ tbody tr.is-selected {
   grid-row: 1 / span 2;
   align-self: center;
   color: var(--text-3);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-md) var(--ease-in-out);
 }
 
 .hcard.is-open .chevron-down {
@@ -3196,13 +4012,15 @@ tbody tr.is-selected {
 }
 
 .hcard-date {
-  font-weight: 600;
+  font-size: var(--fs-base);
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .hcard-amt {
   margin-left: auto;
-  font-weight: 700;
+  font-size: var(--fs-base);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3212,8 +4030,8 @@ tbody tr.is-selected {
   justify-content: space-between;
   gap: 8px;
   margin-top: 4px;
-  font-size: var(--fs-sm);
-  color: var(--text-2);
+  font-size: var(--fs-md);
+  color: var(--text-3);
   min-width: 0;
 }
 
@@ -3230,20 +4048,31 @@ tbody tr.is-selected {
   font-variant-numeric: tabular-nums;
 }
 
-.hcard-settle {
+/* On a card the four settle buttons are separate tap targets, no track. */
+.settle.hcard-settle {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
   padding: 0 12px 10px;
+  border-radius: 0;
+  background: none;
 }
 
 .hcard-settle .settle-btn {
-  padding-left: 4px;
-  padding-right: 4px;
+  height: 36px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: transparent;
+  line-height: 34px;
 }
 
+/* Opacity only: its buttons are measured the moment it opens (same y,
+   44px tall), so nothing in it may move or grow. */
 .hcard-details {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--divider);
   padding: 10px 12px 12px;
+  animation: fade-in var(--dur-sm) var(--ease-out);
 }
 
 .hcard-details dl {
@@ -3262,21 +4091,17 @@ tbody tr.is-selected {
 }
 
 .hcard-details dt {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--text-2);
 }
 
 .hcard-details dd {
   margin: 2px 0 0;
   font-size: var(--fs-md);
   overflow-wrap: anywhere;
-}
-
-.hcard-details dd .tag + .tag {
-  margin-left: 4px;
 }
 
 .hcard-details dd.win {
@@ -3345,7 +4170,7 @@ tbody tr.is-selected {
 .data-step h3 {
   margin: 0;
   font-size: var(--fs-base);
-  font-weight: 700;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -3379,10 +4204,10 @@ tbody tr.is-selected {
 
 .imp-section h4 {
   margin: 0;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
   color: var(--text-2);
 }
 
@@ -3392,20 +4217,24 @@ tbody tr.is-selected {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
   max-height: 220px;
   overflow-y: auto;
   font-size: var(--fs-md);
 }
 
+/* Rows split by hairlines, like the dialogs' other lists. */
 .imp-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--tint-1);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.imp-row:last-child {
+  border-bottom: 0;
 }
 
 .imp-line {
@@ -3455,9 +4284,6 @@ tbody tr.is-selected {
 
 .imp-choice input,
 .check-line input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--green);
   flex-shrink: 0;
 }
 
@@ -3491,6 +4317,7 @@ tbody tr.is-selected {
 
 .restore-counts li::before {
   content: '·';
+  content: '·' / '';
   position: absolute;
   left: 2px;
   color: var(--text-3);
@@ -3519,18 +4346,24 @@ tbody tr.is-selected {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
 }
 
+/* A possible duplicate is a row; one the user keeps is shaded like a
+   selected row. The side padding leaves room for that shade. */
 .imp-dup {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  background: var(--tint-1);
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.imp-dup:last-child {
+  border-bottom: 0;
 }
 
 .imp-dup.is-kept {
-  border-color: var(--green);
+  border-radius: var(--r-md);
+  border-bottom-color: transparent;
+  background: var(--row-selected);
 }
 
 .imp-dup-pick {
@@ -3545,7 +4378,6 @@ tbody tr.is-selected {
 .imp-dup-pick input {
   width: 20px;
   height: 20px;
-  accent-color: var(--green);
   flex-shrink: 0;
 }
 
@@ -3559,21 +4391,30 @@ tbody tr.is-selected {
   font-variant-numeric: tabular-nums;
 }
 
+/* Not the history's 44px rows: a compact comparison. The value cells are
+   inset, so a differing one's fill doesn't hug its text, and the column
+   heads line up with them. */
 .imp-cmp th,
 .imp-cmp td {
+  height: auto;
   text-align: left;
   padding: 3px 6px 3px 0;
   vertical-align: top;
   overflow-wrap: anywhere;
 }
 
+.imp-cmp td {
+  padding: 3px 8px;
+}
+
 .imp-cmp thead th {
   position: static;
   background: none;
-  padding: 3px 6px 3px 0;
+  padding: 3px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--text-3);
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
 
 .imp-cmp tbody th {
@@ -3582,11 +4423,21 @@ tbody tr.is-selected {
   font-weight: 500;
 }
 
+/* The result row (second, as DataDialog's fields() lists them) reads "Lost",
+   not "LOST", like every other status word: the DOM keeps the word. */
+.imp-cmp tbody tr:nth-child(2) td {
+  text-transform: lowercase;
+}
+
+.imp-cmp tbody tr:nth-child(2) td::first-letter {
+  text-transform: uppercase;
+}
+
+/* The file's value where it differs from the app's: a faint amber cell. */
 .imp-cmp tr.is-diff td:first-of-type {
   color: var(--text);
   font-weight: 600;
-  text-decoration: underline dotted var(--text-3);
-  text-underline-offset: 3px;
+  background: var(--amber-dim);
 }
 
 .imp-show-more {
@@ -3640,14 +4491,14 @@ tbody tr.is-selected {
   gap: 8px;
 }
 
+/* Each part a row marked by a 2px edge: neutral when done, amber when
+   something waits or is missing (tests read that colour), red when it failed. */
 .result-part {
   display: grid;
   grid-template-columns: minmax(0, 9em) minmax(0, 1fr);
   gap: 4px 12px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--tint-1);
-  border-left: 3px solid var(--border);
+  padding: 6px 0 6px 12px;
+  border-left: 2px solid var(--border-strong);
 }
 
 .result-part dt {
@@ -3660,19 +4511,19 @@ tbody tr.is-selected {
 }
 
 .result-part.is-done {
-  border-left-color: var(--green);
+  border-left-color: var(--border-strong);
 }
 
 .result-part.is-waiting {
-  border-left-color: var(--amber, var(--text-3));
+  border-left-color: var(--amber);
 }
 
 .result-part.is-preparing {
-  border-left-color: var(--amber, var(--text-3));
+  border-left-color: var(--amber);
 }
 
 .result-part.is-done.has-gap {
-  border-left-color: var(--amber, var(--text-3));
+  border-left-color: var(--amber);
 }
 
 .result-part.is-failed,
@@ -3734,66 +4585,83 @@ tbody tr.is-selected {
   gap: 4px;
 }
 
+/* Styled with the other fields; its picker icon follows the app's theme
+   through the root's color-scheme. */
 .quick-date-input {
   width: 100%;
-  min-height: 40px;
-  background: var(--input-bg);
-  border: 1px solid var(--tint-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-md);
-  padding: 8px 12px;
-  color-scheme: light dark;
 }
 
-.quick-date-input:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-ring);
-}
-
+/* Today / Yesterday: a two-segment control as tall as the date box. */
 .quick-date-chips {
   display: flex;
-  gap: 6px;
-  padding-bottom: 2px;
+  gap: 0;
+  min-height: var(--control-h);
+  padding: 2px;
+  border-radius: var(--r-md);
+  background: var(--tint-2);
 }
 
 .quick-date-chips .chip {
-  min-height: 40px;
-  padding: 4px 12px;
+  height: auto;
+  padding: 0 12px;
+  border: 0;
+  font-size: var(--fs-md);
+  transition:
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+}
+
+.quick-date-chips .chip:hover {
+  background: transparent;
 }
 
 .chip.active,
-.chip[aria-pressed='true'] {
+.chip[aria-pressed='true'],
+.quick-date-chips .chip.active:hover {
   color: var(--text);
-  background: var(--tint-3);
-  border-color: var(--focus);
+  font-weight: 600;
+  background: var(--seg-active);
+  border-color: transparent;
+  box-shadow: var(--shadow-thumb);
 }
 
 /* ---------- dashboard: key numbers first, the rest on demand ---------- */
+/* The month cell is as wide as the lifetime P/L above it, so the two strips'
+   first dividers line up. */
 .hero-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr);
 }
 
-/* Bankroll and pending open their dialogs: the whole card is the button. */
+/* Bankroll and pending open their dialogs: the whole cell of the strip is
+   the button. */
 .key-card {
   font: inherit;
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition:
-    border-color 0.12s ease,
-    background 0.12s ease;
+  transition: background-color var(--dur-hover) var(--ease-out);
 }
 
-.key-card:hover {
-  border-color: var(--border-strong);
+@media (hover: hover) and (pointer: fine) {
+  .key-card:hover {
+    background: var(--tint-1);
+    border-color: transparent;
+  }
 }
 
+/* Pressed: a deeper tint, not a scale, which would shift the strip's
+   hairline (each cell draws its own). */
+.key-card:active {
+  background: var(--tint-2);
+}
+
+/* The strip clips its cells, so the ring goes inside the cell. */
 .key-card:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: -3px;
+  border-radius: var(--r-md);
 }
 
 .key-card .stat-head,
@@ -3817,9 +4685,11 @@ tbody tr.is-selected {
   gap: 16px;
 }
 
+/* The heading wraps the whole toggle: only the title is bold. */
 .advanced-head {
   margin: 0;
   font-size: inherit;
+  font-weight: inherit;
 }
 
 .advanced-toggle {
@@ -3828,14 +4698,17 @@ tbody tr.is-selected {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px 12px;
-  padding: 14px 20px;
-  background: linear-gradient(180deg, var(--card-top) 0%, var(--card-bottom) 100%);
+  /* The cards' inset, so the title starts on the column's left edge. */
+  padding: 14px 24px;
+  background: var(--card-solid);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
   color: var(--text);
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out);
 }
 
 .advanced-toggle:hover {
@@ -3848,35 +4721,64 @@ tbody tr.is-selected {
 }
 
 .advanced-title {
-  font-size: var(--fs-base);
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.009em;
+}
+
+/* "Advanced analytics · All time": the suffix sits close to the title. */
+.advanced-toggle .scope-tag {
+  margin-left: -6px;
 }
 
 .advanced-hint {
   flex: 1;
   min-width: 0;
   color: var(--text-3);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
+  font-weight: 400;
 }
 
 .advanced-toggle .chevron-down {
   margin-left: auto;
   color: var(--text-3);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-md) var(--ease-in-out);
 }
 
 .advanced.is-open .advanced-toggle .chevron-down {
   transform: rotate(180deg);
 }
 
+/* An accordion in CSS alone: the hidden attribute stays (tests expect the
+   closed section hidden), and height runs to and from auto (interpolate-size
+   in motion). Closing keeps it displayed until the height reaches 0. A flex
+   item that only clips keeps its content's height as a floor: min-height 0
+   lets it shrink. The clip margin leaves room for the cards' light shadow. */
 .advanced-body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  overflow: clip;
+  overflow-clip-margin: 4px;
+  transition:
+    height var(--dur-md) var(--ease-in-out),
+    opacity var(--dur-md) var(--ease-out),
+    display var(--dur-md) allow-discrete;
 }
 
 .advanced-body[hidden] {
   display: none;
+  height: 0;
+  opacity: 0;
+}
+
+@starting-style {
+  .advanced-body:not([hidden]) {
+    height: 0;
+    opacity: 0;
+  }
 }
 
 /* Eight tiles in two rows of four: room for the counts each sub carries. */
@@ -3888,13 +4790,38 @@ tbody tr.is-selected {
   white-space: normal;
 }
 
+/* Narrower: the P/L takes the strip's whole first row, bankroll and pending
+   share the second, under an inset hairline. */
 @media (max-width: 1120px) {
-  .hero-2 .roi-card {
-    grid-column: auto;
+  .hero.key-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .key-stats .pending-card {
-    grid-column: span 2;
+  .hero.key-stats > .pl-card {
+    grid-column: 1 / -1;
+  }
+
+  .hero.key-stats > .pl-card::after {
+    content: '';
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 0;
+    height: 1px;
+    background: var(--divider);
+  }
+
+  .hero.key-stats > .stat-card.bankroll-card::before {
+    content: none;
+  }
+
+  /* Halves, under the bankroll and pending halves. */
+  .hero-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hero-2 .roi-card {
+    grid-column: auto;
   }
 
   .advanced-body .mini-card {
@@ -3903,22 +4830,101 @@ tbody tr.is-selected {
 }
 
 @media (max-width: 640px) {
-  .hero-2,
-  .key-stats {
+  .hero.hero-2 {
     grid-template-columns: 1fr;
   }
 
-  .key-stats .pending-card {
-    grid-column: auto;
+  .hero > .stat-card {
+    min-height: 0;
+    padding: 16px;
+  }
+
+  .hero > .stat-card + .stat-card::before {
+    top: 16px;
+    bottom: 16px;
+  }
+
+  .hero.key-stats > .pl-card::after {
+    left: 16px;
+    right: 16px;
+  }
+
+  /* Stacked: ROI's divider lies on top. */
+  .hero.hero-2 > .roi-card::before {
+    top: 0;
+    bottom: auto;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    height: 1px;
+  }
+
+  .hero .hero-value,
+  .hero .life-value {
+    font-size: 22px;
+    margin: 8px 0 6px;
+  }
+
+  .hero .pl-card .life-value {
+    font-size: 32px;
+  }
+
+  /* Half-width cells: the scope goes on its own line, without the dot that
+     would otherwise start it. */
+  .key-card .stat-head {
+    row-gap: 0;
+  }
+
+  .key-card .scope-tag {
+    flex-basis: 100%;
+  }
+
+  .key-card .scope-tag::before {
+    content: none;
   }
 
   .advanced-body .mini-card {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .advanced-toggle {
+    padding: 14px 16px;
+  }
+
   .advanced-hint {
     flex-basis: 100%;
     order: 3;
+  }
+}
+
+/* The narrowest phones: one column, every divider across; the calendar
+   takes back some of its padding for the cells. */
+@media (max-width: 360px) {
+  .calendar-card {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  /* Cells are about 35px wide here: "+$117" fits at 10px with 1px sides. */
+  .calendar-card .cal-cell {
+    padding-inline: 1px;
+  }
+
+  .calendar-card .cal-cell .cal-amt {
+    font-size: 10px;
+  }
+
+  .hero.key-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero.key-stats > .pending-card::before {
+    top: 0;
+    bottom: auto;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    height: 1px;
   }
 }
 
@@ -3938,7 +4944,8 @@ tbody tr.is-selected {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  border-color: var(--green-dim-2);
+  --rise: -6px;
+  animation: rise-in var(--dur-md) var(--ease-out);
 }
 
 .first-run-head {
@@ -3951,6 +4958,8 @@ tbody tr.is-selected {
 .first-run-head h2 {
   margin: 0;
   font-size: var(--fs-lg);
+  line-height: 24px;
+  letter-spacing: -0.011em;
 }
 
 .first-run-head .hint {
@@ -3976,24 +4985,27 @@ tbody tr.is-selected {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
   border-radius: 50%;
-  background: var(--tint-2);
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
   color: var(--text-2);
-  font-weight: 700;
-  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-size: var(--fs-xs);
 }
 
+/* Done: a solid ink mark and a quieter title, no strikethrough. */
 .first-run-steps li.is-done .step-mark {
-  background: var(--green-dim-2);
-  color: var(--green);
+  background: var(--text);
+  box-shadow: none;
+  color: var(--bg);
 }
 
 .first-run-steps li.is-done strong {
-  color: var(--text-2);
-  text-decoration: line-through;
-  text-decoration-color: var(--text-3);
+  color: var(--text-3);
+  text-decoration: none;
 }
 
 .step-body {
@@ -4008,6 +5020,20 @@ tbody tr.is-selected {
   margin: 0;
 }
 
+/* The header's Add bet is this screen's one primary; a step's own Add bet
+   is drawn as a ghost beside the other steps' buttons. */
+.step-body .btn-primary {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .step-body .btn-primary:hover:not(:disabled) {
+    background: var(--tint-2);
+  }
+}
+
 .guide-odds {
   width: 100%;
 }
@@ -4015,6 +5041,88 @@ tbody tr.is-selected {
 @media (max-width: 1120px) {
   .first-run-steps {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- reduced motion ----------
+   After every keyframe, so these opacity-only versions replace them. Fades
+   and colour changes stay as the cue that something changed; movement, the
+   accordion's height, the first-paint stagger and the pulse go. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes sheet-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes num-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes grow-x {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes fab-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes toast-out {
+    to {
+      opacity: 0;
+      visibility: hidden;
+    }
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 120ms !important;
+    animation-delay: 0s !important;
+    transition-property: color, background-color, border-color, box-shadow, opacity !important;
+  }
+
+  /* The toast's fade is its end of life, not a stagger: keep its delay
+     (lifetime minus the 120ms fade). */
+  .toast {
+    animation-delay: 0s, 4080ms !important;
+  }
+
+  .toast:has(.toast-action) {
+    animation-delay: 0s, 7880ms !important;
+  }
+
+  .sync-dot {
+    animation: none !important;
+  }
+
+  /* Not a bare :active: the pressed chevron's rotation would flicker. */
+  :is(.btn, .seg-btn, .scope-btn, .settle-btn, .chip, .fab, .btn-icon, .nav-btn, .menu-btn):active {
+    transform: none !important;
   }
 }
 
@@ -4045,19 +5153,26 @@ tbody tr.is-selected {
     min-height: 32px;
   }
 
+  .menu-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Six ranges or tabs: a 3×2 grid inside one track (a sideways scroll
+     would hide the last one). */
   .range-toggle,
   .scope-toggle.bd-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-md);
   }
 
   .range-toggle .scope-btn,
   .bd-tabs .scope-btn {
-    min-height: 36px;
-    padding: 6px 4px;
-    border-radius: 9px;
+    height: 36px;
+    padding: 0 4px;
+    border-radius: var(--r-sm);
   }
 
   .range-custom input[type='date'] {
@@ -4069,12 +5184,21 @@ tbody tr.is-selected {
     height: 36px;
   }
 
+  .month-nav {
+    margin-block: -9px;
+  }
+
+  .menu-item {
+    min-height: 44px;
+  }
+
   .month-nav .chip,
   .bulk-bar .chip {
     min-height: 32px;
   }
 
-  .bulk-bar .btn {
+  .bulk-bar .btn,
+  .bulk-group input {
     min-height: 36px;
   }
 
@@ -4084,20 +5208,31 @@ tbody tr.is-selected {
   }
 
   .toast-action {
-    padding: 6px 12px;
+    padding: 0 12px;
   }
 
   .auth-card .auth-toggle {
     padding: 10px;
   }
 
-  .settle {
-    gap: 8px;
+  .settle-btn {
+    height: 32px;
+    padding: 0 12px;
+    line-height: 32px;
   }
 
-  .settle-btn {
-    min-height: 32px;
-    padding: 6px 12px;
+  /* The bar's settle buttons are separate targets, as on a card: one tap
+     settles every ticked bet, so Won and Lost don't touch. */
+  .bulk-bar .settle {
+    gap: 6px;
+    padding: 0;
+    background: none;
+  }
+
+  .bulk-bar .settle-btn {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    line-height: 30px;
   }
 
   .mini-sub {
@@ -4114,9 +5249,18 @@ tbody tr.is-selected {
     padding: 4px 2px;
   }
 
+  /* Centred: in a cell this narrow a corner number would touch the outline. */
+  .cal-cell {
+    align-items: center;
+  }
+
+  .cal-top {
+    justify-content: center;
+  }
+
   .cal-cell .cal-amt {
-    font-size: 10px;
-    letter-spacing: -0.03em;
+    font-size: var(--fs-xs);
+    letter-spacing: 0;
   }
 
   /* A day with only open bets: the amber dot instead of the word. */
@@ -4163,23 +5307,24 @@ tbody tr.is-selected {
     background: var(--card-solid);
   }
 
+  /* Opaque like the rows' hover and selected colours, which it takes on. */
   .history-card .td-actions {
     z-index: 1;
     background: var(--card-solid);
     box-shadow:
-      inset 0 -1px var(--border),
-      -6px 0 6px -6px rgba(0, 0, 0, 0.35);
+      inset 0 -1px var(--divider),
+      -6px 0 6px -6px var(--shadow-pop);
   }
 
-  .history-card tr.is-pending .td-actions {
-    background: linear-gradient(var(--amber-dim), var(--amber-dim)), var(--card-solid);
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 20px;
+    height: 20px;
   }
 
-  .history-card tr.is-selected .td-actions {
-    background: linear-gradient(var(--green-dim), var(--green-dim)), var(--card-solid);
-  }
-
-  .td-sel input {
+  /* A card's own box is its whole target (no label around it). */
+  input.hcard-sel,
+  .hcards-all input {
     width: 22px;
     height: 22px;
   }
@@ -4211,8 +5356,8 @@ tbody tr.is-selected {
     bottom: calc(84px + env(safe-area-inset-bottom));
     z-index: 3;
     margin: 12px 0 0;
-    background: var(--card-solid);
-    box-shadow: var(--shadow);
+    background: var(--surface-2);
+    box-shadow: var(--shadow-raised);
   }
 
   .bulk-group:not(.settle) {
@@ -4246,11 +5391,7 @@ tbody tr.is-selected {
     white-space: nowrap;
   }
 
-  /* Dialogs. */
-  .modal-backdrop {
-    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-  }
-
+  /* Dialogs (the bottom sheet itself is in the phone layout block). */
   .modal-head .btn-icon {
     flex-shrink: 0;
     width: 40px;
@@ -4318,17 +5459,18 @@ tbody tr.is-selected {
   .settings-seg .seg-btn,
   .bet-form .seg-btn {
     padding-inline: 4px;
-    letter-spacing: 0.02em;
+  }
+
+  /* Three results to a row: the dot moves in so "Pendiente" fits at 320px. */
+  .bet-form .seg-btn:is(.win, .loss, .push, .void, .pending) {
+    padding-left: 18px;
+  }
+
+  .bet-form .seg-btn:is(.win, .loss, .push, .void, .pending)::before {
+    left: 8px;
   }
 
   .bank-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 360px) {
-  .calendar-card {
-    padding-left: 10px;
-    padding-right: 10px;
   }
 }

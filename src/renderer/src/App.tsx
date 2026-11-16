@@ -128,7 +128,17 @@ export default function App() {
   const [dataOpen, setDataOpen] = useState(false)
   // The imports made on this device (see data/imports.ts), as last read.
   const [batches, setBatches] = useState<ImportBatch[]>([])
-  const [toast, setToast] = useState<ToastMsg | null>(null)
+  // Each message is its own element (keyed by its seq): its entrance plays
+  // again, and its end-of-life fade (index.css) is timed from its own start.
+  const [toast, setToastShown] = useState<{ msg: ToastMsg; seq: number } | null>(null)
+  const toastSeq = useRef(0)
+  const setToast = useCallback((msg: ToastMsg | null): void => {
+    toastSeq.current += 1
+    setToastShown(msg && { msg, seq: toastSeq.current })
+  }, [])
+  // Stable, so a render of App doesn't restart the toast's timer (Toast.tsx):
+  // it unmounts on time, just after its fade (index.css) ends.
+  const clearToast = useCallback((): void => setToast(null), [setToast])
 
   // An error in the user's words where the app knows it: storage that
   // refused a change, a key Supabase refuses, a server failure that passes.
@@ -1273,7 +1283,11 @@ export default function App() {
           </button>
         )}
 
-        {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
+        {/* The live region is always there, so each message put into it is
+            announced (one inserted along with its text often isn't). */}
+        <div className="toast-region" role="status">
+          {toast && <Toast key={toast.seq} msg={toast.msg} onDone={clearToast} />}
+        </div>
       </div>
     </MoneyContext.Provider>
   )

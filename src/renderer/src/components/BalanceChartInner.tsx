@@ -47,10 +47,18 @@ export default function BalanceChartInner({ mode, data }: Props) {
     return [...idx].map((i) => data[i].date)
   }, [data])
 
-  // P/L always shows its zero line. A bankroll is fitted to its own range, on
-  // round ticks, and shows zero only when it gets there.
+  // P/L always shows its zero line and fills the plot from its lowest point
+  // (or 0) to its highest, labelled on the round ticks that fall inside it
+  // ($0, $500, $1k), not on wherever the data happens to end. A bankroll is
+  // fitted to its own round range and shows zero only when it gets there.
   const yAxis = useMemo(() => {
-    if (!bankroll) return { domain: [(dataMin: number) => Math.min(0, dataMin), (dataMax: number) => Math.max(0, dataMax)] as [(n: number) => number, (n: number) => number], ticks: undefined, zero: true }
+    if (!bankroll) {
+      const balances = data.map((p) => p.balance)
+      const lo = Math.min(0, ...balances)
+      const hi = Math.max(0, ...balances)
+      const ticks = bankrollAxis(lo, hi, money.unit !== null).ticks.filter((v) => v >= lo && v <= hi)
+      return { domain: [lo, hi] as [number, number], ticks, zero: true }
+    }
     const values = data.flatMap((p) => [p.balance, p.funded ?? p.balance])
     const { lo, hi, ticks } = bankrollAxis(Math.min(...values), Math.max(...values), money.unit !== null)
     return { domain: [lo, hi] as [number, number], ticks, zero: lo <= 0 && hi >= 0 }
@@ -63,12 +71,12 @@ export default function BalanceChartInner({ mode, data }: Props) {
   const lineColor = ahead ? 'var(--green)' : 'var(--red)'
 
   return (
-    <ResponsiveContainer width="100%" height={272}>
+    <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={data} margin={{ top: 8, right: 10, left: 0, bottom: 2 }}>
         <defs>
           <linearGradient id="balanceFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={lineColor} stopOpacity={0.16} />
-            <stop offset="100%" stopColor={lineColor} stopOpacity={0.02} />
+            <stop offset="0%" stopColor={lineColor} stopOpacity={0.14} />
+            <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
           </linearGradient>
         </defs>
         <CartesianGrid vertical={false} stroke="var(--grid)" strokeWidth={1} />
@@ -91,7 +99,7 @@ export default function BalanceChartInner({ mode, data }: Props) {
           domain={yAxis.domain}
           ticks={yAxis.ticks}
         />
-        {yAxis.zero && <ReferenceLine y={0} stroke="var(--grid-strong)" strokeWidth={1} />}
+        {yAxis.zero && <ReferenceLine y={0} stroke="var(--grid-strong)" strokeWidth={1} strokeDasharray="3 3" />}
         <Tooltip
           cursor={{ stroke: 'var(--grid-strong)', strokeWidth: 1 }}
           isAnimationActive={false}
@@ -134,7 +142,7 @@ export default function BalanceChartInner({ mode, data }: Props) {
           type={bankroll ? 'linear' : 'monotone'}
           dataKey="balance"
           stroke={lineColor}
-          strokeWidth={2}
+          strokeWidth={1.75}
           strokeLinecap="round"
           fill="url(#balanceFill)"
           baseValue={bankroll ? 'dataMin' : undefined}
@@ -142,7 +150,7 @@ export default function BalanceChartInner({ mode, data }: Props) {
             bankroll
               ? (props: { cx?: number; cy?: number; index?: number; payload?: ChartPoint }) =>
                   props.payload?.moved ? (
-                    <circle key={props.index} cx={props.cx} cy={props.cy} r={4} fill="var(--text-2)" stroke="var(--card-solid)" strokeWidth={2} />
+                    <circle key={props.index} cx={props.cx} cy={props.cy} r={3} fill="var(--text-3)" stroke="var(--card-solid)" strokeWidth={1.5} />
                   ) : (
                     <g key={props.index} />
                   )

@@ -61,7 +61,10 @@ function Mini({ label, value, sub, toneClass = '', title, onClick, className = '
   const body = (
     <>
       <span className="stat-label">{label}</span>
-      <span className={`mini-value ${toneClass}`}>{value}</span>
+      {/* Keyed by its text: a new figure mounts and settles in (num-in in the CSS). */}
+      <span key={value} className={`mini-value ${toneClass}`}>
+        {value}
+      </span>
       <span className="mini-sub">{sub}</span>
     </>
   )
@@ -102,6 +105,7 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
           month: monthYearShort(lifetime.first ?? '')
         }) + (lifetime.pendingCount > 0 ? t('hero.riding', { n: lifetime.pendingCount, amount: money.stake(lifetime.pendingStaked) }) : '')
 
+  const plValue = money.signed(lifetime.total)
   const bankrollValue = bankroll.known ? money.bankroll(bankroll.current) : bankroll.reason === 'unset' ? '—' : '…'
   const bankrollSub = bankroll.known
     ? bankroll.inPlay > 0
@@ -126,8 +130,10 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
         <div className="stat-head">
           <span className="stat-label">{rangeName ? t('hero.rangePL', { range: rangeName }) : t('hero.lifetimePL')}</span>
         </div>
-        <div className={`life-value ${tone(lifetime.total)}`} title={dollarsTitle(lifetime.total)}>
-          {money.signed(lifetime.total)}
+        {/* Keyed by its text, like every figure here: a new value mounts and
+            settles in (num-in). The text is final at once, never counted up. */}
+        <div key={plValue} className={`life-value ${tone(lifetime.total)}`} title={dollarsTitle(lifetime.total)}>
+          {plValue}
         </div>
         <div className="stat-sub">{lifetimeSub}</div>
       </article>
@@ -142,7 +148,9 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
           <span className="stat-label">{t('hero.bankroll')}</span>
           <Scope range="all-dates" />
         </span>
-        <span className={`life-value key-value ${bankroll.known && bankroll.current <= 0 ? 'loss' : ''}`}>{bankrollValue}</span>
+        <span key={bankrollValue} className={`life-value key-value ${bankroll.known && bankroll.current <= 0 ? 'loss' : ''}`}>
+          {bankrollValue}
+        </span>
         <span className="stat-sub key-sub">{bankrollSub}</span>
       </button>
 
@@ -151,7 +159,9 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
           <span className="stat-label">{t('key.pending')}</span>
           <Scope range="all-dates" />
         </span>
-        <span className="life-value key-value">{open.length}</span>
+        <span key={open.length} className="life-value key-value">
+          {open.length}
+        </span>
         <span className="stat-sub key-sub">{pendingSub}</span>
       </button>
     </section>
@@ -166,6 +176,7 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
   const dollarsTitle = (n: number): string | undefined => (money.unit === null ? undefined : fmtMoney(n))
   const month = useMemo(() => summarize(forMonth(bets, ym)), [bets, ym])
 
+  const monthValue = money.signed(month.total)
   const onCurrentMonth = sameMonth(ym, currentMonth())
   const monthSub =
     month.bets === 0
@@ -174,6 +185,7 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
         (month.pendingCount > 0 ? t('hero.pendingSuffix', { n: month.pendingCount }) : '')
 
   const { roi, bonus } = lifetime
+  const roiValue = roi ? fmtPctSigned(roi.pct) : '—'
   const smallSample = roi !== null && isSmallSample(roi.counted)
 
   // ROI only speaks for the bets that recorded a stake. When that's a subset,
@@ -211,8 +223,9 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
             </button>
           </div>
         </div>
-        <div className={`hero-value ${tone(month.total)}`} title={dollarsTitle(month.total)}>
-          {money.signed(month.total)}
+        {/* Keyed by its text: a new value mounts and settles in (num-in). */}
+        <div key={monthValue} className={`hero-value ${tone(month.total)}`} title={dollarsTitle(month.total)}>
+          {monthValue}
         </div>
         <div className="stat-sub">{monthSub}</div>
       </article>
@@ -234,7 +247,9 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
             )}
           </span>
         </div>
-        <div className={`life-value ${roi ? tone(roi.pct) : 'flat'}`}>{roi ? fmtPctSigned(roi.pct) : '—'}</div>
+        <div key={roiValue} className={`life-value ${roi ? tone(roi.pct) : 'flat'}`}>
+          {roiValue}
+        </div>
         <div className="stat-sub">
           {roiSub}
           {bonus.count > 0 && (
