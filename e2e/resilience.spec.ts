@@ -41,6 +41,9 @@ const writesStarted = (page: Page): Promise<number> => page.evaluate(() => Numbe
 
 const queuedBets = (page: Page): Promise<number> =>
   page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:outbox:${uid}`) ?? '[]') as unknown[]).length, USER.id)
+/** Whether the first queued bet change has gone out at least once (an attempt, even a failed one). */
+const headSent = (page: Page): Promise<boolean | undefined> =>
+  page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:outbox:${uid}`) ?? '[]') as { sent?: boolean }[])[0]?.sent, USER.id)
 
 /** Every read of the bets is answered at once but handed over only when let go (null), as a read that comes back late. */
 const holdReads = (page: Page, table: string | null): Promise<void> =>
@@ -454,8 +457,7 @@ test.describe('a server that fails', () => {
     await setDown(page, true)
     await logLoss(page, '13')
     await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
-    const sent = () => page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:outbox:${uid}`) ?? '[]') as { sent?: boolean }[])[0]?.sent, USER.id)
-    await expect.poll(sent).toBe(true)
+    await expect.poll(() => headSent(page)).toBe(true)
     const bet = page.locator('.history-card tbody tr', { hasText: '-$13.00' })
     await bet.locator('.btn-icon.danger').click()
     await bet.locator('.btn-icon.danger').click()
@@ -485,6 +487,9 @@ test.describe('a server that fails', () => {
     await setDown(page, true)
     await logLoss(page, '14')
     await expect(page.locator('.sync-badge')).toHaveText('Offline · 1 queued')
+    // Tried once already: an edit to an add never sent is folded into it
+    // (offline.ts), and there would be no separate edit to send.
+    await expect.poll(() => headSent(page)).toBe(true)
     const row = page.locator('.history-card tbody tr', { hasText: '-$14.00' })
     await row.locator('.td-actions .btn-icon').first().click()
     const modal = page.locator('.day-modal')

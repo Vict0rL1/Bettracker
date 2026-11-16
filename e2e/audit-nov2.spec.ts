@@ -220,6 +220,11 @@ test.describe('restore: what it did, and an Undo that only takes back its own', 
     await page.evaluate(() => localStorage.setItem('e2e:moves', '[]'))
     await online(page)
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    // The read that finds the deposit gone has landed here before going
+    // offline; otherwise the restore finds it "already here".
+    await expect
+      .poll(() => page.evaluate((uid) => (JSON.parse(localStorage.getItem(`bettracker:moves:${uid}`) ?? '[]') as unknown[]).length, USER.id))
+      .toBe(0)
     await setFlag(page, 'down', '1')
     const dialog = await pickBackup(page, JSON.stringify(backup))
     await dialog.locator('.restore-go').click()
@@ -283,7 +288,8 @@ test.describe('the five reliability defects', () => {
     await reload(page)
     await expect(page.locator('.refused-notice')).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.refused-notice')).toContainText('violates check constraint')
-    expect(await queued()).toBe(0)
+    // Its record is stored first, then it leaves the queue: the notice can show a moment before.
+    await expect.poll(queued).toBe(0)
     expect(await page.evaluate((uid) => localStorage.getItem(`bettracker:refused:${uid}`), USER.id)).not.toBeNull()
   })
 
