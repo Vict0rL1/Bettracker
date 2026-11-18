@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { timeoutFetch } from './timeoutFetch'
+import { FUNCTION_TIMEOUT_MS, REQUEST_TIMEOUT_MS, requestTimeoutFor, timeoutFetch } from './timeoutFetch'
 
 /** A fetch that answers only when told to, or fails when its signal aborts. */
 function hanging() {
@@ -75,5 +75,22 @@ describe('timeoutFetch', () => {
     const pending = timeoutFetch(30_000, h.base)('https://x.supabase.co/rest/v1/entries', { signal: caller.signal })
     caller.abort(new DOMException('Cancelled', 'AbortError'))
     await expect(pending).rejects.toMatchObject({ message: 'Cancelled' })
+  })
+})
+
+describe('requestTimeoutFor', () => {
+  // The AI reading of a receipt can take a minute; a database request that
+  // long is a connection that has gone.
+  it('gives an Edge Function call 2 minutes and everything else 30 s, however the request is given', () => {
+    const fn = 'https://x.supabase.co/functions/v1/extract-expenses'
+    const rest = 'https://x.supabase.co/rest/v1/expenses?select=*'
+    expect(requestTimeoutFor(fn)).toBe(FUNCTION_TIMEOUT_MS)
+    expect(requestTimeoutFor(new URL(fn))).toBe(FUNCTION_TIMEOUT_MS)
+    expect(requestTimeoutFor(new Request(fn, { method: 'POST' }))).toBe(FUNCTION_TIMEOUT_MS)
+    expect(requestTimeoutFor(rest)).toBe(REQUEST_TIMEOUT_MS)
+    expect(requestTimeoutFor(new URL(rest))).toBe(REQUEST_TIMEOUT_MS)
+    expect(requestTimeoutFor(new Request(rest))).toBe(REQUEST_TIMEOUT_MS)
+    expect(requestTimeoutFor('https://x.supabase.co/auth/v1/token')).toBe(REQUEST_TIMEOUT_MS)
+    expect([REQUEST_TIMEOUT_MS, FUNCTION_TIMEOUT_MS]).toEqual([30_000, 120_000])
   })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
-import { checkSupabaseEnv, envMessage, envProblemLines, envStrings, supabaseEnvCheck, type EnvCheck, type EnvProblem } from './supabaseEnv'
+import { anthropicKeyVars, checkSupabaseEnv, envMessage, envProblemLines, envStrings, supabaseEnvCheck, type EnvCheck, type EnvProblem } from './supabaseEnv'
 
 // Keys are put together here rather than written out, so no string in the
 // repository looks like a real one (the CI secret scan reads the tests too).
@@ -15,6 +15,8 @@ const anon = (ref: string = REF): string => jwt({ iss: 'supabase', ref, role: 'a
 const serviceRole = jwt({ iss: 'supabase', ref: REF, role: 'service_role', iat: 1700000000, exp: 2015000000 })
 const PUBLISHABLE = ['sb', 'publishable', 'Ab3dEfGh-1jKl_mN0pQr'].join('_')
 const SECRET = ['sb', 'secret', 'x'.repeat(20)].join('_')
+// An Anthropic key's shape, made of parts for the same reason.
+const ANTHROPIC = ['sk', 'ant', 'api03', 'Zx9'.repeat(10)].join('-')
 
 /** The problems found, or [] when the pair is fine (or unset). */
 const problems = (url: string | undefined, key: string | undefined): EnvProblem[] => {
@@ -274,5 +276,55 @@ describe('supabaseEnvCheck (the build)', () => {
     expect(() => hook({ command: 'build', mode: 'production', env: { VITE_SUPABASE_URL: 'https://xxxxxxxx.supabase.co', VITE_SUPABASE_ANON_KEY: PUBLISHABLE }, logger: { warn } })).toThrow(
       /no se puede compilar con este \.env:\n {2}• VITE_SUPABASE_URL sigue siendo el ejemplo/
     )
+  })
+})
+
+describe('supabaseEnvCheck: an Anthropic key never goes in the app (the AI reading keeps it in a function secret)', () => {
+  function run(env: Record<string, string>, command: 'build' | 'serve' = 'build', mode = 'production', lang: 'en' | 'es' = 'en') {
+    const warn = vi.fn()
+    const hook = supabaseEnvCheck(lang).configResolved as (config: unknown) => void
+    const go = () => hook({ command, mode, env, logger: { warn } })
+    return { go, warn }
+  }
+  const GOOD = { VITE_SUPABASE_URL: URL_OK, VITE_SUPABASE_ANON_KEY: PUBLISHABLE }
+
+  it('finds a VITE_ variable named for Anthropic, whatever it holds, and any value that is an Anthropic key', () => {
+    expect(anthropicKeyVars({ VITE_ANTHROPIC_API_KEY: '' })).toEqual(['VITE_ANTHROPIC_API_KEY'])
+    expect(anthropicKeyVars({ vite_my_anthropic: 'x' })).toEqual(['vite_my_anthropic'])
+    expect(anthropicKeyVars({ VITE_CLAUDE_KEY: ` ${ANTHROPIC}` })).toEqual(['VITE_CLAUDE_KEY'])
+    expect(anthropicKeyVars({ ...GOOD, MODE: 'production', PROD: true, ANTHROPIC_API_KEY: 'x' })).toEqual([])
+  })
+
+  it.each(['production', 'demo'])('stops a build (%s mode) on VITE_ANTHROPIC_API_KEY, naming it and never its value', (mode) => {
+    const { go } = run({ ...GOOD, VITE_ANTHROPIC_API_KEY: ANTHROPIC }, 'build', mode)
+    expect(go).toThrow(/can’t be built with this \.env:\n {2}• VITE_ANTHROPIC_API_KEY: The Anthropic key never goes in \.env or a VITE_ variable/)
+    try {
+      go()
+    } catch (err) {
+      expect((err as Error).message).not.toContain(ANTHROPIC)
+      expect((err as Error).stack).toBe((err as Error).message)
+    }
+  })
+
+  it.each(['production', 'demo'])('stops a build (%s mode) on any value that is an Anthropic key', (mode) => {
+    const { go } = run({ ...GOOD, VITE_SOMETHING: ANTHROPIC }, 'build', mode)
+    expect(go).toThrow(/• VITE_SOMETHING: The Anthropic key never goes/)
+  })
+
+  it('in dev only warns, and still checks the Supabase pair', () => {
+    const { go, warn } = run({ VITE_SUPABASE_URL: `${REF}.supabase.co`, VITE_SUPABASE_ANON_KEY: PUBLISHABLE, VITE_ANTHROPIC_API_KEY: ANTHROPIC }, 'serve', 'development')
+    expect(go).not.toThrow()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('• VITE_ANTHROPIC_API_KEY: The Anthropic key never goes'))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('VITE_SUPABASE_URL has to start with https://'))
+    expect(warn.mock.calls.join(' ')).not.toContain(ANTHROPIC)
+  })
+
+  it('speaks Spanish when asked', () => {
+    expect(run({ ...GOOD, VITE_ANTHROPIC_API_KEY: 'x' }, 'build', 'production', 'es').go).toThrow(/• VITE_ANTHROPIC_API_KEY: La clave de Anthropic nunca va en \.env/)
+  })
+
+  it('has its words in both languages', () => {
+    expect(envStrings.en['env.anthropic-key']).toContain('Supabase function secret')
+    expect(envStrings.es['env.anthropic-key']).toContain('secreto de la función de Supabase')
   })
 })

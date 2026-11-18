@@ -207,7 +207,9 @@ const envEn = {
   'env.key-unknown':
     '{key} is not a Supabase API key: those start with sb_publishable_ (or eyJ, for the old anon key). The JWT secret and the database password don’t go here.',
   'env.key-other-project':
-    'The key in {key} is from another Supabase project ({keyRef}), not from the one in {url} ({urlRef}). Supabase answers that with “Invalid API key”. Copy the URL and the key from the same project.'
+    'The key in {key} is from another Supabase project ({keyRef}), not from the one in {url} ({urlRef}). Supabase answers that with “Invalid API key”. Copy the URL and the key from the same project.',
+  'env.anthropic-key':
+    'The Anthropic key never goes in .env or a VITE_ variable: it is a Supabase function secret (README, AI reading of receipts).'
 }
 
 const envEs: Record<keyof typeof envEn, string> = {
@@ -231,7 +233,9 @@ const envEs: Record<keyof typeof envEn, string> = {
   'env.key-unknown':
     '{key} no es una clave de API de Supabase: esas empiezan por sb_publishable_ (o por eyJ, la anon antigua). El JWT secret y la contraseña de la base de datos no van aquí.',
   'env.key-other-project':
-    'La clave de {key} es de otro proyecto de Supabase ({keyRef}), no del de {url} ({urlRef}). Eso es lo que Supabase contesta con «Invalid API key». Copia la URL y la clave del mismo proyecto.'
+    'La clave de {key} es de otro proyecto de Supabase ({keyRef}), no del de {url} ({urlRef}). Eso es lo que Supabase contesta con «Invalid API key». Copia la URL y la clave del mismo proyecto.',
+  'env.anthropic-key':
+    'La clave de Anthropic nunca va en .env ni en una variable VITE_: es un secreto de la función de Supabase (README, lectura con IA de recibos).'
 }
 
 export const envStrings = { en: envEn, es: envEs }
@@ -260,7 +264,8 @@ const buildEn = {
   unset:
     'BetTracker: there is no VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY, so this build will open on the setup screen. To publish it, fill in .env first.',
   devBad: 'BetTracker: .env has a problem (the app shows it too):',
-  likely: 'BetTracker: .env is probably wrong (the build goes on; check it):'
+  likely: 'BetTracker: .env is probably wrong (the build goes on; check it):',
+  anthropic: 'BetTracker: .env would put an Anthropic API key in the app (a build stops on this):'
 }
 
 const buildEs: typeof buildEn = {
@@ -271,7 +276,8 @@ const buildEs: typeof buildEn = {
   unset:
     'BetTracker: no hay VITE_SUPABASE_URL ni VITE_SUPABASE_ANON_KEY, así que este build abrirá la pantalla de configuración. Para publicarlo, rellena antes el .env.',
   devBad: 'BetTracker: el .env tiene un problema (la app también lo muestra):',
-  likely: 'BetTracker: el .env probablemente está mal (el build sigue; revísalo):'
+  likely: 'BetTracker: el .env probablemente está mal (el build sigue; revísalo):',
+  anthropic: 'BetTracker: el .env metería una clave de API de Anthropic en la app (un build se detiene por esto):'
 }
 
 type Lang = 'en' | 'es'
@@ -297,16 +303,41 @@ function terminalLang(): Lang {
 }
 
 /**
+ * The variables of a build's env that would put an Anthropic API key in the
+ * app, where anyone who opens it could read it and spend it: a name like
+ * VITE_…ANTHROPIC… (whatever it holds), or any value that is an Anthropic key
+ * (sk-ant-…). Their names only, never a value. The key belongs to the
+ * extract-expenses function's secrets (README, "AI reading of receipts").
+ */
+export function anthropicKeyVars(env: Record<string, unknown>): string[] {
+  return Object.entries(env)
+    .filter(([name, value]) => /^VITE_.*ANTHROPIC/i.test(name) || (typeof value === 'string' && value.trim().startsWith('sk-ant-')))
+    .map(([name]) => name)
+    .sort()
+}
+
+/**
  * The Vite plugin. A build stops on a problem, so a broken or unsafe .env
  * never ends up in dist/; `npm run dev` and `preview` only warn, and the app
- * shows the problem on its setup screen. The demo brings its own backend and
- * is not checked.
+ * shows the problem on its setup screen. The demo brings its own backend, so
+ * only an Anthropic key in it is checked (that one is never right anywhere).
  */
 export function supabaseEnvCheck(lang: Lang = terminalLang()): Plugin {
   const text = lang === 'es' ? buildEs : buildEn
   return {
     name: 'bettracker-supabase-env',
     configResolved(config) {
+      const leaks = anthropicKeyVars(config.env)
+      if (leaks.length > 0) {
+        const lines = leaks.map((name) => `  • ${name}: ${envStrings[lang]['env.anthropic-key']}`)
+        if (config.command !== 'build') config.logger.warn([text.anthropic, ...lines].join('\n'))
+        else {
+          const err = new Error([text.bad, ...lines, text.again].join('\n'))
+          // Vite prints the stack; the message is all there is to say.
+          err.stack = err.message
+          throw err
+        }
+      }
       if (config.mode === 'demo') return
       const check = checkSupabaseEnv(config.env.VITE_SUPABASE_URL, config.env.VITE_SUPABASE_ANON_KEY)
       const build = config.command === 'build'

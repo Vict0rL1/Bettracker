@@ -1,3 +1,16 @@
+import type * as Extraction from '../../../shared/expenseExtraction'
+
+/**
+ * The part of the AI contract (src/shared/expenseExtraction.ts) the fake
+ * server answers with, as the page holds it in `window.__expenseExtraction`.
+ * `installFakeSupabase` is sent to the page as source text, so it can't import
+ * the module itself: whoever installs it puts the module in the page first
+ * (demo/start.ts imports it; the e2e harness compiles it into an init script;
+ * the unit tests set it). So the fake checks a scan request exactly as the Edge
+ * Function does, and the two can't drift.
+ */
+export type ExtractionContract = Pick<typeof Extraction, 'parseExtractRequest' | 'failBody' | 'EXTRACT_STATUS'>
+
 export interface FakeSupabaseConfig {
   /** Where the fake server keeps its state in localStorage: 'e2e:' for the tests, 'demo:' for the demo. */
   prefix: string
@@ -81,6 +94,30 @@ export interface FakeSupabaseConfig {
  *                    lands, and the app hears a failed fetch.
  * A row written without `updated_at` gets the time it was answered, as the
  * server's now() would. Answers carry the HTTP status PostgREST would give.
+ *
+ * The AI reading of receipts (`functions.invoke('extract-expenses')`), never a
+ * network call: the request is checked as the Edge Function checks it
+ * (`parseExtractRequest`: 400, 413 or 415 with its code), then answered with
+ * two canned rows (today's coffee on the first card sent, yesterday's
+ * groceries), or as these say:
+ *  - `e2e:ai-rows`   JSON: an array is the rows; an object is merged into
+ *                    the answer (`kind`, `currency`, `warnings`, …);
+ *  - `e2e:ai-fail`   a code (not JSON): `offline`/`network` (a failed
+ *                    fetch), `not_deployed` (the platform's 404), `relay`, or
+ *                    any of the function's codes, with its HTTP status;
+ *  - `e2e:ai-hold`   set: the answer waits until it is cleared, or until the
+ *                    call is aborted (then a failed fetch, as functions-js
+ *                    gives);
+ *  - `e2e:ai-ignore-abort`  set: a held call keeps waiting after an abort,
+ *                    then answers (a late answer the app must ignore);
+ *  - `e2e:ai-calls`  calls that got past the hold (also `…@<window>`);
+ *  - `e2e:ai-answered`  answers with rows;
+ *  - `e2e:ai-last`   what the last call sent: the date, language, currency,
+ *                    number of cards, media type, size and the first 32
+ *                    base64 characters (never the image).
+ * Calls honour `down`, `latency` and the session, never the write flags
+ * (`fail`, `writes-left`, `lose-answers`, `hold`), and are no writes. The
+ * demo's answer without flags is marked `sample: true`.
  *
  * `window.__supabaseMock.__endSession()` ends the session the way a sign-out
  * on another device does once this device's token runs out: getSession
@@ -430,6 +467,91 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     return Promise.resolve({ data: { session, user: session.user }, error: null })
   }
 
+  // The AI reading (see the comment at the top). Self-contained, like the rest: the contract comes from the page.
+  const httpError = (status: number, body: unknown) => ({
+    data: null,
+    error: {
+      name: 'FunctionsHttpError',
+      message: 'Edge Function returned a non-2xx status code',
+      context: new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+    }
+  })
+  const fetchError = (why: unknown) => ({ data: null, error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function', context: why } })
+  const isoPlus = (date: string, days: number): string => {
+    const [y, m, d] = date.split('-').map(Number)
+    return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+  }
+  const localToday = (): string => {
+    const t = new Date()
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+  }
+  interface InvokeOptions {
+    body?: unknown
+    signal?: AbortSignal
+  }
+  function invoke(name: string, opts?: InvokeOptions) {
+    const aborted = (): boolean => opts?.signal?.aborted === true
+    return new Promise<void>((r) => setTimeout(r, latency()))
+      .then(
+        () =>
+          new Promise<void>((r) => {
+            // ai-ignore-abort: keep holding (and then answer) even after the caller aborted, to prove a late answer adds nothing.
+            const wait = (): void => void (flag('ai-hold') && (flag('ai-ignore-abort') || !aborted()) ? setTimeout(wait, 20) : r())
+            wait()
+          })
+      )
+      .then(() => {
+        if (aborted() && !flag('ai-ignore-abort')) return fetchError(new DOMException('Aborted', 'AbortError'))
+        if (down()) return fetchError(new TypeError('Failed to fetch'))
+        if (!current()) return httpError(401, { ok: false, code: 'unauthorized', message: 'No session' })
+        if (name !== 'extract-expenses') return httpError(404, { code: 'NOT_FOUND', message: 'Requested function was not found' })
+        const contract = (window as unknown as { __expenseExtraction?: ExtractionContract }).__expenseExtraction
+        if (!contract) return httpError(500, { ok: false, code: 'internal', message: 'fake Supabase: the page has no window.__expenseExtraction' })
+        count('ai-calls')
+        const b = (typeof opts?.body === 'object' && opts.body !== null ? opts.body : {}) as Record<string, unknown>
+        const image = (typeof b.image === 'object' && b.image !== null ? b.image : {}) as Record<string, unknown>
+        const data = String(image.data ?? '')
+        // `head`: the first 32 base64 chars only, so a test can prove no other storage value holds the image. Never the image.
+        write('ai-last', {
+          today: b.today,
+          lang: b.lang,
+          currency: b.currency,
+          cards: Array.isArray(b.cards) ? b.cards.length : 0,
+          mediaType: image.mediaType,
+          chars: data.length,
+          head: data.slice(0, 32)
+        })
+        const checked = contract.parseExtractRequest(JSON.stringify(b))
+        if (!checked.ok) return httpError(contract.EXTRACT_STATUS[checked.code], contract.failBody(checked.code))
+        const fail = localStorage.getItem(key('ai-fail'))
+        if (fail === 'offline' || fail === 'network') return fetchError(new TypeError('Failed to fetch'))
+        if (fail === 'not_deployed') return httpError(404, { code: 'NOT_FOUND', message: 'Requested function was not found' })
+        if (fail === 'relay') {
+          return { data: null, error: { name: 'FunctionsRelayError', message: 'Relay Error invoking the Edge Function', context: new Response(null, { status: 502 }) } }
+        }
+        if (fail) {
+          const status = (contract.EXTRACT_STATUS as Record<string, number | undefined>)[fail] ?? 500
+          return httpError(status, { ok: false, code: fail, message: 'fake', ...(fail === 'rate_limited' ? { retryAfter: 2 } : {}) })
+        }
+        const req = checked.value
+        const today = typeof req.today === 'string' ? req.today : localToday()
+        const card = req.cards[0]
+        const sample = [
+          { date: today, amount: 4.5, merchant: 'Café Central', category: 'coffee', cardLast4: card?.last4 || null, cardHint: card?.name ?? null, note: '', pending: false, confidence: 'high' },
+          { date: isoPlus(today, -1), amount: 23.18, merchant: 'Supermercado La Plaza', category: 'groceries', cardLast4: null, cardHint: null, note: '', pending: false, confidence: 'medium' }
+        ]
+        const custom = read<unknown>('ai-rows', null)
+        const base = { ok: true, kind: 'wallet', currency: req.currency, expenses: sample as unknown[], warnings: [] as string[] }
+        const answer = Array.isArray(custom)
+          ? { ...base, expenses: custom }
+          : custom && typeof custom === 'object'
+            ? { ...base, ...(custom as Record<string, unknown>) }
+            : { ...base, ...(cfg.demo ? { sample: true } : {}) }
+        count('ai-answered')
+        return { data: answer, error: null }
+      })
+  }
+
   ;(window as unknown as { __supabaseMock: unknown }).__supabaseMock = {
     auth: {
       getSession: () => Promise.resolve({ data: { session: current() }, error: null }),
@@ -461,6 +583,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       }
     },
     from,
+    functions: { invoke },
     /** This window's name in the per-window counters (`e2e:reads-held@<win>`). */
     __win: win,
     __endSession() {

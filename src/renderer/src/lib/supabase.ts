@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { checkSupabaseEnv, type EnvProblem } from '../../../shared/supabaseEnv'
-import { timeoutFetch } from './timeoutFetch'
+import { FUNCTION_TIMEOUT_MS, REQUEST_TIMEOUT_MS, requestTimeoutFor, timeoutFetch } from './timeoutFetch'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -12,6 +12,13 @@ interface TestGlobal {
 // Test/demo seam: the e2e harness and `npm run demo` install a fake client on
 // window before the app boots, so the app runs without a live backend.
 const injected = (globalThis as TestGlobal).__supabaseMock
+
+/**
+ * True when the backend is that fake (the demo, the e2e suite). Only then is
+ * an AI reading's `sample` flag honoured: the demo's canned answer says so,
+ * and nothing a real function or model sends can turn it on.
+ */
+export const isFakeBackend = Boolean(injected)
 
 // What this copy was built with, checked (the build checks it too, and stops
 // on a problem; `npm run dev` only warns, so the setup screen says it here).
@@ -50,9 +57,6 @@ export function hasStoredSession(): boolean {
 export const openedForRecovery =
   typeof window !== 'undefined' && /(?:^|[#&?])type=recovery(?:&|$)/.test(`${window.location.hash}&${window.location.search.slice(1)}`)
 
-/** How long a request may go without an answer before it counts as unreachable. */
-const REQUEST_TIMEOUT_MS = 30_000
-
 function makeClient(): SupabaseClient {
   if (injected) return injected
 
@@ -66,6 +70,8 @@ function makeClient(): SupabaseClient {
     })
   }
 
+  const rest = timeoutFetch(REQUEST_TIMEOUT_MS)
+  const slow = timeoutFetch(FUNCTION_TIMEOUT_MS)
   // As checked: a stray newline at the end of the key would otherwise reach
   // the realtime connection's URL and break live sync.
   return createClient((url as string).trim(), (anonKey as string).trim(), {
@@ -74,8 +80,9 @@ function makeClient(): SupabaseClient {
       autoRefreshToken: true,
       storageKey: AUTH_STORAGE_KEY
     },
-    // A request with no answer after this long is given up (see timeoutFetch).
-    global: { fetch: timeoutFetch(REQUEST_TIMEOUT_MS) }
+    // A request with no answer after this long is given up (see timeoutFetch):
+    // 30 s for the database, 2 minutes for an Edge Function (the AI reading).
+    global: { fetch: (input, init) => (requestTimeoutFor(input) === FUNCTION_TIMEOUT_MS ? slow : rest)(input, init) }
   })
 }
 

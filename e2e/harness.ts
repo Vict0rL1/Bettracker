@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { expect, type Page, type BrowserContext } from '@playwright/test'
 import { installFakeSupabase } from '../src/renderer/src/demo/fakeSupabase'
 import { budgetId } from '../src/renderer/src/lib/stableId'
@@ -129,10 +131,64 @@ window.__supabaseMock = {
     startAutoRefresh: () => {}, stopAutoRefresh: () => {}, signOut: () => Promise.resolve({})
   },
   from: () => { throw new Error('e2e harness: no network') },
+  functions: {
+    invoke: () => Promise.resolve({ data: null, error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function', context: {} } })
+  },
   channel: () => ({ on() { return this }, subscribe() { return this } }),
   removeChannel: () => {}
 }
 `
+
+let contractScript: string | null = null
+/**
+ * src/shared/expenseExtraction.ts as a page script that sets
+ * `window.__expenseExtraction`, which the fake server checks scans with (see
+ * ExtractionContract in demo/fakeSupabase.ts: the fake is sent to the page as
+ * source text, so it can't import the module). The module has no imports, so
+ * stripping its types is all it takes; done once per worker.
+ */
+async function expenseContractScript(): Promise<string> {
+  if (contractScript !== null) return contractScript
+  const ts = await import('typescript')
+  const source = fs.readFileSync(path.join(__dirname, '../src/shared/expenseExtraction.ts'), 'utf8')
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
+  contractScript = `(function () {\nvar exports = {};\n${outputText}\nwindow.__expenseExtraction = exports;\n})();`
+  return contractScript
+}
+
+/** A 1×1 PNG: the smallest image a scan takes. */
+export const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+
+/** TINY_PNG as `setInputFiles` takes it. */
+export const scanFile = { name: 'receipt.png', mimeType: 'image/png', buffer: TINY_PNG }
+
+/**
+ * A 1200×1600 receipt-like PNG (a gradient and lines of text) drawn in the
+ * page, as `setInputFiles` takes it: big enough that the scan's JPEG is
+ * tens of kilobytes, so a test can tell the image from anything else stored.
+ */
+export async function bigPng(page: Page): Promise<{ name: string; mimeType: string; buffer: Buffer }> {
+  const base64 = await page.evaluate(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1200
+    canvas.height = 1600
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
+    const paper = ctx.createLinearGradient(0, 0, 1200, 1600)
+    paper.addColorStop(0, '#fbf8f1')
+    paper.addColorStop(1, '#cfc8b8')
+    ctx.fillStyle = paper
+    ctx.fillRect(0, 0, 1200, 1600)
+    ctx.fillStyle = '#1b1b1b'
+    ctx.font = 'bold 64px monospace'
+    ctx.fillText('SUPERMERCADO LA PLAZA', 80, 140)
+    ctx.font = '40px monospace'
+    for (let i = 0; i < 28; i++) ctx.fillText(`ITEM ${String(i + 1).padStart(2, '0')} ............ ${(i * 1.37 + 0.59).toFixed(2)}`, 80, 240 + i * 44)
+    ctx.font = 'bold 56px monospace'
+    ctx.fillText('TOTAL             23.18', 80, 1520)
+    return canvas.toDataURL('image/png').split(',')[1]
+  })
+  return { name: 'receipt.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') }
+}
 
 /** A seed bet as the database row it would be (snake_case; with no status the app derives it). */
 const toRow = (e: SeedEntry) => ({
@@ -190,6 +246,13 @@ export interface BootOptions {
   outbox?: unknown[]
   /** With the 'live' backend: false for a database without migration 007 (no tombstones), and so without 008. */
   migrated007?: boolean
+  /**
+   * With a backend: the fake AI reading (demo/fakeSupabase.ts). `rows`: its
+   * answer's rows (an array) or fields (an object); `fail`: a code it fails
+   * with; `hold`: answers wait until `e2e:ai-hold` is cleared; `ignoreAbort`:
+   * a held call still answers after it is cancelled.
+   */
+  ai?: { rows?: unknown; fail?: string; hold?: boolean; ignoreAbort?: boolean }
 }
 
 /** Cached settings (camelCase, as the app stores them) as the user_settings row a migrated server holds (the currency column with 008). */
@@ -277,11 +340,15 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
           moveRows: (opts.moves ?? []).map(toMoveRow),
           expenseRows: (opts.expenses ?? []).map(toExpenseRow),
           cardRows: (opts.cards ?? []).map(toCardRow),
-          budgetRows: (opts.budgets ?? []).map(toBudgetRow)
+          budgetRows: (opts.budgets ?? []).map(toBudgetRow),
+          ai: opts.ai ?? null
         }
   // With a backend, the same fake server `npm run demo` uses (its state under `e2e:`, see
   // demo/fakeSupabase.ts); without one, a client that is signed out and has no network.
-  if (server) await context.addInitScript(installFakeSupabase, { prefix: 'e2e:', user: USER, demo: false })
+  if (server) {
+    await context.addInitScript({ content: await expenseContractScript() })
+    await context.addInitScript(installFakeSupabase, { prefix: 'e2e:', user: USER, demo: false })
+  }
   await context.addInitScript(
     ({ mock, user, entries, server, theme, settings, moves, expenses, cards, budgets, view, outbox }) => {
       // eslint-disable-next-line no-eval
@@ -309,6 +376,12 @@ export async function install(context: BrowserContext, opts: BootOptions = {}): 
         if (server.migrated008) localStorage.setItem('e2e:migrated-008', '1')
         localStorage.setItem('e2e:latency', String(server.latencyMs))
         if (server.settingsRow) localStorage.setItem('e2e:settings', JSON.stringify(server.settingsRow))
+        if (server.ai) {
+          if (server.ai.rows !== undefined) localStorage.setItem('e2e:ai-rows', JSON.stringify(server.ai.rows))
+          if (server.ai.fail) localStorage.setItem('e2e:ai-fail', server.ai.fail)
+          if (server.ai.hold) localStorage.setItem('e2e:ai-hold', '1')
+          if (server.ai.ignoreAbort) localStorage.setItem('e2e:ai-ignore-abort', '1')
+        }
       }
       if (outbox) localStorage.setItem(`bettracker:outbox:${user.id}`, JSON.stringify(outbox))
       // No backend: a device whose session ran out and can't be renewed

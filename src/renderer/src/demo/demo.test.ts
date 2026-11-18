@@ -17,7 +17,8 @@ describe('resetDemo', () => {
       'demo:expense-budgets',
       'demo:migrated-008',
       'demo:ai-calls',
-      'demo:ai-answered'
+      'demo:ai-answered',
+      'demo:ai-last'
     ]
     const rowKeys = ['expenses', 'expense-cards', 'expense-budgets'].flatMap((n) => [
       `bettracker:${n}:${uid}`,

@@ -6,7 +6,8 @@ import { InputError, isValidDate, normalizeInput, storableOdds } from './validat
 const COLUMNS = ['date', 'status', 'stake', 'odds', 'closing_odds', 'amount', 'sport', 'book', 'bet_type', 'note'] as const
 type Column = (typeof COLUMNS)[number]
 
-function escapeField(value: string): string {
+/** A CSV cell: quoted (inner quotes doubled) when it holds a comma, a quote or a line break. */
+export function escapeField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 

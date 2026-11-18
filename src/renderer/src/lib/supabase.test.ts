@@ -41,3 +41,46 @@ describe('lib/supabase', () => {
     expect(m.envProblems).toEqual([])
   })
 })
+
+describe('lib/supabase: how long a request may take', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  /** A network that never answers: each request fails only when its signal aborts. */
+  function silentNetwork() {
+    const aborted: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+            init?.signal?.addEventListener('abort', () => {
+              aborted.push(new URL(url).pathname)
+              reject(new DOMException('Aborted', 'AbortError'))
+            })
+          })
+      )
+    )
+    return aborted
+  }
+
+  it('gives a database request 30 s and an Edge Function call 2 minutes, through the one client', async () => {
+    const m = await load('https://abcdefghijklmnopqrst.supabase.co', PUBLISHABLE)
+    expect(m.isFakeBackend).toBe(false)
+    vi.useFakeTimers()
+    const aborted = silentNetwork()
+    const read = Promise.resolve(m.supabase.from('expenses').select('*'))
+    const scan = m.supabase.functions.invoke('extract-expenses', { body: { v: 1 } })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(aborted).toEqual(['/rest/v1/expenses'])
+    await vi.advanceTimersByTimeAsync(89_000)
+    expect(aborted).toEqual(['/rest/v1/expenses'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(aborted).toEqual(['/rest/v1/expenses', '/functions/v1/extract-expenses'])
+    expect((await read).error).not.toBeNull()
+    expect((await scan).error).toMatchObject({ name: 'FunctionsFetchError' })
+  })
+})

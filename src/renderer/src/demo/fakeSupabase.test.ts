@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as extraction from '../../../shared/expenseExtraction'
 import { PAGE_SIZE, readAll } from '../data/readAll'
-import { installFakeSupabase } from './fakeSupabase'
+import { installFakeSupabase, type ExtractionContract } from './fakeSupabase'
 
 interface Result {
   data: unknown
@@ -28,7 +29,13 @@ interface Fake {
     signOut(): Promise<unknown>
   }
   from(table: string): Chain
+  functions: { invoke(name: string, opts?: { body?: unknown; signal?: AbortSignal }): Promise<Invoked> }
   __endSession(): void
+}
+/** What functions.invoke answers, as functions-js does: data, or an error with its name and context. */
+interface Invoked {
+  data: unknown
+  error: { name: string; message: string; context: unknown } | null
 }
 
 const USER = { id: 'u1', email: 'demo@example.com' }
@@ -460,5 +467,182 @@ describe('fake Supabase: the expenses, cards and budgets of migration 008', () =
     expect((await fake.from('expenses').insert({ id: 'e', updated_at: at })).error?.message).toBe('TypeError: Failed to fetch')
     expect(all('e2e:', 'expenses')).toMatchObject([{ id: 'e' }])
     expect(localStorage.getItem('e2e:rows')).toBeNull()
+  })
+})
+
+// The AI reading (functions.invoke): never the network, and checked as the Edge Function checks a request.
+describe('fake Supabase: the AI reading of receipts', () => {
+  const CONTRACT: ExtractionContract = { parseExtractRequest: extraction.parseExtractRequest, failBody: extraction.failBody, EXTRACT_STATUS: extraction.EXTRACT_STATUS }
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...new Array(68).fill(7)]).toString('base64')
+  const body = (over: Record<string, unknown> = {}) => ({
+    v: 1,
+    image: { mediaType: 'image/jpeg', data: JPEG },
+    today: '2026-11-01',
+    timeZone: 'Europe/Madrid',
+    lang: 'es',
+    currency: 'EUR',
+    cards: [{ name: 'Visa Oro', last4: '1234', kind: 'credit' }],
+    ...over
+  })
+  const contextOf = (out: Invoked) => out.error?.context as Response
+  const counter = (name: string) => Number(localStorage.getItem(name) || 0)
+
+  beforeEach(() => {
+    ;(globalThis as unknown as { __expenseExtraction?: ExtractionContract }).__expenseExtraction = CONTRACT
+  })
+  afterEach(() => {
+    delete (globalThis as unknown as { __expenseExtraction?: ExtractionContract }).__expenseExtraction
+  })
+
+  it('the demo answers a sample: today’s coffee on the first card sent, yesterday’s groceries (even across a month)', async () => {
+    const out = await install('demo:', true).functions.invoke('extract-expenses', { body: body() })
+    expect(out).toEqual({
+      data: {
+        ok: true,
+        kind: 'wallet',
+        currency: 'EUR',
+        warnings: [],
+        sample: true,
+        expenses: [
+          { date: '2026-11-01', amount: 4.5, merchant: 'Café Central', category: 'coffee', cardLast4: '1234', cardHint: 'Visa Oro', note: '', pending: false, confidence: 'high' },
+          { date: '2026-10-31', amount: 23.18, merchant: 'Supermercado La Plaza', category: 'groceries', cardLast4: null, cardHint: null, note: '', pending: false, confidence: 'medium' }
+        ]
+      },
+      error: null
+    })
+    // The app reads it back as a valid answer.
+    expect(extraction.normalizeExtraction(out.data, { today: '2026-11-01', lang: 'es', allowSample: true })?.expenses).toHaveLength(2)
+  })
+
+  it('the e2e server: no sample flag, and no card when none was sent', async () => {
+    const out = await install('e2e:', false).functions.invoke('extract-expenses', { body: body({ cards: [] }) })
+    expect(out.data).not.toHaveProperty('sample')
+    expect((out.data as { expenses: { cardLast4: unknown; cardHint: unknown }[] }).expenses[0]).toMatchObject({ cardLast4: null, cardHint: null })
+  })
+
+  it('ai-rows: an array is the rows, an object is merged into the answer', async () => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:ai-rows', JSON.stringify([{ amount: -12 }]))
+    expect((await fake.functions.invoke('extract-expenses', { body: body() })).data).toMatchObject({ ok: true, kind: 'wallet', expenses: [{ amount: -12 }] })
+    localStorage.setItem('e2e:ai-rows', JSON.stringify({ kind: 'receipt', currency: 'MXN', warnings: ['cut off'] }))
+    expect((await fake.functions.invoke('extract-expenses', { body: body() })).data).toMatchObject({ kind: 'receipt', currency: 'MXN', warnings: ['cut off'], expenses: [{}, {}] })
+  })
+
+  it.each([
+    ['limit_reached', 402],
+    ['refused', 422],
+    ['not_allowed', 403],
+    ['not_configured', 503],
+    ['too_long', 422]
+  ])('ai-fail %s: that HTTP status, with a body the app can read', async (code, status) => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:ai-fail', code)
+    const out = await fake.functions.invoke('extract-expenses', { body: body() })
+    expect(out.error?.name).toBe('FunctionsHttpError')
+    expect(contextOf(out).status).toBe(status)
+    expect(await contextOf(out).json()).toMatchObject({ ok: false, code })
+  })
+
+  it('ai-fail rate_limited carries a wait; not_deployed, relay and network are the platform’s', async () => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:ai-fail', 'rate_limited')
+    expect(await contextOf(await fake.functions.invoke('extract-expenses', { body: body() })).json()).toMatchObject({ code: 'rate_limited', retryAfter: 2 })
+    localStorage.setItem('e2e:ai-fail', 'not_deployed')
+    const missing = await fake.functions.invoke('extract-expenses', { body: body() })
+    expect([missing.error?.name, contextOf(missing).status]).toEqual(['FunctionsHttpError', 404])
+    expect(await contextOf(missing).json()).toEqual({ code: 'NOT_FOUND', message: 'Requested function was not found' })
+    localStorage.setItem('e2e:ai-fail', 'relay')
+    expect((await fake.functions.invoke('extract-expenses', { body: body() })).error?.name).toBe('FunctionsRelayError')
+    localStorage.setItem('e2e:ai-fail', 'network')
+    const net = await fake.functions.invoke('extract-expenses', { body: body() })
+    expect([net.error?.name, (net.error?.context as Error).name]).toEqual(['FunctionsFetchError', 'TypeError'])
+  })
+
+  it.each<[string, Record<string, unknown>, number, string]>([
+    ['a data: prefix', { image: { mediaType: 'image/jpeg', data: `data:image/jpeg;base64,${JPEG}` } }, 400, 'bad_request'],
+    ['no today', { today: 'yesterday' }, 400, 'bad_request'],
+    ['PNG said to be JPEG', { image: { mediaType: 'image/jpeg', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, ...new Array(68).fill(7)]).toString('base64') } }, 415, 'unsupported'],
+    ['a GIF', { image: { mediaType: 'image/gif', data: JPEG } }, 415, 'unsupported'],
+    ['too large', { image: { mediaType: 'image/jpeg', data: JPEG + 'A'.repeat(1_600_000) } }, 413, 'too_large']
+  ])('refuses a request the function would refuse: %s', async (_name, over, status, code) => {
+    const fake = install('e2e:', false)
+    const out = await fake.functions.invoke('extract-expenses', { body: body(over) })
+    expect(contextOf(out).status).toBe(status)
+    expect(await contextOf(out).json()).toMatchObject({ ok: false, code })
+    expect(counter('e2e:ai-answered')).toBe(0)
+  })
+
+  it('down → a failed fetch; signed out → 401; another function → 404', async () => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:down', '1')
+    expect((await fake.functions.invoke('extract-expenses', { body: body() })).error?.name).toBe('FunctionsFetchError')
+    localStorage.removeItem('e2e:down')
+    expect(contextOf(await fake.functions.invoke('other', { body: body() })).status).toBe(404)
+    fake.__endSession()
+    const out = await fake.functions.invoke('extract-expenses', { body: body() })
+    expect(contextOf(out).status).toBe(401)
+    expect(await contextOf(out).json()).toMatchObject({ code: 'unauthorized' })
+    expect(counter('e2e:ai-calls')).toBe(0)
+  })
+
+  it('a page without the contract fails loudly instead of answering unchecked', async () => {
+    delete (globalThis as unknown as { __expenseExtraction?: ExtractionContract }).__expenseExtraction
+    const out = await install('e2e:', false).functions.invoke('extract-expenses', { body: body() })
+    expect(contextOf(out).status).toBe(500)
+  })
+
+  it('ai-hold: the answer waits until released; an abort meanwhile is a failed fetch (AbortError)', async () => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:ai-hold', '1')
+    let settled = false
+    const held = fake.functions.invoke('extract-expenses', { body: body() }).then((o) => ((settled = true), o))
+    await new Promise((r) => setTimeout(r, 60))
+    expect([settled, counter('e2e:ai-calls')]).toEqual([false, 0])
+    localStorage.removeItem('e2e:ai-hold')
+    expect((await held).data).toMatchObject({ ok: true })
+    expect(counter('e2e:ai-calls')).toBe(1)
+
+    localStorage.setItem('e2e:ai-hold', '1')
+    const ctl = new AbortController()
+    const cancelled = fake.functions.invoke('extract-expenses', { body: body(), signal: ctl.signal })
+    await new Promise((r) => setTimeout(r, 30))
+    ctl.abort()
+    const out = await cancelled
+    expect([out.error?.name, (out.error?.context as DOMException).name]).toEqual(['FunctionsFetchError', 'AbortError'])
+    expect([counter('e2e:ai-calls'), counter('e2e:ai-answered')]).toEqual([1, 1])
+  })
+
+  it('ai-ignore-abort: a held call answers after the abort, once released (the late answer the app must drop)', async () => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:ai-hold', '1')
+    localStorage.setItem('e2e:ai-ignore-abort', '1')
+    const ctl = new AbortController()
+    const late = fake.functions.invoke('extract-expenses', { body: body(), signal: ctl.signal })
+    ctl.abort()
+    await new Promise((r) => setTimeout(r, 60))
+    expect(counter('e2e:ai-answered')).toBe(0)
+    localStorage.removeItem('e2e:ai-hold')
+    expect((await late).data).toMatchObject({ ok: true })
+    expect(counter('e2e:ai-answered')).toBe(1)
+  })
+
+  it('counts calls, notes what was sent but never the image, and is no write', async () => {
+    const fake = install('e2e:', false)
+    localStorage.setItem('e2e:fail', JSON.stringify({ status: 503, message: 'busy', times: 5 }))
+    localStorage.setItem('e2e:writes-left', '0')
+    localStorage.setItem('e2e:hold', '1')
+    localStorage.setItem('e2e:lose-answers', '3')
+    await fake.functions.invoke('extract-expenses', { body: body() })
+    await fake.functions.invoke('extract-expenses', { body: body() })
+    expect([counter('e2e:ai-calls'), counter('e2e:ai-answered')]).toEqual([2, 2])
+    const last = JSON.parse(localStorage.getItem('e2e:ai-last') ?? 'null')
+    expect(last).toEqual({ today: '2026-11-01', lang: 'es', currency: 'EUR', cards: 1, mediaType: 'image/jpeg', chars: JPEG.length, head: JPEG.slice(0, 32) })
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i) as string
+      expect(localStorage.getItem(k), k).not.toContain(JPEG)
+    }
+    expect([localStorage.getItem('e2e:writes'), localStorage.getItem('e2e:writes-started')]).toEqual([null, null])
+    expect(JSON.parse(localStorage.getItem('e2e:fail') ?? 'null').times).toBe(5)
+    expect(localStorage.getItem('e2e:lose-answers')).toBe('3')
   })
 })
