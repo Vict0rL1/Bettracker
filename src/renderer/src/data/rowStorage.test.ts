@@ -30,8 +30,8 @@ const at = (n: number): string => `2026-11-0${n}T10:00:00.000Z`
 const FIXTURES: Fixture[] = [
   {
     spec: EXPENSES_SPEC as unknown as RowStorageSpec<RowBase, unknown>,
-    row: (id, createdAt, n = 1) => ({ id, date: '2026-11-05', amount: n, cardId: null, merchant: '', category: 'coffee', note: '', source: 'manual', createdAt, updatedAt: createdAt }),
-    input: (n) => ({ date: '2026-11-10', amount: n, cardId: null, merchant: 'Shop', category: 'food', note: '', source: 'manual' }),
+    row: (id, createdAt, n = 1) => ({ id, date: '2026-11-05', amount: n, originalAmount: null, originalCurrency: null, fxRate: null, cardId: null, merchant: '', category: 'coffee', note: '', source: 'manual', createdAt, updatedAt: createdAt }),
+    input: (n) => ({ date: '2026-11-10', amount: n, originalAmount: null, originalCurrency: null, fxRate: null, cardId: null, merchant: 'Shop', category: 'food', note: '', source: 'manual' }),
     poison: [null, 'x', { date: '2026-11-05', amount: 1 }, { id: 'p', date: '2026-02-30', amount: 1 }, { id: 'p', date: '2026-11-05', amount: 0 }, { id: 'p', date: '2026-11-05', amount: 'x' }]
   },
   {
@@ -180,9 +180,45 @@ describe.each(FIXTURES.map((f) => [f.spec.name, f] as const))('row storage: %s',
 
 describe('expenses order', () => {
   it('goes by date first, then by when each was made, then id', () => {
-    const e = (id: string, date: string, createdAt: string): Expense => ({ id, date, amount: 1, cardId: null, merchant: '', category: 'other', note: '', source: 'manual', createdAt, updatedAt: createdAt })
+    const e = (id: string, date: string, createdAt: string): Expense => ({ id, date, amount: 1, originalAmount: null, originalCurrency: null, fxRate: null, cardId: null, merchant: '', category: 'other', note: '', source: 'manual', createdAt, updatedAt: createdAt })
     const rows = [e('a', '2026-11-03', at(1)), e('b', '2026-11-01', at(5)), e('c', '2026-11-01', at(2)), e('d', '2026-11-01', at(2))]
     expect(sortRows(EXPENSES_SPEC, rows).map((r) => r.id)).toEqual(['c', 'd', 'b', 'a'])
+  })
+})
+
+describe('expenses cache: paid in another currency (migration 009)', () => {
+  const cached = (over: Record<string, unknown>) => ({ id: 'e1', date: '2026-11-13', amount: 16.84, cardId: null, merchant: 'Apple.com', category: 'subscriptions', note: '', source: 'manual', createdAt: at(1), updatedAt: at(1), ...over })
+  const load = (rows: unknown[]): Expense[] | null => {
+    localStorage.setItem(rowKeys('u1', 'expenses').cache, JSON.stringify(rows))
+    return loadRowCache('u1', EXPENSES_SPEC)
+  }
+
+  it('keeps what was paid, its currency and the rate', () => {
+    expect(load([cached({ originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })])).toEqual([expect.objectContaining({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })])
+  })
+
+  it('reads a row cached before the app knew of them as an expense in the user’s own currency', () => {
+    expect(load([cached({})])).toEqual([expect.objectContaining({ amount: 16.84, originalAmount: null, originalCurrency: null, fxRate: null })])
+  })
+
+  it('never keeps half an original, and never drops the expense for it', () => {
+    const rows = load([
+      cached({ id: 'a', originalAmount: 12, originalCurrency: 'USD' }),
+      cached({ id: 'b', originalAmount: 12, originalCurrency: 'usd', fxRate: 1.4 }),
+      cached({ id: 'c', originalAmount: 0, originalCurrency: 'USD', fxRate: 1.4 }),
+      cached({ id: 'd', originalAmount: 12, originalCurrency: 'USD', fxRate: -1 }),
+      cached({ id: 'e', originalAmount: 'twelve', originalCurrency: 'USD', fxRate: 1.4 })
+    ])
+    expect(rows?.map((r) => r.id)).toEqual(['a', 'b', 'c', 'd', 'e'])
+    for (const r of rows ?? []) expect(r).toMatchObject({ amount: 16.84, originalAmount: null, originalCurrency: null, fxRate: null })
+  })
+
+  it('a queued add shows with its original before it syncs, and an edit back to the user’s currency clears it', () => {
+    const add: PendingOp<ExpenseInput> = { opId: 'o1', kind: 'add', id: 'e1', input: { date: '2026-11-13', amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 }, queuedAt: at(2) }
+    const shown = applyRowOutbox(EXPENSES_SPEC, [], [add])
+    expect(shown).toEqual([expect.objectContaining({ id: 'e1', amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })])
+    const edit: PendingOp<ExpenseInput> = { opId: 'o2', kind: 'update', id: 'e1', input: { date: '2026-11-13', amount: 16.84 }, editedAt: at(3) }
+    expect(applyRowOutbox(EXPENSES_SPEC, [], [add, edit])).toEqual([expect.objectContaining({ id: 'e1', originalAmount: null, originalCurrency: null, fxRate: null })])
   })
 })
 

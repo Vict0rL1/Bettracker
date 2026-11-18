@@ -3,6 +3,7 @@ import {
   InputError,
   MAX_AMOUNT,
   MAX_CARD_NAME_LENGTH,
+  MAX_FX_RATE,
   MAX_MERCHANT_LENGTH,
   MAX_NOTE_LENGTH,
   MAX_ODDS,
@@ -15,6 +16,7 @@ import {
   normalizeMove,
   parseMoneyBox,
   roundCents,
+  roundRate,
   storableOdds,
   suggestedAmount,
   unitSizePatch
@@ -354,7 +356,85 @@ describe('normalizeExpense — an expense before it is queued', () => {
   const CARD = '6F9619FF-8B86-D011-B42D-00CF4FC964FF'
 
   it('fills the defaults: no card, no merchant, other, no note, typed by hand', () => {
-    expect(normalizeExpense(base)).toEqual({ date: '2026-11-17', amount: 4.5, cardId: null, merchant: '', category: 'other', note: '', source: 'manual' })
+    expect(normalizeExpense(base)).toEqual({
+      date: '2026-11-17',
+      amount: 4.5,
+      originalAmount: null,
+      originalCurrency: null,
+      fxRate: null,
+      cardId: null,
+      merchant: '',
+      category: 'other',
+      note: '',
+      source: 'manual'
+    })
+  })
+
+  describe('paid in another currency (migration 009)', () => {
+    const usd = { ...base, amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 }
+
+    it('keeps what was paid, its currency and the rate, next to the amount in the user’s currency', () => {
+      expect(normalizeExpense(usd)).toMatchObject({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+    })
+
+    it('reads all three missing, undefined or null as an expense in the user’s own currency', () => {
+      for (const none of [{}, { originalAmount: null, originalCurrency: null, fxRate: null }, { originalAmount: undefined, originalCurrency: undefined, fxRate: undefined }]) {
+        expect(normalizeExpense({ ...base, ...none })).toMatchObject({ originalAmount: null, originalCurrency: null, fxRate: null })
+      }
+    })
+
+    it('refuses one or two of the three: all, or none', () => {
+      expect(code(() => normalizeExpense({ ...base, originalAmount: 12 }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...base, originalCurrency: 'USD' }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...base, fxRate: 1.4 }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, fxRate: null }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, originalCurrency: undefined }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: null }))).toBe('expenseOriginal')
+    })
+
+    it('rounds the original to cents, signed like the amount, never 0 and within range', () => {
+      expect(normalizeExpense({ ...usd, originalAmount: 12.345 }).originalAmount).toBe(12.35)
+      expect(normalizeExpense({ ...usd, amount: -16.84, originalAmount: -12.345 }).originalAmount).toBe(-12.35)
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: 0 }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: 0.004 }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: NaN }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: '12' as unknown as number }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: MAX_AMOUNT + 0.01 }))).toBe('amountRange')
+      expect(normalizeExpense({ ...usd, originalAmount: MAX_AMOUNT }).originalAmount).toBe(MAX_AMOUNT)
+      // A refund is a refund in both currencies.
+      expect(code(() => normalizeExpense({ ...usd, originalAmount: -12 }))).toBe('expenseOriginal')
+      expect(code(() => normalizeExpense({ ...usd, amount: -16.84 }))).toBe('expenseOriginal')
+    })
+
+    it('takes only an ISO code as stored: three capital letters', () => {
+      expect(normalizeExpense({ ...usd, originalCurrency: 'COP' }).originalCurrency).toBe('COP')
+      for (const bad of ['usd', 'US', 'US$', 'DOLLARS', ' USD', '', 840 as unknown as string]) {
+        expect(code(() => normalizeExpense({ ...usd, originalCurrency: bad })), String(bad)).toBe('expenseOriginal')
+      }
+    })
+
+    it('rounds the rate to 8 decimals: finite, more than 0 once rounded, and one the column has room for', () => {
+      expect(normalizeExpense({ ...usd, fxRate: 1.403412345678 }).fxRate).toBe(1.40341235)
+      expect(normalizeExpense({ ...usd, fxRate: 0.000341234567 }).fxRate).toBe(0.00034123)
+      expect(roundRate(0.1 + 0.2)).toBe(0.3)
+      expect(code(() => normalizeExpense({ ...usd, fxRate: 0 }))).toBe('expenseRate')
+      expect(code(() => normalizeExpense({ ...usd, fxRate: -1.4 }))).toBe('expenseRate')
+      expect(code(() => normalizeExpense({ ...usd, fxRate: 0.000000004 }))).toBe('expenseRate')
+      expect(code(() => normalizeExpense({ ...usd, fxRate: Infinity }))).toBe('expenseRate')
+      expect(code(() => normalizeExpense({ ...usd, fxRate: NaN }))).toBe('expenseRate')
+      expect(code(() => normalizeExpense({ ...usd, fxRate: '1.4' as unknown as number }))).toBe('expenseRate')
+      expect(normalizeExpense({ ...usd, fxRate: MAX_FX_RATE }).fxRate).toBe(MAX_FX_RATE)
+      expect(code(() => normalizeExpense({ ...usd, fxRate: MAX_FX_RATE + 1 }))).toBe('expenseRate')
+    })
+
+    it('does not insist the amount is original × rate: the user may type what the bank charged', () => {
+      expect(normalizeExpense({ ...usd, amount: 17.25 })).toMatchObject({ amount: 17.25, originalAmount: 12, fxRate: 1.4034 })
+    })
+
+    it('is idempotent: what it returns passes unchanged', () => {
+      const once = normalizeExpense({ ...usd, originalAmount: 12.345, fxRate: 1.403412345678 })
+      expect(normalizeExpense(once)).toEqual(once)
+    })
   })
 
   it('refuses a date that is no date', () => {

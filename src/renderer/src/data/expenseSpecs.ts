@@ -9,6 +9,7 @@ import {
   type ExpenseCardInput,
   type ExpenseInput
 } from '../../../shared/types'
+import { isCurrencyCode } from '../../../shared/types'
 import { toCategory } from '../lib/categories'
 import { isValidDate, normalizeBudget, normalizeCard, normalizeExpense } from '../lib/validate'
 import type { RowTableSpec } from './rowTable'
@@ -42,10 +43,29 @@ const byDateThenCreated = (a: Expense, b: Expense): number => {
   return byCreated(a, b)
 }
 
+type Original = Pick<Expense, 'originalAmount' | 'originalCurrency' | 'fxRate'>
+const NO_ORIGINAL: Original = { originalAmount: null, originalCurrency: null, fxRate: null }
+
+/**
+ * What an expense paid in another currency keeps of it (migration 009): the
+ * three together, or none. Read from anything (a server row's strings, a
+ * cached row from before 009, a queued input): a set that is not whole or
+ * makes no sense is no original at all, never half of one, so a row can
+ * always be shown and sent again (the amount, in the user's currency, stands
+ * on its own).
+ */
+function originalOf(amount: unknown, currency: unknown, rate: unknown): Original {
+  const originalAmount = finite(amount)
+  const fxRate = finite(rate)
+  if (originalAmount === null || originalAmount === 0 || fxRate === null || fxRate <= 0 || !isCurrencyCode(currency)) return NO_ORIGINAL
+  return { originalAmount, originalCurrency: currency, fxRate }
+}
+
 /** An expense's fields from an input (a clean one: queued inputs are normalized before they are queued). */
 const expenseFields = (input: ExpenseInput): Omit<Expense, 'id' | 'createdAt' | 'updatedAt'> => ({
   date: input.date,
   amount: input.amount,
+  ...originalOf(input.originalAmount, input.originalCurrency, input.fxRate),
   cardId: typeof input.cardId === 'string' && input.cardId !== '' ? input.cardId : null,
   merchant: input.merchant ?? '',
   category: toCategory(input.category),
@@ -76,6 +96,8 @@ export const EXPENSES_SPEC: RowTableSpec<Expense, ExpenseInput> = {
     id: text(row.id),
     date: text(row.date),
     amount: Number(row.amount),
+    // Absent before migration 009 (the keys are not in the row at all): no original.
+    ...originalOf(row.original_amount, row.original_currency, row.fx_rate),
     cardId: typeof row.card_id === 'string' ? row.card_id : null,
     merchant: text(row.merchant),
     category: toCategory(row.category),
@@ -84,12 +106,37 @@ export const EXPENSES_SPEC: RowTableSpec<Expense, ExpenseInput> = {
     createdAt: text(row.created_at),
     updatedAt: text(row.updated_at)
   }),
+  // The three columns of 009 go with every add and edit, null when the expense is in the user's own currency (so an
+  // edit back to it clears them). A database still on 008 refuses the write (PGRST204), which the queue reads as
+  // "behind": the change waits and is sent once 009 has run (data/errors.ts), as a bet waits for closing_odds.
   toColumns: (clean) => {
     const f = expenseFields(clean)
-    return { date: f.date, amount: f.amount, card_id: f.cardId, merchant: f.merchant, category: f.category, note: f.note, source: f.source }
+    return {
+      date: f.date,
+      amount: f.amount,
+      original_amount: f.originalAmount,
+      original_currency: f.originalCurrency,
+      fx_rate: f.fxRate,
+      card_id: f.cardId,
+      merchant: f.merchant,
+      category: f.category,
+      note: f.note,
+      source: f.source
+    }
   },
   normalize: normalizeExpense,
-  toInput: (e) => ({ date: e.date, amount: e.amount, cardId: e.cardId, merchant: e.merchant, category: e.category, note: e.note, source: e.source }),
+  toInput: (e) => ({
+    date: e.date,
+    amount: e.amount,
+    originalAmount: e.originalAmount,
+    originalCurrency: e.originalCurrency,
+    fxRate: e.fxRate,
+    cardId: e.cardId,
+    merchant: e.merchant,
+    category: e.category,
+    note: e.note,
+    source: e.source
+  }),
   // A cached row that would poison the totals (no id, no date, an amount that is no number or the 0 the database refuses) is left out.
   hydrate: (raw) => {
     if (typeof raw !== 'object' || raw === null) return null
@@ -101,6 +148,8 @@ export const EXPENSES_SPEC: RowTableSpec<Expense, ExpenseInput> = {
       id: r.id,
       date: r.date,
       amount,
+      // A row cached before the app knew of 009 has none of the three.
+      ...originalOf(r.originalAmount, r.originalCurrency, r.fxRate),
       cardId: typeof r.cardId === 'string' && r.cardId !== '' ? r.cardId : null,
       merchant: text(r.merchant),
       category: toCategory(r.category),
@@ -112,7 +161,9 @@ export const EXPENSES_SPEC: RowTableSpec<Expense, ExpenseInput> = {
   },
   fromInput: (id, input, createdAt, updatedAt) => ({ id, ...expenseFields(input), createdAt, updatedAt }),
   withInput: (row, input, updatedAt) => ({ ...row, ...expenseFields(input), updatedAt }),
-  compare: byDateThenCreated
+  compare: byDateThenCreated,
+  // 009's columns: the table can be read while its writes still wait for them.
+  columnsMayLag: true
 }
 
 export const CARDS_SPEC: RowTableSpec<ExpenseCard, ExpenseCardInput> = {

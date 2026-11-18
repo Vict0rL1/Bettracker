@@ -1,10 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
-import { menu, scanFile } from './harness'
+import { forbidRates, menu, scanFile } from './harness'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
 test.use({ baseURL: DEMO_URL })
+
+// The demo asks the real exchange-rate service when an expense is in another currency. None of these is: a request to
+// it fails the test (and the suite's browser can't reach it anyway: playwright.config.ts).
+test.beforeEach(({ context }) => forbidRates(context))
 
 const storedBets = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as unknown[]).length)

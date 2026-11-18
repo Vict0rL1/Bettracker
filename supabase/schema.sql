@@ -4,7 +4,7 @@
 -- withdrawals, and everyday expenses (cards, expenses, monthly budgets)),
 -- locks them down so each user only sees their own rows, and turns on
 -- realtime so devices stay in sync. It is safe to run again, and on an older
--- install it does what migrations 001..008 do.
+-- install it does what migrations 001..009 do.
 
 create table if not exists public.entries (
   id         uuid primary key default gen_random_uuid(),
@@ -496,3 +496,32 @@ drop trigger if exists expense_budgets_remember_deleted on public.expense_budget
 create trigger expense_budgets_remember_deleted after delete on public.expense_budgets for each row execute function public.remember_deleted_row();
 drop trigger if exists expense_budgets_skip_deleted on public.expense_budgets;
 create trigger expense_budgets_skip_deleted before insert on public.expense_budgets for each row execute function public.skip_deleted_row();
+
+-- An expense paid in another currency (migration 009). amount stays the
+-- amount in the user's expense currency (user_settings.expense_currency):
+-- every total, budget and chart reads it. original_amount and
+-- original_currency say what was actually paid (signed like amount), and
+-- fx_rate is units of the expense currency per 1 unit of the original. All
+-- three null (an expense in the user's own currency) or all three set. amount
+-- is normally round(original_amount * fx_rate), but the user may type what
+-- the bank statement says (banks add their own fee), so nothing insists the
+-- three multiply out.
+alter table public.expenses add column if not exists original_amount   numeric(12, 2);
+alter table public.expenses add column if not exists original_currency text;
+alter table public.expenses add column if not exists fx_rate           numeric(18, 8);
+
+alter table public.expenses drop constraint if exists expenses_original_all_or_none;
+alter table public.expenses add  constraint expenses_original_all_or_none check (
+  (original_amount is null and original_currency is null and fx_rate is null)
+  or (original_amount is not null and original_currency is not null and fx_rate is not null)
+);
+-- Never 0 and the same bound as amount (checked after numeric(12,2) rounding).
+alter table public.expenses drop constraint if exists expenses_original_amount_range;
+alter table public.expenses add  constraint expenses_original_amount_range check (original_amount <> 0 and abs(original_amount) <= 100000000);
+-- A refund is a refund in both currencies.
+alter table public.expenses drop constraint if exists expenses_original_same_sign;
+alter table public.expenses add  constraint expenses_original_same_sign check (sign(original_amount) = sign(amount));
+alter table public.expenses drop constraint if exists expenses_original_currency_code;
+alter table public.expenses add  constraint expenses_original_currency_code check (original_currency ~ '^[A-Z]{3}$');
+alter table public.expenses drop constraint if exists expenses_fx_rate_positive;
+alter table public.expenses add  constraint expenses_fx_rate_positive check (fx_rate > 0);

@@ -33,6 +33,27 @@ describe('isMigrationNeededError', () => {
     expect(isMigrationNeededError(new Error('column "expense_currency" of relation "user_settings" does not exist'))).toBe(true)
   })
 
+  it('recognises the three columns 009 adds to the expenses (an expense paid in another currency)', () => {
+    for (const c of ['original_amount', 'original_currency', 'fx_rate']) {
+      const message = `Could not find the '${c}' column of 'expenses' in the schema cache`
+      expect(isMigrationNeededError(new Error(message)), c).toBe(true)
+      // The change waits in the queue; it is never refused.
+      expect(classifySyncError(describeError({ message, code: 'PGRST204' }, 400)), c).toBe('behind')
+      expect(describeError({ message, code: 'PGRST204' }, 400), c).toBeInstanceOf(MigrationNeededError)
+      expect(isMigrationNeededError(new Error(`column "${c}" of relation "expenses" does not exist`)), c).toBe(true)
+      expect(isMigrationNeededError(new Error(`column expenses.${c} does not exist`)), c).toBe(true)
+    }
+  })
+
+  it('leaves the refusals of 009’s constraints alone: the columns are there, the row is what was refused', () => {
+    for (const name of ['expenses_original_all_or_none', 'expenses_original_amount_range', 'expenses_original_same_sign', 'expenses_original_currency_code', 'expenses_fx_rate_positive']) {
+      const err = describeError({ message: `new row for relation "expenses" violates check constraint "${name}"`, code: '23514' }, 400)
+      expect(isMigrationNeededError(err), name).toBe(false)
+      expect(classifySyncError(err), name).toBe('rejected')
+    }
+    expect(classifySyncError(describeError({ message: 'numeric field overflow', code: '22003' }, 400))).toBe('rejected')
+  })
+
   it('leaves the refusals of the 008 tables alone: the table is there, the row is what was refused', () => {
     expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "expenses_pkey"'))).toBe(false)
     expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "expense_budgets_one_per_target"'))).toBe(false)

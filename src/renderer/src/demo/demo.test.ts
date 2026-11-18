@@ -16,6 +16,7 @@ describe('resetDemo', () => {
       'demo:expense-cards',
       'demo:expense-budgets',
       'demo:migrated-008',
+      'demo:migrated-009',
       'demo:ai-calls',
       'demo:ai-answered',
       'demo:ai-last'
@@ -37,7 +38,8 @@ describe('resetDemo', () => {
       `bettracker:expense-last:${uid}`,
       'bettracker:last-user'
     ]
-    const kept = ['bettracker:theme', 'bettracker:lang', 'bettracker:view', 'e2e:rows', 'bettracker:cache:someone-else', 'bettracker:expenses:someone-else']
+    // The exchange rates this device has fetched are no one's data (two currency codes, a date and a number): they stay.
+    const kept = ['bettracker:theme', 'bettracker:lang', 'bettracker:view', 'bettracker:fx', 'e2e:rows', 'bettracker:cache:someone-else', 'bettracker:expenses:someone-else']
     for (const k of [...demoKeys, ...userKeys, ...kept]) localStorage.setItem(k, '1')
 
     resetDemo()

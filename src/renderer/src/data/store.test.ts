@@ -92,6 +92,13 @@ describe('writeExpendable / writeDurable', () => {
     expect([...storage.map.keys()].sort()).toEqual([...kept].sort())
   })
 
+  it('evicts the exchange rates this device fetched (one key, no user), and nothing that only looks like it', () => {
+    const kept = ['bettracker:fx-outbox', 'bettracker:fxx', 'bettracker:fx:u1-outbox', 'other:fx']
+    for (const k of ['bettracker:fx', ...kept]) storage.setItem(k, '{}')
+    expect(evictExpendable()).toBe(1)
+    expect([...storage.map.keys()].sort()).toEqual([...kept].sort())
+  })
+
   it('evicts only what can be fetched again', () => {
     storage.setItem('bettracker:cache:u1', '[]')
     storage.setItem('bettracker:outbox:u1', '[]')

@@ -9,7 +9,12 @@ interface Props {
   onChange: (code: string) => void
 }
 
-/** The currency the expenses are shown in. Converts nothing; the bets stay in dollars. */
+/**
+ * The currency the expenses are shown in: the user's main currency. Changing
+ * it converts nothing; the bets stay in dollars. An expense paid in another
+ * currency is converted to it when it is added (the sheet and the scan
+ * review), which the second line says.
+ */
 export default function CurrencyPicker({ currency, enabled, onChange }: Props) {
   const { t, lang } = useLang()
   const id = useId()
@@ -33,6 +38,7 @@ export default function CurrencyPicker({ currency, enabled, onChange }: Props) {
       <p className="hint" id={`${id}-hint`}>
         {t('expset.currencyHint')}
       </p>
+      <p className="hint expset-currency-main">{t('expset.currencyMain')}</p>
     </section>
   )
 }

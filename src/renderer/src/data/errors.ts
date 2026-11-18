@@ -87,12 +87,14 @@ export const isRateLimit = (err: unknown): boolean =>
  * app — a migration hasn't been run. That covers a column or table the app
  * knows about but the database doesn't have yet (the settings table of 004,
  * the deposits and withdrawals of 005, the expenses, cards and budgets of
- * 008 and the currency column), and the one-bet-per-day constraint that
- * migration 001 removes. Callers use this to tell the user exactly what to do
- * instead of showing a raw PostgREST error.
+ * 008 and the currency column, and the three columns 009 adds to the
+ * expenses: every add and edit of an expense names them, as every bet names
+ * closing_odds), and the one-bet-per-day constraint that migration 001
+ * removes. Callers use this to tell the user exactly what to do instead of
+ * showing a raw PostgREST error.
  */
 export function isMigrationNeededError(err: unknown): boolean {
-  return /column .*(stake|sport|book|bet_type|odds|status|closing_odds|expense_currency).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status|closing_odds|expense_currency).* column|relation .*(user_settings|bankroll_moves|expense_cards|expense_budgets|expenses).* does not exist|could not find the table .*(user_settings|bankroll_moves|expense_cards|expense_budgets|expenses)|entries_user_id_date_key/i.test(
+  return /column .*(stake|sport|book|bet_type|odds|status|closing_odds|expense_currency|original_amount|original_currency|fx_rate).* does not exist|could not find the .*(stake|sport|book|bet_type|odds|status|closing_odds|expense_currency|original_amount|original_currency|fx_rate).* column|relation .*(user_settings|bankroll_moves|expense_cards|expense_budgets|expenses).* does not exist|could not find the table .*(user_settings|bankroll_moves|expense_cards|expense_budgets|expenses)|entries_user_id_date_key/i.test(
     messageOf(err)
   )
 }

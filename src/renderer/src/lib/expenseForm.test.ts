@@ -10,10 +10,13 @@ import {
   formatAmountText,
   initialDraft,
   merchantLabel,
+  paidInAnother,
   parseAmountText,
   pasteIsTyping,
-  resumedDraft
+  resumedDraft,
+  storedFx
 } from './expenseForm'
+import { fxView } from './expenseFx'
 import { normalizeExpense } from './validate'
 
 const A = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -22,6 +25,9 @@ const card = (id: string, archived = false): ExpenseCard => ({ id, name: id.slic
 const expense = (over: Partial<Expense> = {}): Expense => ({
   id: 'e1',
   date: '2026-11-17',
+  originalAmount: null,
+  originalCurrency: null,
+  fxRate: null,
   amount: 4.5,
   cardId: A,
   merchant: 'Café Central',
@@ -194,9 +200,11 @@ describe('expenseAmountProblem', () => {
 describe('the sheet’s draft', () => {
   const cards = [card(A), card(B), card('cccccccc-0000-4000-8000-000000000003', true)]
 
-  it('starts on today, the card asked for if it is active', () => {
-    expect(initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'food' }, cards, preferCardId: B })).toEqual({
+  it('starts on today, in the main currency, the card asked for if it is active', () => {
+    expect(initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'food' }, cards, currency: 'CAD', preferCardId: B })).toEqual({
       amount: '',
+      currency: 'CAD',
+      fx: null,
       refund: false,
       date: '2026-11-17',
       cardId: B,
@@ -207,17 +215,23 @@ describe('the sheet’s draft', () => {
   })
 
   it('else the last card while it is active, else the only active card, else none', () => {
-    expect(initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'food' }, cards }).cardId).toBe(A)
-    expect(initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'food' }, cards, preferCardId: 'gone' }).cardId).toBe(A)
+    const currency = 'USD'
+    expect(initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'food' }, cards, currency }).cardId).toBe(A)
+    expect(initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'food' }, cards, currency, preferCardId: 'gone' }).cardId).toBe(A)
     const archivedLast = { cardId: 'cccccccc-0000-4000-8000-000000000003', category: 'food' as const }
-    expect(initialDraft({ today: '2026-11-17', last: archivedLast, cards }).cardId).toBeNull()
-    expect(initialDraft({ today: '2026-11-17', last: archivedLast, cards: [card(A), card(B, true)] }).cardId).toBe(A)
-    expect(initialDraft({ today: '2026-11-17', last: null, cards: [card(A)] })).toMatchObject({ cardId: A, category: 'other' })
-    expect(initialDraft({ today: '2026-11-17', last: null, cards: [] }).cardId).toBeNull()
+    expect(initialDraft({ today: '2026-11-17', last: archivedLast, cards, currency }).cardId).toBeNull()
+    expect(initialDraft({ today: '2026-11-17', last: archivedLast, cards: [card(A), card(B, true)], currency }).cardId).toBe(A)
+    expect(initialDraft({ today: '2026-11-17', last: null, cards: [card(A)], currency })).toMatchObject({ cardId: A, category: 'other' })
+    expect(initialDraft({ today: '2026-11-17', last: null, cards: [], currency }).cardId).toBeNull()
+  })
+
+  it('always starts in the main currency: the last other one used is only offered, never chosen', () => {
+    expect(initialDraft({ today: '2026-11-17', last: { cardId: null, category: 'food', currency: 'USD' }, cards, currency: 'CAD' })).toMatchObject({ currency: 'CAD', fx: null })
   })
 
   it('back from "Add card": what was typed, with the card added chosen while it is active', () => {
-    const typed = { amount: '4.50', refund: false, date: '2026-11-16', cardId: null, category: 'coffee' as const, merchant: 'Kiosk', note: 'n' }
+    const typed = { amount: '4.50', currency: 'USD', fx: { lead: 'rate' as const, text: '1.41' }, refund: false, date: '2026-11-16', cardId: null, category: 'coffee' as const, merchant: 'Kiosk', note: 'n' }
+    // The currency and a rate the user typed come back too.
     expect(resumedDraft(typed, cards, B)).toEqual({ ...typed, cardId: B })
     expect(resumedDraft({ ...typed, cardId: A }, cards, B)).toEqual({ ...typed, cardId: B })
     // No card added, an archived one or one this device doesn't know: the draft as it was.
@@ -227,17 +241,104 @@ describe('the sheet’s draft', () => {
   })
 
   it('an expense in the boxes: a refund is the toggle and an unsigned amount', () => {
-    expect(draftOf(expense({ amount: -12.5 }), 'USD')).toEqual({ amount: '12.50', refund: true, date: '2026-11-17', cardId: A, category: 'coffee', merchant: 'Café Central', note: 'with Ana' })
+    expect(draftOf(expense({ amount: -12.5 }), 'USD')).toEqual({
+      amount: '12.50',
+      currency: 'USD',
+      fx: null,
+      refund: true,
+      date: '2026-11-17',
+      cardId: A,
+      category: 'coffee',
+      merchant: 'Café Central',
+      note: 'with Ana'
+    })
     expect(draftOf(expense({ amount: 12500 }), 'CLP')).toMatchObject({ amount: '12500', refund: false })
   })
 
   it('back to an input: the toggle sets the sign, and normalizeExpense takes it', () => {
     const d = { ...draftOf(expense(), 'EUR'), amount: '4,50' }
-    expect(draftToInput(d, 'manual', 'EUR')).toEqual({ date: '2026-11-17', amount: 4.5, cardId: A, category: 'coffee', merchant: 'Café Central', note: 'with Ana', source: 'manual' })
+    // In the main currency nothing of an original is kept (an edit back to it clears what was there).
+    expect(draftToInput(d, 'manual', 'EUR')).toEqual({
+      date: '2026-11-17',
+      amount: 4.5,
+      originalAmount: null,
+      originalCurrency: null,
+      fxRate: null,
+      cardId: A,
+      category: 'coffee',
+      merchant: 'Café Central',
+      note: 'with Ana',
+      source: 'manual'
+    })
     expect(draftToInput({ ...d, refund: true }, 'ai', 'EUR')).toMatchObject({ amount: -4.5, source: 'ai' })
     expect(normalizeExpense(draftToInput({ ...d, refund: true }, 'ai', 'EUR'))).toMatchObject({ amount: -4.5, source: 'ai' })
     // Never reached by the sheet (it checks first), but never a silent 0 either.
     expect(() => normalizeExpense(draftToInput({ ...d, amount: 'x' }, 'manual', 'EUR'))).toThrow()
+  })
+
+  describe('paid in another currency', () => {
+    const usd = expense({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034, date: '2026-11-13' })
+
+    it('an expense paid in another currency opens on what was paid, in its currency', () => {
+      expect(draftOf(usd, 'CAD')).toMatchObject({ amount: '12.00', currency: 'USD', fx: null, refund: false, date: '2026-11-13' })
+      expect(draftOf({ ...usd, amount: -16.84, originalAmount: -12 }, 'CAD')).toMatchObject({ amount: '12.00', currency: 'USD', refund: true })
+      // Pesos have no cents: written without them.
+      expect(draftOf({ ...usd, originalAmount: 12500, originalCurrency: 'COP', fxRate: 0.00034123, amount: 4.27 }, 'CAD')).toMatchObject({ amount: '12500', currency: 'COP' })
+    })
+
+    it('shows what is saved (the rate, and the amount as saved) while the draft is still about that payment', () => {
+      const d = draftOf(usd, 'CAD')
+      expect(storedFx(usd, d, 'CAD')).toEqual({ rate: 1.4034, converted: 16.84, original: 12 })
+      // Another date or another currency asks for its own rate.
+      expect(storedFx(usd, { ...d, date: '2026-11-14' }, 'CAD')).toBeNull()
+      expect(storedFx(usd, { ...d, currency: 'EUR' }, 'CAD')).toBeNull()
+      expect(storedFx(usd, { ...d, currency: 'CAD' }, 'CAD')).toBeNull()
+      // Nothing stored for a new expense, or one in the main currency.
+      expect(storedFx(null, d, 'CAD')).toBeNull()
+      expect(storedFx(expense(), draftOf(expense(), 'CAD'), 'CAD')).toBeNull()
+    })
+
+    it('saves the amount in the main currency, with what was paid, in what and the rate', () => {
+      const d = draftOf(usd, 'CAD')
+      const view = fxView({ typed: null, stored: storedFx(usd, d, 'CAD'), amount: 12, main: 'CAD' })
+      const input = draftToInput(d, 'manual', 'CAD', view)
+      expect(input).toMatchObject({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+      expect(normalizeExpense(input)).toMatchObject({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+    })
+
+    it('a refund is negative in both amounts', () => {
+      const d = { ...draftOf(usd, 'CAD'), refund: true }
+      const input = draftToInput(d, 'manual', 'CAD', { rate: 1.4, converted: 16.8 })
+      expect(input).toMatchObject({ amount: -16.8, originalAmount: -12, fxRate: 1.4 })
+      expect(normalizeExpense(input)).toMatchObject({ amount: -16.8, originalAmount: -12 })
+    })
+
+    it('reads the amount with the digits of the currency it was paid in', () => {
+      const cop = { ...draftOf(usd, 'CAD'), currency: 'COP', amount: '12.500' }
+      expect(draftToInput(cop, 'manual', 'CAD', { rate: 0.00034, converted: 4.25 })).toMatchObject({ originalAmount: 12500, originalCurrency: 'COP', amount: 4.25 })
+      expect(draftToInput({ ...cop, currency: 'USD' }, 'manual', 'CAD', { rate: 1.4, converted: 17.5 })).toMatchObject({ originalAmount: 12500 })
+      expect(draftToInput({ ...cop, currency: 'USD', amount: '12.50' }, 'manual', 'CAD', { rate: 1.4, converted: 17.5 })).toMatchObject({ originalAmount: 12.5 })
+    })
+
+    it('is never saved as if it were the main currency: without a rate or a converted amount the input is refused', () => {
+      const d = draftOf(usd, 'CAD')
+      for (const fx of [null, { rate: null, converted: 16.84 }, { rate: 1.4034, converted: null }]) {
+        expect(() => normalizeExpense(draftToInput(d, 'manual', 'CAD', fx)), JSON.stringify(fx)).toThrow()
+      }
+    })
+
+    it('changed to the main currency, it is saved as one of it: the original is cleared', () => {
+      const d = { ...draftOf(usd, 'CAD'), currency: 'CAD', amount: '16.84' }
+      expect(draftToInput(d, 'manual', 'CAD')).toMatchObject({ amount: 16.84, originalAmount: null, originalCurrency: null, fxRate: null })
+    })
+
+    it('an original in what is now the main currency (the setting changed since, which converts nothing) reads as its amount', () => {
+      expect(paidInAnother(usd, 'CAD')).toBe(true)
+      expect(paidInAnother(usd, 'USD')).toBe(false)
+      expect(paidInAnother(expense(), 'USD')).toBe(false)
+      expect(draftOf(usd, 'USD')).toMatchObject({ amount: '16.84', currency: 'USD' })
+      expect(storedFx(usd, draftOf(usd, 'USD'), 'USD')).toBeNull()
+    })
   })
 
   it('merchantLabel: the merchant, or the words for none', () => {

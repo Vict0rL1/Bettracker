@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EXPENSE_CATEGORIES, type Expense, type ExpenseCard } from '../../../../shared/types'
 import { categoryKey, toCategory } from '../../lib/categories'
+import { codeAmount } from '../../lib/currency'
 import { humanDate, monthInline, type MonthKey } from '../../lib/dates'
-import { merchantLabel } from '../../lib/expenseForm'
+import { merchantLabel, paidInAnother } from '../../lib/expenseForm'
+import { rateText } from '../../lib/fx'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
 import { cardFilterChoices, filterExpenses, groupExpensesByDay, NO_CARD, type ExpenseFilter } from '../../lib/spend'
@@ -15,6 +17,8 @@ interface Props {
   expenses: readonly Expense[]
   cards: readonly ExpenseCard[]
   cardsLoaded: boolean
+  /** The main currency: every amount is in it; an expense paid in another also shows what was paid. */
+  currency: string
   filter: ExpenseFilter
   onFilter: (f: ExpenseFilter) => void
   loaded: boolean
@@ -32,9 +36,11 @@ const PAGE = 60
  * The month's expenses, newest day first, each day with its total: a table
  * on a computer (edit and delete on the row), a list on a phone (the whole
  * row opens the expense, whose sheet has Delete). Amounts are neutral ink; a
- * refund is green, and says so in words.
+ * refund is green, and says so in words. An expense paid in another currency
+ * also shows what was paid, small and neutral, written with its code
+ * ("USD 12.00"); the rate is in its tooltip and in its sheet.
  */
-export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, onFilter, loaded, offline, onEdit, onDelete, onExport, canExport }: Props) {
+export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency, filter, onFilter, loaded, offline, onEdit, onDelete, onExport, canExport }: Props) {
   const { t } = useLang()
   const money = useMoney()
   const narrow = useMedia(NARROW)
@@ -83,6 +89,18 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, 
       {e.amount < 0 && <span className="visually-hidden"> ({t('explist.refund')})</span>}
     </>
   )
+
+  /** What was paid, for an expense paid in another currency: "USD 12.00", with the rate in its tooltip. */
+  const originalCell = (e: Expense) => {
+    if (!paidInAnother(e, currency)) return null
+    const original = codeAmount(e.originalAmount, e.originalCurrency)
+    return (
+      <span className="exp-original" title={t('explist.rateTitle', { original, from: e.originalCurrency, rate: rateText(e.fxRate, 4), to: currency })}>
+        <span aria-hidden="true">{original}</span>
+        <span className="visually-hidden">{t('explist.paid', { amount: original })}</span>
+      </span>
+    )
+  }
 
   let body
   if (!loaded) body = <p className="empty-state exp-empty">{t(offline ? 'exp.offlineNotLoaded' : 'exp.loading')}</p>
@@ -148,6 +166,7 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, 
                             <span>{t(categoryKey(toCategory(e.category)))}</span>
                             <span className="exp-item-card">{cardName(e)}</span>
                             {e.note && <span className="exp-item-note">{e.note}</span>}
+                            {originalCell(e)}
                           </span>
                         </button>
                       </li>
@@ -198,7 +217,10 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, 
                         <td className="exp-note" title={e.note || undefined}>
                           {e.note || <span className="td-none">—</span>}
                         </td>
-                        <td className={`exp-amount${e.amount < 0 ? ' refund' : ''}`}>{amountCell(e)}</td>
+                        <td className={`exp-amount${e.amount < 0 ? ' refund' : ''}`}>
+                          {originalCell(e)}
+                          <span className="exp-amount-main">{amountCell(e)}</span>
+                        </td>
                         <td className="td-actions">
                           <button type="button" className="btn-icon exp-edit" aria-label={t('explist.edit', { merchant, date: when })} title={t('common.edit')} onClick={() => onEdit(e)}>
                             <PencilIcon />

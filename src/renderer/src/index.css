@@ -5740,7 +5740,32 @@ tr.is-pending td:first-child {
 }
 
 .exp-item-sub > .exp-item-note {
-  flex-shrink: 3;
+  flex-shrink: 12;
+}
+
+/* What an expense was paid in, when that is not the main currency ("USD
+   12.00"): small and neutral beside its amount, also on a refund. */
+.exp-original {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.exp-table .exp-amount .exp-original {
+  margin-right: 10px;
+}
+
+/* On a phone it ends the second line, under the amount. */
+.exp-item-sub > .exp-original {
+  flex: none;
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.exp-item-sub > .exp-original::before {
+  content: none;
 }
 
 .exp-more {
@@ -5797,6 +5822,61 @@ tr.is-pending td:first-child {
 .exp-amount-reads {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* The amount and, beside it, the currency it was paid in: the main one
+   unless said otherwise. A native select, as wide as a code and its chevron. */
+.exp-amount-row {
+  display: flex;
+  gap: 8px;
+}
+
+.exp-amount-row > .exp-amount-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.exp-amount-row > .exp-currency {
+  flex: none;
+  width: 84px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Paid in another currency: the rate and what it comes to in the main one,
+   hung from the amount by a rule (no box inside the sheet), with one line of
+   plain words under them saying where the rate is from. */
+.exp-fx {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: -4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-strong);
+  animation: fade-in var(--dur-sm) var(--ease-out);
+}
+
+.exp-fx-boxes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.exp-fx :is(.exp-fx-rate, .exp-fx-converted),
+.exp-review-fx :is(.exp-review-rate, .exp-review-converted) {
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-fx .field-error {
+  margin: 0;
+}
+
+/* Always there (empty while there is nothing to say), so the sheet doesn't
+   jump when the rate arrives. */
+.exp-fx-line {
+  min-height: 16px;
+  margin: 0;
 }
 
 .exp-kind,
@@ -6163,6 +6243,76 @@ tr.is-pending td:first-child {
   max-width: 320px;
 }
 
+/* The currency of the picture and, when rows lack a rate, one rate for them. */
+.exp-review-money-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+
+.exp-review-currency-field {
+  flex: none;
+  width: 160px;
+}
+
+.exp-review-rateall-field {
+  flex: 1;
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.exp-review-rateall {
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-review-fxinfo,
+.exp-review-waiting {
+  margin: 0;
+}
+
+/* A row in another currency: what it comes to in the main one, and what was
+   read under it, small and neutral. */
+.exp-review-money {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.exp-review-original {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* No rate yet: only what was read, which is not what would be saved. */
+.exp-review-amount-text.is-unknown {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.exp-review-row.is-off .exp-review-original {
+  color: var(--text-3);
+}
+
+/* The row's rate and converted amount, across both columns of its fields. */
+.exp-review-fx {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: end;
+}
+
+.exp-review-fx > :is(.field-error, .hint) {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 /* ---------- expenses: settings (cards, budgets, currency) ---------- */
 .expense-settings-modal {
   width: 520px;
@@ -6476,6 +6626,18 @@ tr.is-pending td:first-child {
   .exp-currency-note {
     flex-basis: 100%;
     order: -1;
+  }
+
+  /* Room for a code at the 16px a phone's fields are set in. */
+  .exp-amount-row > .exp-currency {
+    width: 96px;
+  }
+
+  .exp-review-currency-field,
+  .exp-review-rateall-field {
+    flex: 1 1 100%;
+    width: auto;
+    max-width: none;
   }
 
   .cat-chip {

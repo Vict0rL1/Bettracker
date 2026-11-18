@@ -9,11 +9,24 @@ import { todayStr } from './dates'
  * expense currency, which every row names.
  */
 
-export const EXPENSE_COLUMNS = ['date', 'amount', 'currency', 'card', 'card_last4', 'merchant', 'category', 'note', 'source'] as const
+/**
+ * The last three came with expenses paid in another currency (migration 009),
+ * at the END so a sheet built on the first nine keeps working: what was paid
+ * (signed like `amount`), its ISO code, and the rate to `currency`. All three
+ * are empty for an expense in the user's own currency.
+ */
+export const EXPENSE_COLUMNS = ['date', 'amount', 'currency', 'card', 'card_last4', 'merchant', 'category', 'note', 'source', 'original_amount', 'original_currency', 'fx_rate'] as const
+
+/** A rate as written: up to 8 decimals (as stored), without the zeros that say nothing ("1.4034", "0.00034123", "2"). */
+const rateText = (rate: number): string => rate.toFixed(8).replace(/\.?0+$/, '')
 
 const text = (s: string): string => escapeField(guardCell(s))
 
-/** BOM + CRLF like betsToCsv; sorted by date then createdAt; amount toFixed(2) signed; text cells through guardCell + escapeField; unknown card → ''. */
+/**
+ * BOM + CRLF like betsToCsv; sorted by date then createdAt; amount toFixed(2) signed; text cells through guardCell +
+ * escapeField; unknown card → ''. The original amount is written like the amount (toFixed(2), signed) and the rate with
+ * up to 8 decimals; both, and the code, are '' for an expense in the user's own currency.
+ */
 export function expensesToCsv(list: readonly Expense[], cards: readonly ExpenseCard[], currency: string): string {
   const byId = new Map(cards.map((c) => [c.id, c]))
   const sorted = [...list].sort((a, b) =>
@@ -23,7 +36,21 @@ export function expensesToCsv(list: readonly Expense[], cards: readonly ExpenseC
     EXPENSE_COLUMNS.join(','),
     ...sorted.map((e) => {
       const card = e.cardId === null ? undefined : byId.get(e.cardId)
-      return [e.date, e.amount.toFixed(2), text(currency), text(card?.name ?? ''), text(card?.last4 ?? ''), text(e.merchant), text(e.category), text(e.note), text(e.source)].join(',')
+      const foreign = e.originalAmount !== null && e.originalCurrency !== null && e.fxRate !== null
+      return [
+        e.date,
+        e.amount.toFixed(2),
+        text(currency),
+        text(card?.name ?? ''),
+        text(card?.last4 ?? ''),
+        text(e.merchant),
+        text(e.category),
+        text(e.note),
+        text(e.source),
+        foreign ? (e.originalAmount as number).toFixed(2) : '',
+        foreign ? text(e.originalCurrency as string) : '',
+        foreign ? rateText(e.fxRate as number) : ''
+      ].join(',')
     })
   ]
   return '﻿' + lines.join('\r\n') + '\r\n'

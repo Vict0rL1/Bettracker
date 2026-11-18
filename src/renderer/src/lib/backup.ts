@@ -33,8 +33,9 @@ import { InputError, MAX_AMOUNT, normalizeBudget, normalizeCard, normalizeExpens
  *     "moves": [ { "id", "date", "amount", "note", "createdAt", "updatedAt" } ],
  *     "settings": { "oddsFormat", "unitSize", "showUnits", "startingBankroll",
  *                   "defaultStake", "lossLimit", "expenseCurrency" },
- *     "expenses": [ { "id", "date", "amount", "cardId", "merchant", "category",
- *                     "note", "source", "createdAt", "updatedAt" } ],
+ *     "expenses": [ { "id", "date", "amount", "originalAmount",
+ *                     "originalCurrency", "fxRate", "cardId", "merchant",
+ *                     "category", "note", "source", "createdAt", "updatedAt" } ],
  *     "expenseCards": [ { "id", "name", "last4", "kind", "archived",
  *                         "createdAt", "updatedAt" } ],
  *     "expenseBudgets": [ { "id", "scope", "target", "monthlyLimit",
@@ -48,6 +49,12 @@ import { InputError, MAX_AMOUNT, normalizeBudget, normalizeCard, normalizeExpens
  * is a setting like the others): the restore says so, and never counts them
  * as restored. A malformed expense list is treated as absent, never as a
  * damaged file, so it can't keep the bets and moves from being restored.
+ *
+ * An expense's `originalAmount`, `originalCurrency` and `fxRate` came later
+ * still (an expense paid in another currency, migration 009) and are optional
+ * too: all three (what was paid, its ISO code, and the rate to the expense
+ * currency) or none. A file from before has none of them, and each expense
+ * in it reads as one in the user's own currency (the three null).
  *
  * A later version that adds fields keeps `version` 1 as long as an older app
  * can ignore them; one an older app would misread raises it, and an older
@@ -242,6 +249,11 @@ export function readBackup(text: string): ReadBackup {
     const clean = normalizeExpense({
       date: str(e.date),
       amount,
+      // Optional (a file from before 009 has none). A file that holds only some of the three, or nonsense in one, fails
+      // the app's checks like any other bad entry.
+      originalAmount: e.originalAmount === undefined || e.originalAmount === null ? null : typeof e.originalAmount === 'number' ? e.originalAmount : NaN,
+      originalCurrency: e.originalCurrency === undefined || e.originalCurrency === null ? null : str(e.originalCurrency, '?'),
+      fxRate: e.fxRate === undefined || e.fxRate === null ? null : typeof e.fxRate === 'number' ? e.fxRate : NaN,
       cardId: typeof e.cardId === 'string' ? e.cardId : null,
       merchant: str(e.merchant),
       category: str(e.category),

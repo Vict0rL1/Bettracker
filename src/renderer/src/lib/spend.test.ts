@@ -32,7 +32,7 @@ let seq = 0
 const exp = (over: Partial<Expense> & { date: string; amount: number }): Expense => {
   seq++
   const t = `${over.date}T${String(seq % 24).padStart(2, '0')}:00:00.000Z`
-  return { id: `e${String(seq).padStart(3, '0')}`, cardId: null, merchant: '', category: 'other', note: '', source: 'manual', createdAt: t, updatedAt: t, ...over }
+  return { id: `e${String(seq).padStart(3, '0')}`, originalAmount: null, originalCurrency: null, fxRate: null, cardId: null, merchant: '', category: 'other', note: '', source: 'manual', createdAt: t, updatedAt: t, ...over }
 }
 const budget = (scope: ExpenseBudget['scope'], target: string, monthlyLimit: number): ExpenseBudget => ({ id: `${scope}:${target}`, scope, target, monthlyLimit, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
 

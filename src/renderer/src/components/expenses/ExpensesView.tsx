@@ -28,6 +28,8 @@ export interface ExpensesViewProps {
   offline: boolean
   /** Migration 008 is missing: the database has no expense tables yet. */
   needs008: boolean
+  /** Migration 009 is missing: an expense added or changed waits for its three columns. */
+  needs009: boolean
   currency: string
   /** Why the AI reading can't start now, or null. */
   scanBlocked: 'offline' | 'signed_out' | 'loading' | null
@@ -111,6 +113,11 @@ export default function ExpensesView(p: ExpensesViewProps) {
           {t('exp.migration')}
         </p>
       )}
+      {p.needs009 && !p.needs008 && (
+        <p className="draft-note exp-migration exp-migration-009" role="status">
+          {t('exp.migration009')}
+        </p>
+      )}
 
       {first ? (
         <article className="card exp-first">
@@ -141,6 +148,7 @@ export default function ExpensesView(p: ExpensesViewProps) {
             expenses={monthList}
             cards={p.cards}
             cardsLoaded={p.cardsLoaded}
+            currency={p.currency}
             filter={filter}
             onFilter={setFilter}
             loaded={p.expensesLoaded}

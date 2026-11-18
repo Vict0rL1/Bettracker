@@ -396,15 +396,19 @@ test('currency: amounts follow the new currency without conversion; a wide symbo
   // What is stored is the same number.
   expect((await server(page, 'expenses')).map((e) => e.amount)).toEqual(['12.50'])
 
-  // Colombian pesos: three letters before the digits.
+  // Peruvian soles: three letters before the digits (the main currency is written with its narrow symbol, which for
+  // most pesos and dollars is "$"; soles have none in en-US, so their code stands in).
   await page.locator('.exp-manage-btn').click()
-  await select.selectOption('COP')
-  await expect.poll(() => page.evaluate(() => (JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { expense_currency?: string }).expense_currency)).toBe('COP')
+  await select.selectOption('PEN')
+  await expect.poll(() => page.evaluate(() => (JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { expense_currency?: string }).expense_currency)).toBe('PEN')
   await settings.locator('.expset-done').click()
+  await expect(page.locator('.spend-total')).toHaveText(/^PEN\s12\.50$/)
   await page.locator('.add-expense-btn').click()
   const sheet = page.locator('.expense-modal')
   await sheet.locator('.exp-amount').fill('12500')
-  await expect(sheet.locator('.amount-cur')).toHaveText('COP')
+  await expect(sheet.locator('.amount-cur')).toHaveText('PEN')
+  // The sheet's own currency box says the same, and is the main one until changed.
+  await expect(sheet.locator('.exp-currency')).toHaveValue('PEN')
   const cur = await sheet.locator('.amount-cur').boundingBox()
   const input = await sheet.locator('.exp-amount').boundingBox()
   const padding = await sheet.locator('.exp-amount').evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft))
@@ -664,9 +668,10 @@ test('before 008: only proof counts; expenses wait as Update needed, budgets and
   await expect(settings.locator('.budget-input').first()).toBeDisabled()
   await settings.locator('.expset-done').click()
 
-  // 008 runs.
+  // 008 runs, and 009 after it (every expense write names 009's columns: expenses-fx.spec.ts covers the database in between).
   await page.evaluate(() => {
     localStorage.setItem('e2e:migrated-008', '1')
+    localStorage.setItem('e2e:migrated-009', '1')
     window.dispatchEvent(new Event('online'))
   })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')

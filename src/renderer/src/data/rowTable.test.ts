@@ -66,9 +66,11 @@ const FIXTURES: Fixture[] = [
     order: ['date', 'created_at', 'id'],
     input: { date: '2026-11-17', amount: 4.499, cardId: CARD.toUpperCase(), merchant: ' Café  Central ', category: 'coffee', note: '', source: 'ai' },
     bad: { date: '2026-11-17', amount: 0 },
-    columns: { date: '2026-11-17', amount: 4.5, card_id: CARD, merchant: 'Café Central', category: 'coffee', note: '', source: 'ai' },
+    // The three columns of migration 009 go with every write, null for an expense in the user's own currency.
+    columns: { date: '2026-11-17', amount: 4.5, original_amount: null, original_currency: null, fx_rate: null, card_id: CARD, merchant: 'Café Central', category: 'coffee', note: '', source: 'ai' },
     row: (over = {}) => ({ id: 'r1', user_id: 'user-1', date: '2026-11-17', amount: '4.50', card_id: CARD, merchant: 'Café Central', category: 'coffee', note: null, source: 'ai', created_at: 'C', updated_at: STAMP, ...over }),
-    app: (over = {}) => ({ id: 'r1', date: '2026-11-17', amount: 4.5, cardId: CARD, merchant: 'Café Central', category: 'coffee', note: '', source: 'ai', createdAt: 'C', updatedAt: STAMP, ...over }) as RowBase
+    app: (over = {}) =>
+      ({ id: 'r1', date: '2026-11-17', amount: 4.5, originalAmount: null, originalCurrency: null, fxRate: null, cardId: CARD, merchant: 'Café Central', category: 'coffee', note: '', source: 'ai', createdAt: 'C', updatedAt: STAMP, ...over }) as RowBase
   },
   {
     table: cardsTable as unknown as RowTable<RowBase, unknown>,
@@ -340,5 +342,85 @@ describe('budgets: an add that meets the same budget under another id', () => {
   it('throws when the lookup by scope and target fails', async () => {
     state.replies = [{ data: null, error: DUP }, { data: null, error: null }, { data: null, error: { message: 'upstream timeout', code: '57014' }, status: 504 }]
     await expect(budgetsTable.add(input, 'b-mine', STAMP)).rejects.toThrow(/upstream timeout/)
+  })
+})
+
+describe('expenses paid in another currency (migration 009)', () => {
+  const usd = { date: '2026-11-13', amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034, merchant: 'Apple.com', category: 'subscriptions' }
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: 'r1',
+    user_id: 'user-1',
+    date: '2026-11-13',
+    amount: '16.84',
+    original_amount: '12.00',
+    original_currency: 'USD',
+    fx_rate: '1.40340000',
+    card_id: null,
+    merchant: 'Apple.com',
+    category: 'subscriptions',
+    note: '',
+    source: 'manual',
+    created_at: 'C',
+    updated_at: STAMP,
+    ...over
+  })
+
+  it('sends what was paid, its currency and the rate with an add, and reads them back as numbers', async () => {
+    state.replies = [{ data: [row()], error: null }]
+    const out = await expensesTable.add(usd, 'r1', STAMP)
+    expect(call('insert')?.args[0]).toMatchObject({ amount: 16.84, original_amount: 12, original_currency: 'USD', fx_rate: 1.4034 })
+    expect(out).toMatchObject({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+  })
+
+  it('an edit back to the user’s own currency clears the three (they are always sent)', async () => {
+    state.replies = [{ data: row({ original_amount: null, original_currency: null, fx_rate: null }), error: null }]
+    const out = await expensesTable.update('r1', { date: '2026-11-13', amount: 16.84 }, NEW)
+    expect(call('update')?.args[0]).toEqual({
+      date: '2026-11-13',
+      amount: 16.84,
+      original_amount: null,
+      original_currency: null,
+      fx_rate: null,
+      card_id: null,
+      merchant: '',
+      category: 'other',
+      note: '',
+      source: 'manual',
+      updated_at: NEW
+    })
+    expect(out).toMatchObject({ originalAmount: null, originalCurrency: null, fxRate: null })
+  })
+
+  it('reads a row from a database still on 008 (no such keys) as an expense in the user’s own currency', async () => {
+    const { original_amount: _a, original_currency: _c, fx_rate: _r, ...before009 } = row()
+    state.replies = [{ data: [before009], error: null, count: 1 }]
+    expect(await expensesTable.fetchAll()).toEqual([expect.objectContaining({ amount: 16.84, originalAmount: null, originalCurrency: null, fxRate: null })])
+  })
+
+  it('never reads half an original: a row whose three don’t make sense has none', async () => {
+    state.replies = [
+      {
+        data: [row({ id: 'a', fx_rate: null }), row({ id: 'b', original_currency: 'usd' }), row({ id: 'c', original_amount: '0.00' }), row({ id: 'd', fx_rate: '0' }), row({ id: 'e', original_amount: 'x' })],
+        error: null,
+        count: 5
+      }
+    ]
+    const got = await expensesTable.fetchAll()
+    expect(got).toHaveLength(5)
+    for (const e of got) expect(e).toMatchObject({ amount: 16.84, originalAmount: null, originalCurrency: null, fxRate: null })
+  })
+
+  it('a database still on 008 refuses the write as "behind" (the change waits, it is not dropped)', async () => {
+    state.replies = [{ data: null, error: { message: "Could not find the 'original_amount' column of 'expenses' in the schema cache", code: 'PGRST204' }, status: 400 }]
+    await expect(expensesTable.add(usd, 'r1', STAMP)).rejects.toBeInstanceOf(MigrationNeededError)
+    // An expense in the user's own currency names the columns too (as nulls), so it waits as well.
+    state.replies = [{ data: null, error: { message: "Could not find the 'fx_rate' column of 'expenses' in the schema cache", code: 'PGRST204' }, status: 400 }]
+    await expect(expensesTable.update('r1', { date: '2026-11-13', amount: 3 }, NEW)).rejects.toBeInstanceOf(MigrationNeededError)
+  })
+
+  it('refuses a bad original before any request', async () => {
+    await expect(expensesTable.add({ ...usd, fxRate: 0 }, 'r1', STAMP)).rejects.toBeInstanceOf(InputError)
+    await expect(expensesTable.add({ ...usd, originalCurrency: null }, 'r1', STAMP)).rejects.toBeInstanceOf(InputError)
+    expect(calls('insert')).toHaveLength(0)
   })
 })

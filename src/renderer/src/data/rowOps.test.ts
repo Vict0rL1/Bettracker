@@ -20,7 +20,7 @@ const ids = (): (() => string) & { made: number } => {
 }
 
 const coffee: ExpenseInput = { date: '2026-11-17', amount: 4.499, cardId: CARD.toUpperCase(), merchant: '  Café   Central ', category: 'coffee' }
-const cleanCoffee = { date: '2026-11-17', amount: 4.5, cardId: CARD, merchant: 'Café Central', category: 'coffee', note: '', source: 'manual' }
+const cleanCoffee = { date: '2026-11-17', amount: 4.5, originalAmount: null, originalCurrency: null, fxRate: null, cardId: CARD, merchant: 'Café Central', category: 'coffee', note: '', source: 'manual' }
 
 describe('addOp — one add', () => {
   it('queues the clean input under a new id, stamped now', () => {
@@ -65,7 +65,7 @@ describe('addManyOps — the rows of a scan', () => {
 
 /** Each table with a row that sets every field away from its default, so a field lost on the way shows. */
 const ROWS: [string, RowTableSpec<RowBase, unknown>, RowBase][] = [
-  ['expenses', ROW_SPECS[0] as unknown as RowTableSpec<RowBase, unknown>, { id: 'e1', date: '2026-11-05', amount: -12.5, cardId: CARD, merchant: 'Café Central', category: 'food', note: 'with a croissant', source: 'ai', createdAt: T1, updatedAt: T2 } as RowBase],
+  ['expenses', ROW_SPECS[0] as unknown as RowTableSpec<RowBase, unknown>, { id: 'e1', date: '2026-11-05', amount: -12.5, originalAmount: -8.91, originalCurrency: 'USD', fxRate: 1.40291807, cardId: CARD, merchant: 'Café Central', category: 'food', note: 'with a croissant', source: 'ai', createdAt: T1, updatedAt: T2 } as RowBase],
   ['expense-cards', ROW_SPECS[1] as unknown as RowTableSpec<RowBase, unknown>, { id: 'c1', name: 'Visa Oro', last4: '1234', kind: 'debit', archived: true, createdAt: T1, updatedAt: T2 } as RowBase],
   ['expense-budgets', ROW_SPECS[2] as unknown as RowTableSpec<RowBase, unknown>, { id: 'b1', scope: 'card', target: CARD, monthlyLimit: 250.5, createdAt: T1, updatedAt: T2 } as RowBase]
 ]

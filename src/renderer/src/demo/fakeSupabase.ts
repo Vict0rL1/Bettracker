@@ -90,6 +90,13 @@ export interface FakeSupabaseConfig {
  *                    settings row has that column only with it. Tombstones
  *                    of those three tables (`expenses:<id>`,
  *                    `expense-cards:<id>`, `expense-budgets:<id>`) need it;
+ *  - `e2e:migrated-009`  unset = the database is missing migration 009 (an
+ *                    expense paid in another currency): the expenses table
+ *                    has no `original_amount`, `original_currency` or
+ *                    `fx_rate`. Reads of it answer rows without those keys,
+ *                    and an insert or update that names any of them is
+ *                    refused (PGRST204, naming the first), whatever its
+ *                    value; deletes go through. It needs 008;
  *  - `e2e:lose-answers`  that many more write answers are lost: the write
  *                    lands, and the app hears a failed fetch.
  * A row written without `updated_at` gets the time it was answered, as the
@@ -204,6 +211,17 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   const NO_MOVES_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
   const noTable = (t: string) => ({ message: `Could not find the table 'public.${t}' in the schema cache`, code: 'PGRST205' })
   const NO_CURRENCY_COLUMN = { message: "Could not find the 'expense_currency' column of 'user_settings' in the schema cache", code: 'PGRST204' }
+  // Migration 009's columns of the expenses table.
+  const ORIGINAL_COLUMNS = ['original_amount', 'original_currency', 'fx_rate']
+  const noColumn = (column: string, t: string) => ({ message: `Could not find the '${column}' column of '${t}' in the schema cache`, code: 'PGRST204' })
+  /** Before 009 the expenses have no such columns: rows are answered without those keys. */
+  const before009 = (name: string): boolean => name === 'expenses' && !flag('migrated-009')
+  const shown = (name: string, row: Row): Row => {
+    if (!before009(name)) return row
+    const out: Row = {}
+    for (const k of Object.keys(row)) if (!ORIGINAL_COLUMNS.includes(k)) out[k] = row[k]
+    return out
+  }
   const stamp = (row: Row): Row => ({ created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...row })
   const duplicate = (constraint: string) => ({ message: `duplicate key value violates unique constraint "${constraint}"`, code: '23505' })
   const unmodelled = (what: string) => ({ message: `fake Supabase: ${what} is not modelled`, code: 'FAKE' })
@@ -278,6 +296,13 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
 
   // The bets and the deposits and withdrawals answer the same requests.
   function table(name: string, constraint: string, q: Query): Answer {
+    const out = tableAnswer(name, constraint, q)
+    if (!before009(name) || out.data === null || out.data === undefined) return out
+    // The rows as a database without 009 holds them.
+    return { ...out, data: Array.isArray(out.data) ? (out.data as Row[]).map((r) => shown(name, r)) : shown(name, out.data as Row) }
+  }
+
+  function tableAnswer(name: string, constraint: string, q: Query): Answer {
     const all = read<Row[]>(name, [])
     if (q.action === 'select') {
       if (q.eq.id !== undefined) return { data: all.find((r) => r.id === q.eq.id) ?? null, error: null }
@@ -298,6 +323,11 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       return { data: null, error: null, count: all.length - kept.length }
     }
     if (name === 'rows' && !migrated()) return { data: null, error: NO_COLUMN }
+    // Before 009, a write that names one of its columns is refused whatever the value (PostgREST checks the names first).
+    if (before009(name) && (q.action === 'insert' || q.action === 'update') && typeof q.payload === 'object' && q.payload !== null) {
+      const named = ORIGINAL_COLUMNS.find((c) => c in (q.payload as Row))
+      if (named) return { data: null, error: noColumn(named, 'expenses') }
+    }
     if (q.action === 'insert') {
       const payload = q.payload as Row
       if (all.some((r) => r.id === payload.id)) return { data: null, error: duplicate(constraint) }
