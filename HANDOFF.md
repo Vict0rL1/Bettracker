@@ -215,6 +215,17 @@ Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
+### Gastos (en curso, noviembre 2026)
+
+Pestaña de gastos del día a día con tarjetas, presupuestos y lectura de
+recibos con IA, en cinco etapas en esta rama. Hecha la **etapa 1**: la
+migración 008 (no aplicada en ningún sitio), la sincronización de sus tres
+tablas y la moneda de los gastos como ajuste, todavía sin interfaz. **No
+publicar ninguna etapa suelta antes de la 4:** hasta entonces «Descargar
+copia» ya espera a que carguen gastos, tarjetas y presupuestos (en un
+dispositivo recién actualizado y sin conexión queda desactivado), pero la
+copia aún no los incluye.
+
 ### Rediseño visual «Graphite Ledger» (noviembre 2026)
 
 Detalle en `docs/design-2026-11.md`. En corto:

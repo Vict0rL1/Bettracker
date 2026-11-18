@@ -228,7 +228,7 @@ export type SettingsAnswer = { stop: 'saved'; row: Settings } | { stop: 'conflic
  * bets. Returns null when nothing was queued. Whatever the answer, it only
  * settles the patch that went: an edit made while it was out stays pending.
  * A missing column holds the whole patch as 'behind'; a successful read does
- * not clear that, see useSettings.refresh.
+ * not clear that (see settingsReadClears).
  */
 export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushResult | null> {
   const p = await h.pending()
@@ -248,6 +248,20 @@ export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushRe
   await h.answered?.(p, out)
   await h.settle(p)
   return out
+}
+
+/**
+ * Whether a read of the settings row that went through ends what holds the
+ * patch back (see useSettings.refresh). The table is there, so it does,
+ * except for the currency column of 008, the first one added after 004: a
+ * read of the table doesn't add it, so a patch that names the currency still
+ * can't go, and clearing would say so again on every resume. A row without
+ * the column says it is missing; no row says nothing either way (null), and
+ * that patch keeps waiting until its own write goes through (the 20 s timer
+ * keeps pushing it).
+ */
+export function settingsReadClears(hasCurrencyColumn: boolean | null, pending: PendingSettings | null): boolean {
+  return hasCurrencyColumn === true || pending?.patch.expenseCurrency === undefined
 }
 
 /**
@@ -370,6 +384,39 @@ export function migrationNotice(): MigrationNotice {
     },
     clear() {
       active = false
+    }
+  }
+}
+
+/**
+ * One "database is behind" notice for several queues that wait on the same
+ * migration (the expenses, cards and budgets of 008): said when the first of
+ * them finds it missing, and not again until every queue that found it has
+ * ended its own episode (a request of it that went through, or its queue
+ * emptying). One queue ending its episode says nothing about another's: if
+ * it cleared the notice, that other queue's next retry would say it again.
+ */
+export interface SharedMigrationNotice {
+  readonly active: boolean
+  /** `who` (a queue's name) found the migration missing: true only when none had (say it then). */
+  found: (who: string) => boolean
+  /** `who`'s episode ended; the notice ends with the last one. */
+  clear: (who: string) => void
+}
+
+export function sharedMigrationNotice(): SharedMigrationNotice {
+  const waiting = new Set<string>()
+  return {
+    get active() {
+      return waiting.size > 0
+    },
+    found(who) {
+      const first = waiting.size === 0
+      waiting.add(who)
+      return first
+    },
+    clear(who) {
+      waiting.delete(who)
     }
   }
 }

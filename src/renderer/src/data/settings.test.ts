@@ -78,13 +78,13 @@ describe('getSettings', () => {
 })
 
 describe('getSettingsRead', () => {
-  it('says whether the table has the currency column: a row without the key has not, one with it or no row at all counts as there', async () => {
+  it('says whether the table has the currency column: a row without the key has not, one with it has, no row says nothing (null)', async () => {
     state.replies = [{ data: ROW, error: null }]
     expect(await getSettingsRead()).toMatchObject({ hasCurrencyColumn: false, settings: { oddsFormat: 'decimal' } })
     state.replies = [{ data: { ...ROW, expense_currency: 'MXN' }, error: null }]
     expect(await getSettingsRead()).toMatchObject({ hasCurrencyColumn: true, settings: { expenseCurrency: 'MXN' } })
     state.replies = [{ data: null, error: null }]
-    expect(await getSettingsRead()).toEqual({ settings: null, hasCurrencyColumn: true })
+    expect(await getSettingsRead()).toEqual({ settings: null, hasCurrencyColumn: null })
   })
 })
 

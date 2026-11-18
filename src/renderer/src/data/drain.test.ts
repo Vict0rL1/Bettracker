@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BankrollMove, Bet, MoveInput, Settings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { bet } from '../test-utils'
-import { afterFailedRead, combinedStatus, confirmedLog, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, syncStatus, type DrainHooks } from './drain'
+import { afterFailedRead, combinedStatus, confirmedLog, drainOutbox, foldApplied, migrationNotice, pushSettings, retryPlan, settingsReadClears, sharedMigrationNotice, syncStatus, type DrainHooks } from './drain'
 import { describeError, MigrationNeededError, SignedOutError } from './errors'
 import { afterSettingsAnswer, applyMoveOutbox, applyOutbox, enqueueOp, insertStamp, reconcileMove, requeueRefused, type MoveOp, type PendingOp, type PendingSettings } from './offline'
 
@@ -455,6 +455,57 @@ describe('migrationNotice — the hint once per episode', () => {
     n.clear() // a request went through, or the queue emptied
     expect(n.active).toBe(false)
     expect(n.found()).toBe(true)
+  })
+})
+
+describe('sharedMigrationNotice — one hint for the three tables of 008', () => {
+  it('is said by the first table to find 008 missing, and not by the others, nor on their retries', () => {
+    const n = sharedMigrationNotice()
+    expect(n.active).toBe(false)
+    expect(n.found('expenses')).toBe(true)
+    expect(n.found('expense-budgets')).toBe(false)
+    expect(n.found('expenses')).toBe(false) // a retry
+    expect(n.found('expense-budgets')).toBe(false) // a resume
+    expect(n.active).toBe(true)
+  })
+
+  it('one table ending its episode (its queue emptied) leaves the others’: their next retry says nothing', () => {
+    const n = sharedMigrationNotice()
+    n.found('expenses')
+    n.found('expense-cards')
+    // The queued expense was deleted before it could go: its queue drains empty.
+    n.clear('expenses')
+    expect(n.active).toBe(true)
+    expect(n.found('expense-cards')).toBe(false)
+    // A table that never found it ending nothing changes nothing either.
+    n.clear('expense-budgets')
+    expect(n.found('expense-cards')).toBe(false)
+  })
+
+  it('ends with the last table’s episode; a later miss is a new episode, said again', () => {
+    const n = sharedMigrationNotice()
+    n.found('expenses')
+    n.found('expense-cards')
+    n.clear('expense-cards')
+    n.clear('expenses')
+    expect(n.active).toBe(false)
+    expect(n.found('expense-cards')).toBe(true)
+  })
+})
+
+describe('settingsReadClears — a read of the settings row and the currency column of 008', () => {
+  const pending = (patch: PendingSettings['patch']): PendingSettings => ({ patch, editedAt: '2026-11-18T10:00:00.000Z' })
+
+  it('holds a patch that names the currency while the column is missing, or while no row says either way', () => {
+    expect(settingsReadClears(false, pending({ expenseCurrency: 'EUR' }))).toBe(false)
+    expect(settingsReadClears(null, pending({ expenseCurrency: 'EUR', oddsFormat: 'decimal' }))).toBe(false)
+  })
+
+  it('clears for any other patch, for none, and once the column is there', () => {
+    expect(settingsReadClears(false, pending({ oddsFormat: 'decimal' }))).toBe(true)
+    expect(settingsReadClears(false, null)).toBe(true)
+    expect(settingsReadClears(null, null)).toBe(true)
+    expect(settingsReadClears(true, pending({ expenseCurrency: 'EUR' }))).toBe(true)
   })
 })
 

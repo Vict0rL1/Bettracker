@@ -12,6 +12,17 @@ const bets = [bet({ id: id(1), date: '2026-08-01', amount: 20, stake: 10, odds: 
 const backup = makeBackup(bets, [move(1, 500)], settings, { id: ME, email: 'me@example.com' }, new Date('2026-10-20T09:00:00Z'))
 const text = JSON.stringify(backup)
 
+describe('makeBackup', () => {
+  // S1 of the expenses: the currency joins the file together with the
+  // expenses themselves (spec §7.1, S4). S4: flip this to `toBe('EUR')` when
+  // makeBackup writes the expenses, and drop the strip in makeBackup.
+  it('leaves the expenses’ currency out until the file holds the expenses too', () => {
+    const made = makeBackup(bets, [], { ...settings, expenseCurrency: 'EUR' }, { id: ME, email: null })
+    expect('expenseCurrency' in made.settings).toBe(false)
+    expect(made.settings).toEqual(backup.settings)
+  })
+})
+
 describe('readBackup', () => {
   it('reads back exactly what was written: bets, moves, settings, version', () => {
     const read = readBackup(text)

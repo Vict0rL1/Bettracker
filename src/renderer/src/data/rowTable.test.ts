@@ -193,6 +193,12 @@ describe.each(FIXTURES.map((f) => [f.pg, f] as const))('row table: %s', (pg, f) 
       await expect(t.add(f.input, 'r1', STAMP)).rejects.toThrow(/upstream timeout/)
     })
 
+    it('throws when the update that applies this later add fails (tried again later)', async () => {
+      state.replies = [{ data: null, error: DUP }, { data: f.row({ updated_at: OLD }), error: null }, { data: null, error: { message: 'upstream timeout', code: '57014' }, status: 504 }]
+      await expect(t.add(f.input, 'r1', STAMP)).rejects.toThrow(/upstream timeout/)
+      expect(calls('update')).toHaveLength(1)
+    })
+
     it('turns a missing table into the migration hint', async () => {
       state.replies = [{ data: null, error: { message: `Could not find the table 'public.${pg}' in the schema cache`, code: 'PGRST205' } }]
       await expect(t.add(f.input, 'r1', STAMP)).rejects.toBeInstanceOf(MigrationNeededError)
@@ -233,6 +239,16 @@ describe.each(FIXTURES.map((f) => [f.pg, f] as const))('row table: %s', (pg, f) 
       expect(await t.remove('r1')).toBeNull()
       expect(call('delete')?.args).toEqual([{ count: 'exact' }])
       expect(calls('eq').map((c) => c.args)).toEqual([['id', 'r1']])
+    })
+
+    it('throws when the delete fails', async () => {
+      state.replies = [{ data: null, error: { message: 'upstream timeout', code: '57014' }, status: 504 }]
+      await expect(t.remove('r1')).rejects.toThrow(/upstream timeout/)
+    })
+
+    it('with a stamp, throws when the row can’t be read back after nothing was deleted', async () => {
+      state.replies = [{ data: null, error: null, count: 0 }, { data: null, error: { message: 'upstream timeout', code: '57014' }, status: 504 }]
+      await expect(t.remove('r1', STAMP)).rejects.toThrow(/upstream timeout/)
     })
 
     it('with a stamp, only the row that still carries it; else the row as it is now', async () => {

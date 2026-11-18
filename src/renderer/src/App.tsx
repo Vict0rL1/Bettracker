@@ -21,7 +21,7 @@ import Login from './auth/Login'
 import NewPassword from './auth/NewPassword'
 import { useAuth } from './auth/AuthProvider'
 import { authErrorKey } from './auth/authErrors'
-import { combinedStatus, migrationNotice } from './data/drain'
+import { combinedStatus, sharedMigrationNotice } from './data/drain'
 import { classifySyncError } from './data/errors'
 import { StorageWriteError } from './data/store'
 import { hasStoredSession } from './lib/supabase'
@@ -208,7 +208,7 @@ export default function App() {
   // Everyday expenses, their cards and monthly budgets (migration 008), each
   // synced like the moves. One "database is behind" notice for the three
   // tables, which arrive together with 008.
-  const rowNotice = useMemo(() => migrationNotice(), [activeUserId])
+  const rowNotice = useMemo(() => sharedMigrationNotice(), [activeUserId])
   const rowOpts = { userId: activeUserId, canSync: Boolean(session), onError: showError, onNotice: showNotice, notice: rowNotice }
   const expenses = useRowSync({ table: expensesTable, ...rowOpts })
   const cards = useRowSync({ table: cardsTable, ...rowOpts })

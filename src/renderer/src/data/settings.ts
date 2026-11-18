@@ -54,16 +54,18 @@ function toRowPatch(patch: SettingsPatch): Record<string, unknown> {
 
 /**
  * This user's row (null when they have never changed a setting), and whether
- * the table has the currency column of migration 008. A row without the key
- * says the column is missing; no row says nothing, so it counts as there.
+ * the table has the currency column of migration 008: a row with the key
+ * says it has (true), one without it says it hasn't (false), and no row says
+ * nothing either way (null; see settingsReadClears in drain.ts).
  */
-export async function getSettingsRead(asUser?: string): Promise<{ settings: Settings | null; hasCurrencyColumn: boolean }> {
+export async function getSettingsRead(asUser?: string): Promise<{ settings: Settings | null; hasCurrencyColumn: boolean | null }> {
   // Without a session no row would come back, and the defaults would replace
   // this user's settings on the device.
   await signedInUserId(asUser)
   const { data, error, status } = await supabase.from(TABLE).select('*').maybeSingle()
   if (error) throw describeError(error, status)
-  return { settings: data ? toSettings(data as Row) : null, hasCurrencyColumn: data === null || data === undefined || 'expense_currency' in (data as object) }
+  if (!data) return { settings: null, hasCurrencyColumn: null }
+  return { settings: toSettings(data as Row), hasCurrencyColumn: 'expense_currency' in (data as object) }
 }
 
 /** This user's row, or null when they have never changed a setting. */

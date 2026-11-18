@@ -185,3 +185,17 @@ describe('expenses order', () => {
     expect(sortRows(EXPENSES_SPEC, rows).map((r) => r.id)).toEqual(['c', 'd', 'b', 'a'])
   })
 })
+
+describe('cards cache', () => {
+  it('reads a cached last 4 that is not four digits as none, keeping the card', () => {
+    const card = { id: 'c', name: 'Visa', kind: 'debit', archived: false, createdAt: at(1), updatedAt: at(1) }
+    const cached = [{ ...card, last4: '12a4' }, { ...card, id: 'd', last4: '12345' }, { ...card, id: 'e', last4: 1234 }, { ...card, id: 'f', last4: '0042' }]
+    localStorage.setItem(rowKeys('u1', 'expense-cards').cache, JSON.stringify(cached))
+    expect(loadRowCache('u1', CARDS_SPEC)?.map((c) => [c.id, c.last4])).toEqual([
+      ['c', ''],
+      ['d', ''],
+      ['e', ''],
+      ['f', '0042']
+    ])
+  })
+})

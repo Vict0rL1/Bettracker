@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { newId } from '../lib/uuid'
 import { MAX_READS, REREAD_MS, sharedLog } from './confirmed'
-import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type MigrationNotice, type SyncStatus } from './drain'
+import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, sharedMigrationNotice, syncStatus, type DrainResult, type SharedMigrationNotice, type SyncStatus } from './drain'
 import { SignedOutError } from './errors'
 import { oneAtATime } from './oneAtATime'
-import { confirmedKey, readdStamp, rowKeys, writable, type PendingOp, type Refused } from './offline'
+import { confirmedKey, rowKeys, writable, type PendingOp, type Refused } from './offline'
+import { addManyOps, addOp, answerNotice, restoreOp } from './rowOps'
 import { applyRowOutbox, loadRowCache, loadRowRefused, readRowOutbox, reconcileRow, saveRowCache, saveRowOutbox, saveRowRefused, type RowBase } from './rowStorage'
 import type { RowTable } from './rowTable'
 import { useOpQueue } from './useOpQueue'
@@ -16,7 +17,7 @@ export interface RowSyncOptions<T extends RowBase, I> {
   onError: (err: unknown) => void
   onNotice?: (code: 'conflict') => void
   /** The "database is behind" notice, shared by the three hooks so 008 missing is said once (App creates one per user). */
-  notice?: MigrationNotice
+  notice?: SharedMigrationNotice
 }
 
 export interface RowSync<T, I> {
@@ -51,7 +52,7 @@ export interface RowSync<T, I> {
   update: (id: string, input: I) => Promise<boolean>
   remove: (id: string) => Promise<boolean>
   removeMany: (ids: readonly string[]) => Promise<boolean>
-  /** Undo of a delete: an add with the same id stamped just after it (readdStamp). */
+  /** Undo of a delete: an add with the same id stamped just after it (readdStamp), keeping its createdAt (see restoreOp). */
   restore: (row: T) => Promise<boolean>
   retryRefused: () => Promise<boolean>
   discardRefused: () => Promise<void>
@@ -106,14 +107,12 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
   // As useBetSync: what a sync of an earlier user brings back is dropped.
   const userRef = useRef(userId)
   userRef.current = userId
-  // The migration notice: App's, shared by the three tables, or this hook's own.
-  const ownNoticeRef = useRef(migrationNotice())
-  const noticeRef = useRef<MigrationNotice>(o.notice ?? ownNoticeRef.current)
+  // The migration notice: App's, shared by the three tables, or this hook's
+  // own. This table's episode is its own in it (see sharedMigrationNotice):
+  // another table's queue emptying says nothing about this one's.
+  const ownNoticeRef = useRef(sharedMigrationNotice())
+  const noticeRef = useRef<SharedMigrationNotice>(o.notice ?? ownNoticeRef.current)
   noticeRef.current = o.notice ?? ownNoticeRef.current
-  // This hook's write found the table missing and that episode has not ended:
-  // only then may it end the (shared) episode. Another table's empty queue
-  // draining says nothing about this one's, and would have it said again.
-  const episodeRef = useRef(false)
   const pausedNoticeRef = useRef(migrationNotice())
   const retryNoticeRef = useRef(migrationNotice())
   const backoffRef = useRef(backoff())
@@ -168,14 +167,18 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
 
   // A write found the table missing. The hint is shown once, when that is
   // first found (for the three tables together), not on every retry or
-  // resume; a write of this table that goes through, or its queue emptying,
-  // ends its episode. Reads never start one.
-  const setBehind = useCallback((next: boolean, err?: unknown) => {
-    if (next && noticeRef.current.found()) onErrorRef.current(err)
-    if (!next && episodeRef.current) noticeRef.current.clear()
-    episodeRef.current = next
-    setBehindState(next)
-  }, [])
+  // resume; a request of this table that goes through, or its queue
+  // emptying, ends its episode, and the hint's once the last one has ended.
+  // Reads never start one.
+  const name = spec.name
+  const setBehind = useCallback(
+    (next: boolean, err?: unknown) => {
+      if (next && noticeRef.current.found(name)) onErrorRef.current(err)
+      if (!next) noticeRef.current.clear(name)
+      setBehindState(next)
+    },
+    [name]
+  )
 
   // As useBetSync: said once per episode; a lost session has its own notice.
   const setPaused = useCallback((next: boolean, err?: unknown) => {
@@ -280,13 +283,9 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
         send: (op) => table.send(op, userId),
         applied: async (op, row, superseded) => {
           if (userRef.current !== userId) return
-          // A refused edit lost to a newer one elsewhere (or the row is gone),
-          // unless a later change of this device to the same row is still
-          // queued (see useBetSync).
-          if (op.kind === 'update' && row === null && !superseded) onNoticeRef.current?.('conflict')
-          // A budget set again but let go by 007 (its row was cleared later
-          // elsewhere, or a skewed clock): said, never silent.
-          if (spec.stableIds && op.kind === 'add' && row === null) onNoticeRef.current?.('conflict')
+          // An edit that lost, or a budget set again but let go by 007 (see answerNotice).
+          const notice = answerNotice(op, row, superseded, spec.stableIds === true)
+          if (notice) onNoticeRef.current?.(notice)
           // A request went through: the table is there. The banner and the
           // editors waiting on 008 clear at once.
           proven()
@@ -356,10 +355,9 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
   useEffect(() => {
     serverRef.current = null
     tableMissingRef.current = false
-    episodeRef.current = false
     setServerState(null)
     setOffline(false)
-    noticeRef.current.clear()
+    noticeRef.current.clear(spec.name)
     pausedNoticeRef.current.clear()
     retryNoticeRef.current.clear()
     backoffRef.current.reset()
@@ -462,11 +460,8 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
 
   const add = useCallback(
     async (input: I, opts?: { id?: string; after?: string }): Promise<{ saved: boolean; id: string }> => {
-      const clean = spec.normalize(input) // throws on bad input, before anything is queued
-      const id = opts?.id ?? newId()
-      const queuedAt = opts?.after ? readdStamp([{ updatedAt: opts.after }]) : new Date().toISOString()
-      const saved = await mutate({ opId: newId(), kind: 'add', id, input: clean, queuedAt })
-      return { saved, id }
+      const op = addOp(spec.normalize, input, opts ?? {}, newId) // throws on bad input, before anything is queued
+      return { saved: await mutate(op), id: op.id }
     },
     [spec, mutate]
   )
@@ -474,11 +469,8 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
   const addMany = useCallback(
     async (inputs: readonly I[]): Promise<{ saved: boolean; ids: string[] }> => {
       // All checked before any is queued, one stamp, one queue write.
-      const stamp = new Date().toISOString()
-      const clean = inputs.map((i) => spec.normalize(i))
-      const ids = clean.map(() => newId())
-      const saved = await mutateMany(clean.map((input, i) => ({ opId: newId(), kind: 'add', id: ids[i], input, queuedAt: stamp })))
-      return { saved, ids }
+      const ops = addManyOps(spec.normalize, inputs, newId)
+      return { saved: await mutateMany(ops), ids: ops.map((op) => op.id) }
     },
     [spec, mutateMany]
   )
@@ -498,13 +490,8 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
     [mutateMany]
   )
 
-  const restore = useCallback(
-    async (row: T): Promise<boolean> => {
-      const clean = spec.normalize(spec.toInput(row))
-      return mutate({ opId: newId(), kind: 'add', id: row.id, input: clean, queuedAt: readdStamp([row]) })
-    },
-    [spec, mutate]
-  )
+  // Async, so bad input rejects the promise rather than throwing (as add does).
+  const restore = useCallback(async (row: T): Promise<boolean> => mutate(restoreOp(spec, row, newId)), [spec, mutate])
 
   const retryRefused = useCallback(async (): Promise<boolean> => {
     const saved = await retryQueued()
