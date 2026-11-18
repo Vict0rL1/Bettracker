@@ -29,7 +29,7 @@ vi.mock('../lib/supabase', () => {
   }
 })
 
-import { getSettings, saveSettings } from './settings'
+import { getSettings, getSettingsRead, saveSettings } from './settings'
 import { SignedOutError } from './errors'
 
 const calls = (method: string) => state.calls.filter((c) => c.method === method)
@@ -52,8 +52,18 @@ describe('getSettings', () => {
       startingBankroll: null,
       defaultStake: 10,
       lossLimit: null,
+      expenseCurrency: 'USD',
       updatedAt: 'E'
     })
+  })
+
+  it('reads the expenses currency (migration 008), and dollars for a missing or junk one', async () => {
+    state.replies = [{ data: { ...ROW, expense_currency: 'EUR' }, error: null }]
+    expect((await getSettings())?.expenseCurrency).toBe('EUR')
+    for (const junk of ['eur', 'EURO', null, 12]) {
+      state.replies = [{ data: { ...ROW, expense_currency: junk }, error: null }]
+      expect((await getSettings())?.expenseCurrency, String(junk)).toBe('USD')
+    }
   })
 
   it('is null for a user who never saved a setting', async () => {
@@ -64,6 +74,17 @@ describe('getSettings', () => {
   it('falls back to the default odds format on an unknown value', async () => {
     state.replies = [{ data: { ...ROW, odds_format: 'martian' }, error: null }]
     expect((await getSettings())?.oddsFormat).toBe('american')
+  })
+})
+
+describe('getSettingsRead', () => {
+  it('says whether the table has the currency column: a row without the key has not, one with it or no row at all counts as there', async () => {
+    state.replies = [{ data: ROW, error: null }]
+    expect(await getSettingsRead()).toMatchObject({ hasCurrencyColumn: false, settings: { oddsFormat: 'decimal' } })
+    state.replies = [{ data: { ...ROW, expense_currency: 'MXN' }, error: null }]
+    expect(await getSettingsRead()).toMatchObject({ hasCurrencyColumn: true, settings: { expenseCurrency: 'MXN' } })
+    state.replies = [{ data: null, error: null }]
+    expect(await getSettingsRead()).toEqual({ settings: null, hasCurrencyColumn: true })
   })
 })
 
@@ -111,6 +132,24 @@ describe('saveSettings — last write wins by edit time', () => {
     state.replies = [{ data: ROW, error: null }]
     await saveSettings({ unitSize: null, showUnits: false }, 'E')
     expect(calls('update')[0]?.args[0]).toEqual({ unit_size: null, show_units: false, updated_at: 'E' })
+  })
+
+  it('writes every field to its column, the expenses currency included', async () => {
+    state.replies = [{ data: ROW, error: null }]
+    await saveSettings({ expenseCurrency: 'EUR' }, 'E')
+    expect(calls('update')[0]?.args[0]).toEqual({ expense_currency: 'EUR', updated_at: 'E' })
+    state.calls = []
+    state.replies = [{ data: ROW, error: null }]
+    await saveSettings({ oddsFormat: 'fractional', unitSize: 5, showUnits: true, startingBankroll: 100, defaultStake: 0, lossLimit: 250 }, 'E')
+    expect(calls('update')[0]?.args[0]).toEqual({
+      odds_format: 'fractional',
+      unit_size: 5,
+      show_units: true,
+      starting_bankroll: 100,
+      default_stake: 0,
+      loss_limit: 250,
+      updated_at: 'E'
+    })
   })
 })
 

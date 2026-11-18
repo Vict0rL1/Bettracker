@@ -340,3 +340,125 @@ describe('fake Supabase: a server that misbehaves on purpose', () => {
     expect((await fake.auth.getSession()).data.session).toBeNull()
   })
 })
+
+describe('fake Supabase: the expenses, cards and budgets of migration 008', () => {
+  const TABLES = [
+    ['expenses', 'expenses'],
+    ['expense_cards', 'expense-cards'],
+    ['expense_budgets', 'expense-budgets']
+  ] as const
+  const at = '2026-11-01T10:00:00.000Z'
+  const later = '2026-11-01T11:00:00.000Z'
+  const all = (prefix: string, name: string) => JSON.parse(localStorage.getItem(prefix + name) ?? '[]') as Record<string, unknown>[]
+
+  it('without 008, every request for them is refused as a missing table, reads, writes and deletes', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:migrated-007', '1')
+    for (const [table] of TABLES) {
+      const read = await fake.from(table).select('*', { count: 'exact' }).range(0, 999)
+      expect(read.error, table).toEqual({ message: `Could not find the table 'public.${table}' in the schema cache`, code: 'PGRST205' })
+      expect(read.status).toBe(404)
+      expect((await fake.from(table).insert({ id: 'x', updated_at: at }).select()).error?.code).toBe('PGRST205')
+      expect((await fake.from(table).update({ note: 'x' }).eq('id', 'x').lte('updated_at', at)).error?.code).toBe('PGRST205')
+      expect((await fake.from(table).delete().eq('id', 'x')).error?.code).toBe('PGRST205')
+    }
+    expect(localStorage.getItem('e2e:expenses')).toBeNull()
+  })
+
+  it('a table it does not know is refused, and never answered as the bets', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:rows', JSON.stringify([{ id: 'a' }]))
+    expect((await fake.from('nonsense').select()).error).toEqual({ message: "Could not find the table 'public.nonsense' in the schema cache", code: 'PGRST205' })
+    expect((await fake.from('nonsense').insert({ id: 'b' })).error?.code).toBe('PGRST205')
+    expect(all('e2e:', 'rows')).toEqual([{ id: 'a' }])
+  })
+
+  it('with 008, each is its own table: adds (keeping a given created_at), refuses a duplicate id, edits under the conflict rule, deletes', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:migrated-008', '1')
+    for (const [table, name] of TABLES) {
+      const added = await fake.from(table).insert({ id: 'a', note: 'one', created_at: '2026-10-31T09:00:00.000Z', updated_at: at }).select()
+      expect(added.error, table).toBeNull()
+      expect(added.data).toMatchObject({ id: 'a', created_at: '2026-10-31T09:00:00.000Z', updated_at: at })
+      expect((await fake.from(table).insert({ id: 'a', updated_at: at })).error?.message).toBe(`duplicate key value violates unique constraint "${table}_pkey"`)
+      expect((await fake.from(table).update({ note: 'old' }).eq('id', 'a').lte('updated_at', '2026-10-01T00:00:00.000Z')).data).toBeNull()
+      expect((await fake.from(table).update({ note: 'new', updated_at: later }).eq('id', 'a').lte('updated_at', later)).data).toMatchObject({ note: 'new' })
+      expect(all('e2e:', name)).toHaveLength(1)
+      expect((await fake.from(table).delete().eq('id', 'a')).count).toBe(1)
+      expect(all('e2e:', name)).toEqual([])
+    }
+    // Nothing of theirs landed in the bets or the moves.
+    expect(localStorage.getItem('e2e:rows')).toBeNull()
+    expect(localStorage.getItem('e2e:moves')).toBeNull()
+  })
+
+  it('keeps one budget per scope and target, and finds it by them', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:migrated-008', '1')
+    await fake.from('expense_budgets').insert({ id: 'b1', scope: 'total', target: '', monthly_limit: 100, updated_at: at })
+    const again = await fake.from('expense_budgets').insert({ id: 'b2', scope: 'total', target: '', monthly_limit: 200, updated_at: later })
+    expect(again.error).toEqual({ message: 'duplicate key value violates unique constraint "expense_budgets_one_per_target"', code: '23505' })
+    expect((await fake.from('expense_budgets').select('*').eq('scope', 'total').eq('target', '').maybeSingle()).data).toMatchObject({ id: 'b1' })
+    expect((await fake.from('expense_budgets').select('*').eq('scope', 'category').eq('target', 'coffee').maybeSingle()).data).toBeNull()
+  })
+
+  it('remembers their deleted rows only with 008 (007 alone covers the bets and moves)', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:migrated-007', '1')
+    localStorage.setItem('e2e:migrated-008', '1')
+    await fake.from('expenses').insert({ id: 'e', updated_at: at })
+    await fake.from('expenses').delete().eq('id', 'e')
+    expect(JSON.parse(localStorage.getItem('e2e:tombstones') ?? '{}')).toEqual({ 'expenses:e': at })
+    expect((await fake.from('expenses').insert({ id: 'e', updated_at: at }).select()).data).toEqual([])
+    expect((await fake.from('expenses').insert({ id: 'e', updated_at: later }).select()).data).toMatchObject({ id: 'e' })
+
+    // 007 without 008 can't be (008 needs 007), but 008's stones never hang on 007's flag.
+    localStorage.clear()
+    const other = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:migrated-008', '1')
+    await other.from('expense_cards').insert({ id: 'c', name: 'Visa', updated_at: at })
+    await other.from('expense_cards').delete().eq('id', 'c')
+    expect(JSON.parse(localStorage.getItem('e2e:tombstones') ?? '{}')).toEqual({ 'expense-cards:c': at })
+  })
+
+  it('has the currency column of the settings only with 008', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    const noColumn = { message: "Could not find the 'expense_currency' column of 'user_settings' in the schema cache", code: 'PGRST204' }
+    // Without 008: a write that names it is refused (the whole write), a row has no such key.
+    expect((await fake.from('user_settings').insert({ user_id: 'u1', expense_currency: 'EUR', updated_at: at })).error).toEqual(noColumn)
+    const first = await fake.from('user_settings').insert({ user_id: 'u1', unit_size: 10, updated_at: at })
+    expect(first.data).not.toHaveProperty('expense_currency')
+    const refused = await fake.from('user_settings').update({ expense_currency: 'EUR', updated_at: later }).eq('user_id', 'u1').lte('updated_at', later)
+    expect(refused).toMatchObject({ error: noColumn, status: 400 })
+    expect((await fake.from('user_settings').select().maybeSingle()).data).not.toHaveProperty('expense_currency')
+    // With 008: dollars by default, then whatever is set.
+    localStorage.setItem('e2e:migrated-008', '1')
+    expect((await fake.from('user_settings').select().maybeSingle()).data).toMatchObject({ unit_size: 10, expense_currency: 'USD' })
+    expect((await fake.from('user_settings').update({ expense_currency: 'EUR', updated_at: later }).eq('user_id', 'u1').lte('updated_at', later)).data).toMatchObject({ expense_currency: 'EUR' })
+    expect((await fake.from('user_settings').select().maybeSingle()).data).toMatchObject({ expense_currency: 'EUR' })
+  })
+
+  it('gives a first settings row the dollars default only with 008', async () => {
+    const fake = install('demo:', true)
+    migrate('demo:')
+    localStorage.setItem('demo:migrated-008', '1')
+    expect((await fake.from('user_settings').insert({ user_id: 'u1', updated_at: at })).data).toMatchObject({ expense_currency: 'USD' })
+  })
+
+  it('loses the answer of a write to them as it does for the rest: the write lands', async () => {
+    const fake = install('e2e:', false)
+    migrate('e2e:')
+    localStorage.setItem('e2e:migrated-008', '1')
+    localStorage.setItem('e2e:lose-answers', '1')
+    expect((await fake.from('expenses').insert({ id: 'e', updated_at: at })).error?.message).toBe('TypeError: Failed to fetch')
+    expect(all('e2e:', 'expenses')).toMatchObject([{ id: 'e' }])
+    expect(localStorage.getItem('e2e:rows')).toBeNull()
+  })
+})

@@ -392,4 +392,334 @@ do $$ begin
   assert not exists (select 1 from public.deleted_rows where user_id = '00000000-0000-0000-0000-000000000004'), 'and no record of its rows is left';
 end $$;
 
+-- 11. Migration 008: everyday expenses. Cards, expenses and monthly budgets,
+-- written as the app writes them (the device's updated_at kept as sent), with
+-- the defaults an older or a minimal write gets, and the currency setting.
+insert into auth.users values ('00000000-0000-0000-0000-000000000005'), ('00000000-0000-0000-0000-000000000006'), ('00000000-0000-0000-0000-000000000007') on conflict do nothing;
+-- Session-local (pg_temp is never dumped): the statement must be refused with
+-- exactly that SQLSTATE. Raised outside the inner block, so an accepted
+-- statement is reported as accepted, not as "refused with P0001".
+create function pg_temp.refuses(stmt text, wanted text) returns void language plpgsql as $$
+declare ok boolean := false;
+begin
+  begin
+    execute stmt;
+    ok := true;
+  exception when others then
+    if sqlstate <> wanted then raise exception 'refused with % (wanted %): %', sqlstate, wanted, stmt; end if;
+  end;
+  -- Raised outside the inner block, so an accepted statement is reported as accepted, not as "refused with P0001".
+  if ok then raise exception 'accepted: %', stmt; end if;
+end $$;
+insert into public.expense_cards (id, user_id, name, last4, kind, created_at, updated_at) values
+  ('71000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000005', 'Visa', '1234', 'credit', '2026-11-01 09:00:00+00', '2026-11-01 09:00:00+00');
+insert into public.expense_cards (id, user_id, name) values
+  ('71000000-0000-4000-8000-000000000002', '00000000-0000-0000-0000-000000000005', 'Debit');
+insert into public.expenses (id, user_id, date, amount, card_id, merchant, category, note, source, updated_at) values
+  ('70000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000005', '2026-11-17', 4.50, '71000000-0000-4000-8000-000000000001', 'Café Central', 'coffee', 'with a croissant', 'ai', '2026-11-17 08:00:00+00'),
+  ('70000000-0000-4000-8000-000000000002', '00000000-0000-0000-0000-000000000005', '2026-11-17', -12.00, null, 'Shop', 'shopping', '', 'manual', '2026-11-17 09:00:00+00');
+insert into public.expenses (id, user_id, date, amount) values
+  ('70000000-0000-4000-8000-000000000003', '00000000-0000-0000-0000-000000000005', '2026-11-18', 0.005);
+insert into public.expense_budgets (id, user_id, scope, target, monthly_limit, updated_at) values
+  ('72000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000005', 'total', '', 500, '2026-11-01 10:00:00+00'),
+  ('72000000-0000-4000-8000-000000000002', '00000000-0000-0000-0000-000000000005', 'card', '71000000-0000-4000-8000-000000000001', 300, '2026-11-01 10:00:00+00'),
+  ('72000000-0000-4000-8000-000000000003', '00000000-0000-0000-0000-000000000005', 'category', 'coffee', 40.50, '2026-11-01 10:00:00+00');
+insert into public.user_settings (user_id) values ('00000000-0000-0000-0000-000000000005');
+do $$ begin
+  assert (select sum(amount) from public.expenses where id in ('70000000-0000-4000-8000-000000000001', '70000000-0000-4000-8000-000000000002')) = -7.50, 'a refund lowers the spending';
+  assert (select updated_at from public.expenses where id = '70000000-0000-4000-8000-000000000002') = '2026-11-17 09:00:00+00', 'the device''s updated_at is kept (expenses)';
+  assert (select updated_at from public.expense_cards where id = '71000000-0000-4000-8000-000000000001') = '2026-11-01 09:00:00+00', 'the device''s updated_at is kept (cards)';
+  assert (select created_at from public.expense_cards where id = '71000000-0000-4000-8000-000000000001') = '2026-11-01 09:00:00+00', 'the device''s created_at is kept (cards)';
+  assert (select updated_at from public.expense_budgets where id = '72000000-0000-4000-8000-000000000003') = '2026-11-01 10:00:00+00', 'the device''s updated_at is kept (budgets)';
+  assert (select monthly_limit from public.expense_budgets where id = '72000000-0000-4000-8000-000000000003') = 40.50, 'a budget keeps its cents';
+  assert (select source from public.expenses where id = '70000000-0000-4000-8000-000000000001') = 'ai', 'an expense read by AI says so';
+  assert (select card_id is null from public.expenses where id = '70000000-0000-4000-8000-000000000002'), 'an expense may have no card';
+  assert (select merchant = '' and category = 'other' and note = '' and source = 'manual' and card_id is null
+            from public.expenses where id = '70000000-0000-4000-8000-000000000003'), 'a minimal expense gets the defaults';
+  assert (select amount from public.expenses where id = '70000000-0000-4000-8000-000000000003') = 0.01, 'half a cent is a cent';
+  assert (select last4 = '' and kind = 'credit' and archived = false
+            from public.expense_cards where id = '71000000-0000-4000-8000-000000000002'), 'a minimal card gets the defaults';
+  assert (select expense_currency from public.user_settings where user_id = '00000000-0000-0000-0000-000000000005') = 'USD', 'expenses are in dollars until the user says otherwise';
+end $$;
+
+-- 11b. The constraints refuse what the app never sends.
+do $$ begin
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 0)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 0.004)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', -0.004)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 100000000.01)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', -100000000.01)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', null)$q$, '23502');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', null, 4)$q$, '23502');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, category) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 'fuel')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, source) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 'scan')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, merchant) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, repeat('m', 81))$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, note) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, repeat('n', 501))$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_cards (user_id, name) values ('00000000-0000-0000-0000-000000000005', '')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_cards (user_id, name) values ('00000000-0000-0000-0000-000000000005', ' Visa')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_cards (user_id, name) values ('00000000-0000-0000-0000-000000000005', repeat('c', 41))$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_cards (user_id, name, last4) values ('00000000-0000-0000-0000-000000000005', 'Visa', 'abcd')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_cards (user_id, name, last4) values ('00000000-0000-0000-0000-000000000005', 'Visa', '123')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_cards (user_id, name, kind) values ('00000000-0000-0000-0000-000000000005', 'Visa', 'cash')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000005', 'week', '', 10)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000005', 'total', 'x', 10)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000005', 'card', 'not-a-uuid', 10)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000005', 'category', 'fuel', 10)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000005', 'category', 'travel', 0)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expense_budgets (id, user_id, scope, target, monthly_limit) values ('72000000-0000-4000-8000-000000000099', '00000000-0000-0000-0000-000000000005', 'total', '', 10)$q$, '23505');
+  perform pg_temp.refuses($q$update public.user_settings set expense_currency = 'usd' where user_id = '00000000-0000-0000-0000-000000000005'$q$, '23514');
+  perform pg_temp.refuses($q$update public.user_settings set expense_currency = 'US' where user_id = '00000000-0000-0000-0000-000000000005'$q$, '23514');
+  perform pg_temp.refuses($q$update public.user_settings set expense_currency = 'EURO' where user_id = '00000000-0000-0000-0000-000000000005'$q$, '23514');
+end $$;
+
+-- 11c. The conflict rule the app sends with every edit, as for moves (8c): a
+-- later edit lands, a resend of it too, an earlier one doesn't.
+do $$
+declare n int;
+begin
+  update public.expenses set amount = 5.25, merchant = 'Café Central, edited', updated_at = '2026-11-17 12:00:00+00'
+   where id = '70000000-0000-4000-8000-000000000001' and updated_at <= '2026-11-17 12:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'a later expense edit applies';
+  update public.expenses set amount = 5.25, merchant = 'Café Central, edited', updated_at = '2026-11-17 12:00:00+00'
+   where id = '70000000-0000-4000-8000-000000000001' and updated_at <= '2026-11-17 12:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'the same expense edit sent again applies';
+  update public.expenses set amount = 9, merchant = 'stale', updated_at = '2026-11-17 11:00:00+00'
+   where id = '70000000-0000-4000-8000-000000000001' and updated_at <= '2026-11-17 11:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 0, 'an earlier expense edit is refused';
+  assert (select merchant from public.expenses where id = '70000000-0000-4000-8000-000000000001') = 'Café Central, edited', 'the later expense edit stands';
+  update public.expense_budgets set monthly_limit = 600, updated_at = '2026-11-02 10:00:00+00'
+   where id = '72000000-0000-4000-8000-000000000001' and updated_at <= '2026-11-02 10:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'a later budget edit applies';
+  update public.expense_budgets set monthly_limit = 50, updated_at = '2026-11-01 11:00:00+00'
+   where id = '72000000-0000-4000-8000-000000000001' and updated_at <= '2026-11-01 11:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 0, 'an earlier budget edit is refused';
+  assert (select monthly_limit from public.expense_budgets where id = '72000000-0000-4000-8000-000000000001') = 600, 'the later budget edit stands';
+end $$;
+
+-- 11d. Private and live like the moves: row-level security on, one policy per
+-- operation, broadcast by realtime, and only 007's two triggers (none touches
+-- updated_at). No foreign key but the owner's: an expense can reach the
+-- server before its card, so a card id that matches no card is accepted.
+do $$
+declare t text;
+begin
+  foreach t in array array['expense_cards', 'expenses', 'expense_budgets'] loop
+    assert (select relrowsecurity from pg_class where oid = ('public.' || t)::regclass), t || ' has row-level security';
+    assert (select count(*) from pg_policies where schemaname = 'public' and tablename = t) = 4, t || ': four policies, and no other';
+    assert exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t), t || ' is broadcast';
+    assert (select count(*) from pg_trigger where tgrelid = ('public.' || t)::regclass and not tgisinternal) = 2, t || ': exactly two triggers';
+    assert (select count(*) from pg_trigger where tgrelid = ('public.' || t)::regclass and not tgisinternal
+              and tgfoid in ('public.remember_deleted_row()'::regprocedure, 'public.skip_deleted_row()'::regprocedure)) = 2, t || ': the two are 007''s';
+    assert (select array_agg(conname::text) from pg_constraint where conrelid = ('public.' || t)::regclass and contype = 'f') = array[t || '_user_id_fkey'], t || ': no foreign key but the owner''s';
+  end loop;
+  assert to_regclass('public.expenses_user_date_idx') is not null, 'expenses are indexed by user and date';
+  assert to_regclass('public.expense_cards_user_idx') is not null, 'cards are indexed by user';
+  insert into public.expenses (id, user_id, date, amount, card_id) values
+    ('70000000-0000-4000-8000-000000000004', '00000000-0000-0000-0000-000000000005', '2026-11-17', 3, '79999999-0000-4000-8000-000000000001');
+  assert exists (select 1 from public.expenses where id = '70000000-0000-4000-8000-000000000004'), 'an expense whose card is not there yet is accepted';
+  delete from public.expenses where id = '70000000-0000-4000-8000-000000000004';
+end $$;
+
+-- 11e. ...and the policies hold for a signed-in user (…06): they see, change
+-- and remove only their own cards, expenses and budgets, and cannot file one
+-- under someone else. Rolled back.
+begin;
+set local role authenticated;
+set local request.jwt.claim.sub = '00000000-0000-0000-0000-000000000006';
+do $$
+declare n int;
+begin
+  -- expenses
+  assert (select count(*) from public.expenses) = 0, 'another user''s expenses are hidden';
+  insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000006', '2026-11-17', 4);
+  assert (select count(*) from public.expenses) = 1, 'a user sees their own expense';
+  update public.expenses set note = 'not mine' where id = '70000000-0000-4000-8000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s expense cannot be edited';
+  delete from public.expenses where id = '70000000-0000-4000-8000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s expense cannot be removed';
+  begin
+    insert into public.expenses (user_id, date, amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4);
+    raise exception 'an expense under someone else''s id was accepted';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.expenses set user_id = '00000000-0000-0000-0000-000000000005' where user_id = '00000000-0000-0000-0000-000000000006';
+    raise exception 'an expense was handed to someone else';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.expenses set user_id = '00000000-0000-0000-0000-000000000005';
+    raise exception 'an expense was handed to someone else (no where)';
+  exception when insufficient_privilege then null;
+  end;
+  update public.expenses set note = 'mine';
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered edit touches only the user''s own expenses';
+  delete from public.expenses;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered delete removes only the user''s own expenses';
+
+  -- cards
+  assert (select count(*) from public.expense_cards) = 0, 'another user''s cards are hidden';
+  insert into public.expense_cards (user_id, name) values ('00000000-0000-0000-0000-000000000006', 'Mine');
+  assert (select count(*) from public.expense_cards) = 1, 'a user sees their own card';
+  update public.expense_cards set name = 'Not mine' where id = '71000000-0000-4000-8000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s card cannot be edited';
+  delete from public.expense_cards where id = '71000000-0000-4000-8000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s card cannot be removed';
+  begin
+    insert into public.expense_cards (user_id, name) values ('00000000-0000-0000-0000-000000000005', 'Theirs');
+    raise exception 'a card under someone else''s id was accepted';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.expense_cards set user_id = '00000000-0000-0000-0000-000000000005' where user_id = '00000000-0000-0000-0000-000000000006';
+    raise exception 'a card was handed to someone else';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.expense_cards set user_id = '00000000-0000-0000-0000-000000000005';
+    raise exception 'a card was handed to someone else (no where)';
+  exception when insufficient_privilege then null;
+  end;
+  update public.expense_cards set name = 'Still mine';
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered edit touches only the user''s own cards';
+  delete from public.expense_cards;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered delete removes only the user''s own cards';
+
+  -- budgets
+  assert (select count(*) from public.expense_budgets) = 0, 'another user''s budgets are hidden';
+  insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000006', 'total', '', 100);
+  assert (select count(*) from public.expense_budgets) = 1, 'a user sees their own budget';
+  update public.expense_budgets set monthly_limit = 1 where id = '72000000-0000-4000-8000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s budget cannot be edited';
+  delete from public.expense_budgets where id = '72000000-0000-4000-8000-000000000001';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s budget cannot be removed';
+  begin
+    insert into public.expense_budgets (user_id, scope, target, monthly_limit) values ('00000000-0000-0000-0000-000000000005', 'category', 'travel', 10);
+    raise exception 'a budget under someone else''s id was accepted';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.expense_budgets set user_id = '00000000-0000-0000-0000-000000000005' where user_id = '00000000-0000-0000-0000-000000000006';
+    raise exception 'a budget was handed to someone else';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.expense_budgets set user_id = '00000000-0000-0000-0000-000000000005';
+    raise exception 'a budget was handed to someone else (no where)';
+  exception when insufficient_privilege then null;
+  end;
+  update public.expense_budgets set monthly_limit = 2;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered edit touches only the user''s own budgets';
+  delete from public.expense_budgets;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered delete removes only the user''s own budgets';
+end $$;
+rollback;
+do $$ begin
+  assert (select count(*) from public.expenses where user_id = '00000000-0000-0000-0000-000000000005') = 3, 'the other user left the expenses alone';
+  assert (select merchant from public.expenses where id = '70000000-0000-4000-8000-000000000001') = 'Café Central, edited', 'and their content';
+  assert (select count(*) from public.expense_cards where user_id = '00000000-0000-0000-0000-000000000005') = 2, 'the other user left the cards alone';
+  assert (select name from public.expense_cards where id = '71000000-0000-4000-8000-000000000001') = 'Visa', 'and their names';
+  assert (select count(*) from public.expense_budgets where user_id = '00000000-0000-0000-0000-000000000005') = 3, 'the other user left the budgets alone';
+  assert (select monthly_limit from public.expense_budgets where id = '72000000-0000-4000-8000-000000000001') = 600, 'and their limits';
+end $$;
+
+-- 11f. A deleted card, expense or budget stays deleted (007), as the
+-- signed-in user …05: the same insert sent again after its delete is let go,
+-- also with ON CONFLICT DO NOTHING and an older stamp; a re-add stamped
+-- later (an Undo) goes in. Rolled back.
+begin;
+set local role authenticated;
+set local request.jwt.claim.sub = '00000000-0000-0000-0000-000000000005';
+do $$
+declare n int;
+begin
+  insert into public.expenses (id, user_id, date, amount, updated_at) values ('70000000-0000-4000-8000-000000000010', auth.uid(), '2026-11-17', 4, '2026-11-17 10:00:00+00');
+  delete from public.expenses where id = '70000000-0000-4000-8000-000000000010';
+  insert into public.expenses (id, user_id, date, amount, updated_at) values ('70000000-0000-4000-8000-000000000010', auth.uid(), '2026-11-17', 4, '2026-11-17 10:00:00+00');
+  get diagnostics n = row_count;
+  assert n = 0, 'an old expense insert sent again after its delete is let go';
+  insert into public.expenses (id, user_id, date, amount, updated_at) values ('70000000-0000-4000-8000-000000000010', auth.uid(), '2026-11-17', 4, '2026-11-17 09:00:00+00')
+  on conflict (id) do nothing;
+  get diagnostics n = row_count;
+  assert n = 0, 'an older expense insert too';
+  insert into public.expenses (id, user_id, date, amount, updated_at) values ('70000000-0000-4000-8000-000000000010', auth.uid(), '2026-11-17', 4, '2026-11-17 10:00:00.001+00');
+  get diagnostics n = row_count;
+  assert n = 1, 'an expense re-added after the delete goes in';
+
+  insert into public.expense_cards (id, user_id, name, updated_at) values ('71000000-0000-4000-8000-000000000010', auth.uid(), 'Temp', '2026-11-17 10:00:00+00');
+  delete from public.expense_cards where id = '71000000-0000-4000-8000-000000000010';
+  insert into public.expense_cards (id, user_id, name, updated_at) values ('71000000-0000-4000-8000-000000000010', auth.uid(), 'Temp', '2026-11-17 10:00:00+00');
+  get diagnostics n = row_count;
+  assert n = 0, 'an old card insert sent again after its delete is let go';
+  insert into public.expense_cards (id, user_id, name, updated_at) values ('71000000-0000-4000-8000-000000000010', auth.uid(), 'Temp', '2026-11-17 09:00:00+00')
+  on conflict (id) do nothing;
+  get diagnostics n = row_count;
+  assert n = 0, 'an older card insert too';
+  insert into public.expense_cards (id, user_id, name, updated_at) values ('71000000-0000-4000-8000-000000000010', auth.uid(), 'Temp', '2026-11-17 10:00:00.001+00');
+  get diagnostics n = row_count;
+  assert n = 1, 'a card re-added after the delete goes in';
+
+  insert into public.expense_budgets (id, user_id, scope, target, monthly_limit, updated_at) values ('72000000-0000-4000-8000-000000000010', auth.uid(), 'category', 'travel', 10, '2026-11-17 10:00:00+00');
+  delete from public.expense_budgets where id = '72000000-0000-4000-8000-000000000010';
+  insert into public.expense_budgets (id, user_id, scope, target, monthly_limit, updated_at) values ('72000000-0000-4000-8000-000000000010', auth.uid(), 'category', 'travel', 10, '2026-11-17 10:00:00+00');
+  get diagnostics n = row_count;
+  assert n = 0, 'an old budget insert sent again after its delete is let go';
+  insert into public.expense_budgets (id, user_id, scope, target, monthly_limit, updated_at) values ('72000000-0000-4000-8000-000000000010', auth.uid(), 'category', 'travel', 10, '2026-11-17 09:00:00+00')
+  on conflict (id) do nothing;
+  get diagnostics n = row_count;
+  assert n = 0, 'an older budget insert too';
+  insert into public.expense_budgets (id, user_id, scope, target, monthly_limit, updated_at) values ('72000000-0000-4000-8000-000000000010', auth.uid(), 'category', 'travel', 10, '2026-11-17 10:00:00.001+00');
+  get diagnostics n = row_count;
+  assert n = 1, 'a budget set again after it was cleared goes in';
+end $$;
+rollback;
+
+-- 11g. Deleting an account takes its cards, expenses and budgets with it,
+-- keeps no record of them, and leaves other users' alone.
+insert into public.expense_cards (id, user_id, name) values ('71000000-0000-4000-8000-000000000020', '00000000-0000-0000-0000-000000000007', 'Theirs');
+insert into public.expenses (id, user_id, date, amount, card_id) values
+  ('70000000-0000-4000-8000-000000000020', '00000000-0000-0000-0000-000000000007', '2026-11-17', 4, '71000000-0000-4000-8000-000000000020'),
+  ('70000000-0000-4000-8000-000000000021', '00000000-0000-0000-0000-000000000007', '2026-11-17', 6, null);
+insert into public.expense_budgets (id, user_id, scope, target, monthly_limit) values ('72000000-0000-4000-8000-000000000020', '00000000-0000-0000-0000-000000000007', 'total', '', 100);
+delete from public.expenses where id = '70000000-0000-4000-8000-000000000021';
+do $$ begin
+  assert exists (select 1 from public.deleted_rows where table_name = 'expenses' and id = '70000000-0000-4000-8000-000000000021'), 'a deleted expense is remembered';
+end $$;
+delete from auth.users where id = '00000000-0000-0000-0000-000000000007';
+do $$ begin
+  assert not exists (select 1 from public.expense_cards where user_id = '00000000-0000-0000-0000-000000000007'), 'the account''s cards went with it';
+  assert not exists (select 1 from public.expenses where user_id = '00000000-0000-0000-0000-000000000007'), 'the account''s expenses went with it';
+  assert not exists (select 1 from public.expense_budgets where user_id = '00000000-0000-0000-0000-000000000007'), 'the account''s budgets went with it';
+  assert not exists (select 1 from public.deleted_rows where user_id = '00000000-0000-0000-0000-000000000007'), 'and no record of its rows is left';
+  assert (select count(*) from public.expenses where user_id = '00000000-0000-0000-0000-000000000005') = 3, 'other users'' expenses stay';
+  assert (select count(*) from public.expense_cards where user_id = '00000000-0000-0000-0000-000000000005') = 2, 'other users'' cards stay';
+  assert (select count(*) from public.expense_budgets where user_id = '00000000-0000-0000-0000-000000000005') = 3, 'other users'' budgets stay';
+end $$;
+
+-- 11h. The currency setting: an app from before 008 writes settings without
+-- the column and leaves it alone; the current app sets it.
+update public.user_settings set expense_currency = 'EUR' where user_id = '00000000-0000-0000-0000-000000000005';
+update public.user_settings set unit_size = 10 where user_id = '00000000-0000-0000-0000-000000000005';
+do $$ begin
+  assert (select expense_currency from public.user_settings where user_id = '00000000-0000-0000-0000-000000000005') = 'EUR', 'an older app''s settings write keeps the currency';
+  assert (select unit_size from public.user_settings where user_id = '00000000-0000-0000-0000-000000000005') = 10, 'and its own change lands';
+end $$;
+
 select 'checks passed' as result;

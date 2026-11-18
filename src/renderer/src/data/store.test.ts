@@ -77,6 +77,21 @@ describe('writeExpendable / writeDurable', () => {
     expect(() => writeDurable('bettracker:outbox:u1', [{ opId: 'a' }])).toThrow(StorageWriteError)
   })
 
+  it('evicts the caches of the expenses, cards and budgets and their confirmed logs, never their queues or refused lists', () => {
+    const evicted = ['bettracker:expenses:u1', 'bettracker:expense-cards:u1', 'bettracker:expense-budgets:u1', 'bettracker:confirmed-expenses:u1', 'bettracker:confirmed-expense-cards:u1', 'bettracker:confirmed-expense-budgets:u1']
+    const kept = [
+      'bettracker:expenses-outbox:u1',
+      'bettracker:expenses-refused:u1',
+      'bettracker:expense-cards-outbox:u1',
+      'bettracker:expense-budgets-refused:u1',
+      'bettracker:expense-last:u1',
+      'bettracker:view'
+    ]
+    for (const k of [...evicted, ...kept]) storage.setItem(k, '[]')
+    expect(evictExpendable()).toBe(evicted.length)
+    expect([...storage.map.keys()].sort()).toEqual([...kept].sort())
+  })
+
   it('evicts only what can be fetched again', () => {
     storage.setItem('bettracker:cache:u1', '[]')
     storage.setItem('bettracker:outbox:u1', '[]')

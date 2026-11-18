@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, type BankrollMove, type Bet } from '../../../shared/types'
 import { bet } from '../test-utils'
+import { loadRowCache, loadRowOutbox, loadRowRefused, saveRowCache, saveRowOutbox, saveRowRefused, type RowBase, type RowStorageSpec } from './rowStorage'
+import { ROW_SPECS } from './expenseSpecs'
 import {
   applyLegacyEdit,
   afterSettingsAnswer,
   applyMoveOutbox,
   applyOutbox,
   clearUserData,
+  expenseLastKey,
+  queueKeys,
   readOutbox,
+  ROW_TABLE_NAMES,
+  rowKeys,
   enqueueOp,
   headAsSent,
   insertStamp,
@@ -41,6 +47,9 @@ import {
   type MoveOp,
   type PendingOp
 } from './offline'
+
+/** Every key in storage (the test storage keeps its keys to itself: Object.keys sees none). */
+const storedKeys = (): string[] => Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i) ?? '')
 
 const add = (id: string, over: Partial<Bet> = {}): PendingOp => ({
   opId: `op-${id}`,
@@ -187,6 +196,18 @@ describe('cache and outbox persistence', () => {
     saveSettingsOutbox('u3', { patch: { defaultStake: 10 }, editedAt: 'E' })
     saveMoveCache('u3', [])
     saveMoveOutbox('u3', [{ opId: 'm', kind: 'delete', id: 'x' }])
+    const specs = ROW_SPECS as unknown as readonly RowStorageSpec<RowBase, unknown>[]
+    for (const spec of specs) {
+      saveRowCache('u3', spec, [])
+      saveRowOutbox('u3', spec.name, [{ opId: 'r', kind: 'delete', id: 'x' }])
+      saveRowRefused('u3', spec.name, [{ ops: [{ opId: 'r', kind: 'delete', id: 'x' }], reason: 'no', at: 'A' }])
+    }
+    for (const spec of specs) {
+      expect(loadRowCache('u3', spec), spec.name).toBeNull()
+      expect(loadRowOutbox('u3', spec.name), spec.name).toEqual([])
+      expect(loadRowRefused('u3', spec.name), spec.name).toEqual([])
+    }
+    expect(storedKeys().filter((k) => k.endsWith(':u3'))).toEqual([])
     expect(loadCache('u3')).toBeNull()
     expect(loadOutbox('u3')).toEqual([])
     expect(loadSettingsCache('u3')).toBeNull()
@@ -196,6 +217,29 @@ describe('cache and outbox persistence', () => {
     markSignedIn('u3')
     saveCache('u3', [bet({})])
     expect(loadCache('u3')).toHaveLength(1)
+  })
+
+  it('wipes the expenses, cards and budgets on sign-out: caches, queues, refused lists, confirmed logs, and the sheet\'s last card', () => {
+    const keys = ROW_TABLE_NAMES.flatMap((n) => [...Object.values(rowKeys('u1', n)), `bettracker:confirmed-${n}:u1`])
+    for (const k of [...keys, expenseLastKey('u1'), 'bettracker:expenses:u2']) localStorage.setItem(k, '[]')
+    clearUserData('u1')
+    for (const k of [...keys, expenseLastKey('u1')]) expect(localStorage.getItem(k), k).toBeNull()
+    // Another user's copy stays.
+    expect(localStorage.getItem('bettracker:expenses:u2')).toBe('[]')
+  })
+
+  it('lists every queue key of the row tables in queueKeys', () => {
+    expect(queueKeys('u1')).toMatchObject({
+      expenses: 'bettracker:expenses-outbox:u1',
+      expensesRefused: 'bettracker:expenses-refused:u1',
+      expensesCache: 'bettracker:expenses:u1',
+      expenseCards: 'bettracker:expense-cards-outbox:u1',
+      expenseCardsRefused: 'bettracker:expense-cards-refused:u1',
+      expenseCardsCache: 'bettracker:expense-cards:u1',
+      expenseBudgets: 'bettracker:expense-budgets-outbox:u1',
+      expenseBudgetsRefused: 'bettracker:expense-budgets-refused:u1',
+      expenseBudgetsCache: 'bettracker:expense-budgets:u1'
+    })
   })
 
   it('reads a sign-out in another window from the storage event that removed the last user', () => {

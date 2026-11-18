@@ -5,7 +5,7 @@ import type { PendingOp, PendingSettings } from './offline'
 /**
  * Replaying queued changes against the server.
  *
- * The hooks (useBetSync, useSettings, useMoves) own the state; these
+ * The hooks (useBetSync, useSettings, useMoves, useRowSync) own the state; these
  * functions own the decisions: what leaves the queue, what stays, when to
  * stop, and what a failed read leaves on screen. They take their I/O as
  * arguments so every branch can be tested without React or Supabase.
@@ -227,6 +227,8 @@ export type SettingsAnswer = { stop: 'saved'; row: Settings } | { stop: 'conflic
  * Push the one queued settings patch, with the same keep-or-drop rule as the
  * bets. Returns null when nothing was queued. Whatever the answer, it only
  * settles the patch that went: an edit made while it was out stays pending.
+ * A missing column holds the whole patch as 'behind'; a successful read does
+ * not clear that, see useSettings.refresh.
  */
 export async function pushSettings(h: SettingsPushHooks): Promise<SettingsPushResult | null> {
   const p = await h.pending()

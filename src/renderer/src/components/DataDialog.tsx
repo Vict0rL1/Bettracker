@@ -49,8 +49,13 @@ interface Props {
   settings: Settings
   account: { id: string; email: string | null }
   oddsFormat: OddsFormat
-  /** The deposits and withdrawals and the settings have loaded: a backup has them all. */
-  complete: boolean
+  /**
+   * The deposits and withdrawals and the settings have loaded, and so have
+   * the expenses, cards and budgets: a backup has them all.
+   */
+  backupReady: boolean
+  /** The deposits and withdrawals and the settings have loaded: a restore can tell what is here already. */
+  restoreReady: boolean
   batches: ImportBatch[]
   /** Imports still on their way, by their batch. */
   importing: ReadonlyMap<string, { done: number; total: number }>
@@ -219,7 +224,8 @@ export default function DataDialog(props: Props) {
     settings,
     account,
     oddsFormat,
-    complete,
+    backupReady,
+    restoreReady,
     batches,
     importing,
     live,
@@ -679,16 +685,27 @@ export default function DataDialog(props: Props) {
           <h3>{t('data.backupTitle')}</h3>
           <p className="hint">{t('data.backupHint')}</p>
           <div className="data-actions">
-            <button type="button" className="btn btn-ghost data-backup" disabled={!complete} aria-describedby={complete ? undefined : `${titleId}-wait`} onClick={onDownloadBackup}>
+            <button
+              type="button"
+              className="btn btn-ghost data-backup"
+              disabled={!backupReady}
+              aria-describedby={backupReady ? undefined : restoreReady ? `${titleId}-wait-backup` : `${titleId}-wait`}
+              onClick={onDownloadBackup}
+            >
               <ArchiveIcon /> {t('data.downloadBackup')}
             </button>
-            <button type="button" className="btn btn-ghost data-restore" disabled={!complete} aria-describedby={complete ? undefined : `${titleId}-wait`} onClick={() => backupRef.current?.click()}>
+            <button type="button" className="btn btn-ghost data-restore" disabled={!restoreReady} aria-describedby={restoreReady ? undefined : `${titleId}-wait`} onClick={() => backupRef.current?.click()}>
               <UploadIcon /> {t('data.restoreBackup')}
             </button>
           </div>
-          {!complete && (
+          {!restoreReady && (
             <p className="hint" id={`${titleId}-wait`}>
               {t('data.waitLoad')}
+            </p>
+          )}
+          {restoreReady && !backupReady && (
+            <p className="hint" id={`${titleId}-wait-backup`}>
+              {t('data.waitLoadBackup')}
             </p>
           )}
         </section>

@@ -1,3 +1,5 @@
+import type { ExpenseCategory } from './expenseExtraction'
+
 /**
  * One row = one bet. (The Supabase table is still called `entries`; renaming a
  * table is not an additive migration, and every policy and index hangs off
@@ -84,6 +86,9 @@ export const ODDS_FORMATS: readonly OddsFormat[] = ['american', 'decimal', 'frac
 
 export const isOddsFormat = (v: unknown): v is OddsFormat => ODDS_FORMATS.includes(v as OddsFormat)
 
+/** An ISO 4217 currency code as stored: three capital letters ("USD", "EUR"). */
+export const isCurrencyCode = (v: unknown): v is string => typeof v === 'string' && /^[A-Z]{3}$/.test(v)
+
 /**
  * Per-user preferences, one row per user (`user_settings`). Every field is
  * optional in the database; the app fills in these defaults when a row is
@@ -98,6 +103,8 @@ export interface Settings {
   defaultStake: number | null
   /** Monthly net loss at which the app warns. Never blocks. */
   lossLimit: number | null
+  /** ISO 4217 code expenses are shown in (expenses only; bets stay in dollars). Never converts. */
+  expenseCurrency: string
   /** Set by the editing device; the conflict key, as with bets. */
   updatedAt: string
 }
@@ -109,6 +116,7 @@ export const DEFAULT_SETTINGS: Settings = {
   startingBankroll: null,
   defaultStake: null,
   lossLimit: null,
+  expenseCurrency: 'USD',
   updatedAt: ''
 }
 
@@ -135,4 +143,83 @@ export interface MoveInput {
   /** Signed: + deposit, − withdrawal. */
   amount: number
   note?: string
+}
+
+// Everyday expenses (migration 008). The categories live in the module the
+// AI reading shares with the app; re-exported here for the app's code.
+export { EXPENSE_CATEGORIES } from './expenseExtraction'
+export type { ExpenseCategory } from './expenseExtraction'
+
+export type ExpenseSource = 'manual' | 'ai'
+export type CardKind = 'credit' | 'debit'
+export type BudgetScope = 'total' | 'card' | 'category'
+export const BUDGET_SCOPES: readonly BudgetScope[] = ['total', 'card', 'category']
+
+/** One expense (table `expenses`, migration 008). amount: + spent, − refund or credit, never 0. */
+export interface Expense {
+  id: string
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string
+  amount: number
+  /** A card's id, or null. May name a card this device doesn't have (no FK): shown as "No card". */
+  cardId: string | null
+  merchant: string
+  category: ExpenseCategory
+  note: string
+  source: ExpenseSource
+  createdAt: string
+  /** Set by the editing device; the conflict key, as with bets. */
+  updatedAt: string
+}
+
+export interface ExpenseInput {
+  date: string
+  /** Signed: + spent, − refund or credit. */
+  amount: number
+  cardId?: string | null
+  merchant?: string
+  /** A category key; one the app doesn't know is stored as 'other'. */
+  category?: string
+  note?: string
+  source?: ExpenseSource
+}
+
+/** One of the user's cards (table `expense_cards`). Archived cards are hidden from pickers but still name old expenses. */
+export interface ExpenseCard {
+  id: string
+  name: string
+  /** The last 4 digits, or '' when not given. */
+  last4: string
+  kind: CardKind
+  archived: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ExpenseCardInput {
+  name: string
+  last4?: string
+  kind?: CardKind
+  archived?: boolean
+}
+
+/**
+ * A monthly limit, the same every month (table `expense_budgets`): the whole
+ * month (scope 'total', target ''), one card (target = the card's id) or one
+ * category (target = the category key). Its id is made from (user, scope,
+ * target): see lib/stableId.ts.
+ */
+export interface ExpenseBudget {
+  id: string
+  scope: BudgetScope
+  target: string
+  monthlyLimit: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ExpenseBudgetInput {
+  scope: BudgetScope
+  target: string
+  monthlyLimit: number
 }

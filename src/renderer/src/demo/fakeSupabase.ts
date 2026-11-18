@@ -14,7 +14,8 @@ export interface FakeSupabaseConfig {
 /**
  * Installs `window.__supabaseMock`, which `lib/supabase.ts` uses instead of a
  * real client: a signed-in session against a small in-memory server holding
- * the bets, the settings row and the deposits and withdrawals, with the
+ * the bets, the settings row, the deposits and withdrawals, and the
+ * expenses, cards and budgets, with the
  * PostgREST behaviour the app relies on — inserts (a duplicate id is 23505),
  * updates guarded by `updated_at <= editedAt` (the conflict rule), deletes and
  * upserts. Its state lives in localStorage so it survives reloads, like a
@@ -22,6 +23,8 @@ export interface FakeSupabaseConfig {
  *  - `e2e:rows`      the bets;
  *  - `e2e:settings`  the user_settings row, if any;
  *  - `e2e:moves`     the bankroll_moves rows;
+ *  - `e2e:expenses`, `e2e:expense-cards`, `e2e:expense-budgets`  the rows
+ *                    of the tables of migration 008;
  *  - `e2e:migrated`  unset = the database is missing migration 004: reads
  *                    work, every add or edit (they all name closing_odds) is
  *                    refused (PGRST204), deletes go through, and the settings
@@ -66,6 +69,14 @@ export interface FakeSupabaseConfig {
  *                    (`e2e:tombstones`), and an insert of that id that is not
  *                    newer is let go (no row, no error), as an old insert
  *                    sent again would be;
+ *  - `e2e:migrated-008`  unset = the database is missing migration 008: the
+ *                    expenses, expense_cards and expense_budgets tables are
+ *                    missing, so every request for them, reads and deletes
+ *                    too, is refused (PGRST205), and a settings write that
+ *                    names `expense_currency` is refused (PGRST204); the
+ *                    settings row has that column only with it. Tombstones
+ *                    of those three tables (`expenses:<id>`,
+ *                    `expense-cards:<id>`, `expense-budgets:<id>`) need it;
  *  - `e2e:lose-answers`  that many more write answers are lost: the write
  *                    lands, and the app hears a failed fetch.
  * A row written without `updated_at` gets the time it was answered, as the
@@ -154,6 +165,8 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
   const NO_COLUMN = { message: "Could not find the 'closing_odds' column of 'entries' in the schema cache", code: 'PGRST204' }
   const NO_TABLE = { message: "Could not find the table 'public.user_settings' in the schema cache", code: 'PGRST205' }
   const NO_MOVES_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
+  const noTable = (t: string) => ({ message: `Could not find the table 'public.${t}' in the schema cache`, code: 'PGRST205' })
+  const NO_CURRENCY_COLUMN = { message: "Could not find the 'expense_currency' column of 'user_settings' in the schema cache", code: 'PGRST204' }
   const stamp = (row: Row): Row => ({ created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...row })
   const duplicate = (constraint: string) => ({ message: `duplicate key value violates unique constraint "${constraint}"`, code: '23505' })
   const unmodelled = (what: string) => ({ message: `fake Supabase: ${what} is not modelled`, code: 'FAKE' })
@@ -168,15 +181,17 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       return String(have) === String(want)
     }) && Object.entries(q.within).every(([col, list]) => list.map(String).includes(String(row[col])))
   const after = (a: unknown, b: unknown): boolean => Date.parse(String(a)) > Date.parse(String(b))
+  /** Tombstones come with 007 for the bets and moves, and with 008 for its own tables (which use 007's triggers). */
+  const stonesOn = (name: string): boolean => flag(name === 'expenses' || name === 'expense-cards' || name === 'expense-budgets' ? 'migrated-008' : 'migrated-007')
   /** Migration 007: an insert of a deleted id that is not newer than what was deleted is let go. */
   const buried = (table: string, row: Row): boolean => {
-    if (!flag('migrated-007')) return false
+    if (!stonesOn(table)) return false
     const stones = read<Record<string, string>>('tombstones', {})
     const stone = stones[`${table}:${String(row.id)}`]
     return stone !== undefined && !after(row.updated_at ?? new Date().toISOString(), stone)
   }
   const bury = (table: string, gone: Row[]): void => {
-    if (!flag('migrated-007') || gone.length === 0) return
+    if (!stonesOn(table) || gone.length === 0) return
     const stones = read<Record<string, string>>('tombstones', {})
     for (const r of gone) {
       const k = `${table}:${String(r.id)}`
@@ -187,8 +202,18 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
 
   function settings(q: Query): Answer {
     if (!migrated()) return { data: null, error: NO_TABLE }
-    const row = read<Row | null>('settings', null)
+    // The currency column is there with 008 (default 'USD'), and only then.
+    const stored = read<Row | null>('settings', null)
+    let row = stored
+    if (row && flag('migrated-008') && !('expense_currency' in row)) row = { ...row, expense_currency: 'USD' }
+    if (row && !flag('migrated-008') && 'expense_currency' in row) {
+      const { expense_currency: _gone, ...rest } = row
+      row = rest
+    }
     if (q.action === 'select') return { data: row, error: null }
+    if ((q.action === 'update' || q.action === 'insert') && !flag('migrated-008') && typeof q.payload === 'object' && q.payload !== null && 'expense_currency' in (q.payload as Row)) {
+      return { data: null, error: NO_CURRENCY_COLUMN }
+    }
     if (q.action === 'update') {
       if (!row || (q.lte !== undefined && String(row.updated_at) > String(q.lte))) return { data: null, error: null }
       if (!matches(row, { ...q, eq: Object.fromEntries(Object.entries(q.eq).filter(([k]) => k !== 'user_id')) })) return { data: null, error: null }
@@ -198,7 +223,16 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     }
     if (q.action === 'insert') {
       if (row) return { data: null, error: duplicate('user_settings_pkey') }
-      const next = { odds_format: 'american', unit_size: null, show_units: false, starting_bankroll: null, default_stake: null, loss_limit: null, ...(q.payload as Row) }
+      const next = {
+        odds_format: 'american',
+        unit_size: null,
+        show_units: false,
+        starting_bankroll: null,
+        default_stake: null,
+        loss_limit: null,
+        ...(flag('migrated-008') ? { expense_currency: 'USD' } : {}),
+        ...(q.payload as Row)
+      }
       write('settings', next)
       return { data: next, error: null }
     }
@@ -211,6 +245,8 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     if (q.action === 'select') {
       if (q.eq.id !== undefined) return { data: all.find((r) => r.id === q.eq.id) ?? null, error: null }
       if (Object.keys(q.within).length > 0) return { data: all.filter((r) => matches(r, q)), error: null }
+      // A lookup by other columns (a budget by its scope and target): the row, as `.maybeSingle()` asks for.
+      if (Object.keys(q.eq).length > 0) return { data: all.find((r) => matches(r, q)) ?? null, error: null }
       // A list is read page by page (data/readAll.ts): one page, and the count
       // of them all. Never more rows than max-rows, whatever was asked.
       const cap = maxRows()
@@ -228,6 +264,10 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
     if (q.action === 'insert') {
       const payload = q.payload as Row
       if (all.some((r) => r.id === payload.id)) return { data: null, error: duplicate(constraint) }
+      // A budget's other unique key (008): one per scope and target.
+      if (name === 'expense-budgets' && all.some((r) => r.scope === payload.scope && r.target === payload.target)) {
+        return { data: null, error: duplicate('expense_budgets_one_per_target') }
+      }
       const row = stamp(payload)
       if (buried(name, row)) return { data: [], error: null }
       write(name, [...all, row])
@@ -284,10 +324,7 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       // The write lands; its answer never comes back.
       localStorage.setItem(key('lose-answers'), String(Number(localStorage.getItem(key('lose-answers'))) - 1))
       localStorage.setItem(key('writes'), String(Number(localStorage.getItem(key('writes')) || 0) + 1))
-      if (q.table === 'user_settings') settings(q)
-      else if (q.table === 'bankroll_moves') {
-        if (flag('migrated-005')) table('moves', 'bankroll_moves_pkey', q)
-      } else table('rows', 'entries_pkey', q)
+      route(q)
       return lost
     }
     if (q.action !== 'select') {
@@ -304,12 +341,22 @@ export function installFakeSupabase(cfg: FakeSupabaseConfig): void {
       }
       localStorage.setItem(key('writes'), String(Number(localStorage.getItem(key('writes')) || 0) + 1))
     }
+    return route(q)
+  }
+
+  /** The table a request is for. One the database doesn't have is refused as PostgREST does (never answered as the bets). */
+  function route(q: Query): Answer {
     if (q.table === 'user_settings') return settings(q)
-    if (q.table === 'bankroll_moves') {
-      if (!flag('migrated-005')) return { data: null, error: NO_MOVES_TABLE }
-      return table('moves', 'bankroll_moves_pkey', q)
+    if (q.table === 'bankroll_moves') return flag('migrated-005') ? table('moves', 'bankroll_moves_pkey', q) : { data: null, error: NO_MOVES_TABLE }
+    if (q.table === 'entries') return table('rows', 'entries_pkey', q)
+    const own: Record<string, [string, string]> = {
+      expenses: ['expenses', 'expenses_pkey'],
+      expense_cards: ['expense-cards', 'expense_cards_pkey'],
+      expense_budgets: ['expense-budgets', 'expense_budgets_pkey']
     }
-    return table('rows', 'entries_pkey', q)
+    const t = own[q.table]
+    if (t) return flag('migrated-008') ? table(t[0], t[1], q) : { data: null, error: noTable(q.table) }
+    return { data: null, error: noTable(q.table) }
   }
 
   function from(tableName: string) {

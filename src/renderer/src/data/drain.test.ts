@@ -375,6 +375,14 @@ describe('afterFailedRead — what a failed read of the moves leaves on screen',
     expect(afterFailedRead(new Error('relation "public.bankroll_moves" does not exist'), null).tableMissing).toBe(true)
   })
 
+  it('reads the missing tables of 008 (expenses, cards, budgets) the same way: none yet, nothing said', () => {
+    for (const t of ['expenses', 'expense_cards', 'expense_budgets']) {
+      const missing = describeError({ message: `Could not find the table 'public.${t}' in the schema cache`, code: 'PGRST205' }, 404)
+      expect(afterFailedRead(missing, null), t).toEqual({ offline: false, server: [], tableMissing: true, report: false })
+    }
+    expect(afterFailedRead(new Error('relation "public.expenses" does not exist'), cached)).toEqual({ offline: false, server: cached, tableMissing: true, report: false })
+  })
+
   it('reports any other refusal and keeps the device copy', () => {
     expect(afterFailedRead(refused(), cached)).toEqual({ offline: false, server: cached, tableMissing: false, report: true })
     expect(afterFailedRead(refused(), null)).toEqual({ offline: false, server: null, tableMissing: false, report: true })

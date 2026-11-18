@@ -2,9 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   InputError,
   MAX_AMOUNT,
+  MAX_CARD_NAME_LENGTH,
+  MAX_MERCHANT_LENGTH,
+  MAX_NOTE_LENGTH,
   MAX_ODDS,
   effectiveUnit,
   isValidDate,
+  normalizeBudget,
+  normalizeCard,
+  normalizeExpense,
   normalizeInput,
   normalizeMove,
   parseMoneyBox,
@@ -331,5 +337,122 @@ describe('InputError', () => {
     expect(caught({ date: '2026-05-04', amount: 1, closingOdds: MAX_ODDS + 1 }).code).toBe('closingRange')
     expect(caught({ date: '2026-05-04', amount: 1, odds: 1 }).message).toBe('Odds must be greater than 1 (decimal)')
     expect(() => normalizeMove({ date: '2026-03-01', amount: 0 })).toThrow(InputError)
+  })
+})
+
+const code = (fn: () => unknown): string | null => {
+  try {
+    fn()
+    return null
+  } catch (err) {
+    return err instanceof InputError ? err.code : 'not an InputError'
+  }
+}
+
+describe('normalizeExpense — an expense before it is queued', () => {
+  const base = { date: '2026-11-17', amount: 4.5 }
+  const CARD = '6F9619FF-8B86-D011-B42D-00CF4FC964FF'
+
+  it('fills the defaults: no card, no merchant, other, no note, typed by hand', () => {
+    expect(normalizeExpense(base)).toEqual({ date: '2026-11-17', amount: 4.5, cardId: null, merchant: '', category: 'other', note: '', source: 'manual' })
+  })
+
+  it('refuses a date that is no date', () => {
+    expect(code(() => normalizeExpense({ ...base, date: '2026-02-30' }))).toBe('date')
+    expect(code(() => normalizeExpense({ ...base, date: '17/11/2026' }))).toBe('date')
+  })
+
+  it('reads the amount in cents, signed (a refund is negative), never 0 and within range', () => {
+    expect(normalizeExpense({ ...base, amount: 4.505 }).amount).toBe(4.51)
+    expect(normalizeExpense({ ...base, amount: -12.345 }).amount).toBe(-12.35)
+    expect(normalizeExpense({ ...base, amount: -12 }).amount).toBe(-12)
+    expect(code(() => normalizeExpense({ ...base, amount: 0 }))).toBe('moveZero')
+    expect(code(() => normalizeExpense({ ...base, amount: 0.004 }))).toBe('moveZero')
+    expect(code(() => normalizeExpense({ ...base, amount: -0.004 }))).toBe('moveZero')
+    expect(code(() => normalizeExpense({ ...base, amount: MAX_AMOUNT + 0.01 }))).toBe('amountRange')
+    expect(normalizeExpense({ ...base, amount: -MAX_AMOUNT }).amount).toBe(-MAX_AMOUNT)
+    expect(code(() => normalizeExpense({ ...base, amount: NaN }))).toBe('amountNumber')
+    expect(code(() => normalizeExpense({ ...base, amount: '4' as unknown as number }))).toBe('amountNumber')
+  })
+
+  it('keeps a card id as a lowercase UUID, and reads none from null, undefined or an empty string', () => {
+    expect(normalizeExpense({ ...base, cardId: CARD }).cardId).toBe(CARD.toLowerCase())
+    expect(normalizeExpense({ ...base, cardId: null }).cardId).toBeNull()
+    expect(normalizeExpense({ ...base, cardId: '' }).cardId).toBeNull()
+    expect(code(() => normalizeExpense({ ...base, cardId: 'visa' }))).toBe('expenseCard')
+    expect(code(() => normalizeExpense({ ...base, cardId: 12 as unknown as string }))).toBe('expenseCard')
+  })
+
+  it('cleans the merchant and the note: no control characters, one space between words, trimmed, capped', () => {
+    const e = normalizeExpense({ ...base, merchant: '  Café\n\tCentral\u0000  ', note: ' two\r\nlines\u007f ' })
+    expect(e.merchant).toBe('Café Central')
+    expect(e.note).toBe('two lines')
+    expect(normalizeExpense({ ...base, merchant: 'm'.repeat(200) }).merchant).toHaveLength(MAX_MERCHANT_LENGTH)
+    expect(normalizeExpense({ ...base, note: 'n'.repeat(900) }).note).toHaveLength(MAX_NOTE_LENGTH)
+    // A cap never ends in a space, or half an emoji.
+    expect(normalizeExpense({ ...base, merchant: `${'a'.repeat(79)} b` }).merchant).toBe('a'.repeat(79))
+    const emoji = normalizeExpense({ ...base, merchant: `${'a'.repeat(79)}☕️` }).merchant
+    expect(emoji).toBe(`${'a'.repeat(79)}☕`)
+    const split = normalizeExpense({ ...base, merchant: `${'a'.repeat(79)}😀` }).merchant
+    expect(split).toBe('a'.repeat(79))
+  })
+
+  it('files an unknown category as other, and keeps a known one', () => {
+    expect(normalizeExpense({ ...base, category: 'coffee' }).category).toBe('coffee')
+    expect(normalizeExpense({ ...base, category: 'Coffee' }).category).toBe('other')
+    expect(normalizeExpense({ ...base, category: 'fuel' }).category).toBe('other')
+  })
+
+  it('keeps "ai" as the source, and reads anything else as typed by hand', () => {
+    expect(normalizeExpense({ ...base, source: 'ai' }).source).toBe('ai')
+    expect(normalizeExpense({ ...base, source: 'scan' as 'ai' }).source).toBe('manual')
+  })
+})
+
+describe('normalizeCard — a card before it is queued', () => {
+  it('fills the defaults: no digits, credit, not archived', () => {
+    expect(normalizeCard({ name: ' My  Visa ' })).toEqual({ name: 'My Visa', last4: '', kind: 'credit', archived: false })
+  })
+
+  it('needs a name of 1 to 40 characters once cleaned', () => {
+    expect(code(() => normalizeCard({ name: '' }))).toBe('cardName')
+    expect(code(() => normalizeCard({ name: '  \n ' }))).toBe('cardName')
+    expect(normalizeCard({ name: 'v'.repeat(MAX_CARD_NAME_LENGTH) }).name).toHaveLength(MAX_CARD_NAME_LENGTH)
+    expect(code(() => normalizeCard({ name: 'v'.repeat(MAX_CARD_NAME_LENGTH + 1) }))).toBe('cardName')
+  })
+
+  it('takes the last 4 digits, or none', () => {
+    expect(normalizeCard({ name: 'Visa', last4: '1234' }).last4).toBe('1234')
+    expect(normalizeCard({ name: 'Visa', last4: '' }).last4).toBe('')
+    for (const bad of ['123', '12345', 'abcd', ' 1234']) expect(code(() => normalizeCard({ name: 'Visa', last4: bad })), bad).toBe('cardLast4')
+  })
+
+  it('is credit or debit, and archived only when said so', () => {
+    expect(normalizeCard({ name: 'Visa', kind: 'debit', archived: true })).toMatchObject({ kind: 'debit', archived: true })
+    expect(code(() => normalizeCard({ name: 'Visa', kind: 'cash' as 'debit' }))).toBe('cardKind')
+    expect(normalizeCard({ name: 'Visa', archived: 'yes' as unknown as boolean }).archived).toBe(false)
+  })
+})
+
+describe('normalizeBudget — a monthly budget before it is queued', () => {
+  const CARD = '6F9619FF-8B86-D011-B42D-00CF4FC964FF'
+
+  it('is for the whole month (no target), a card (its id, lowercased) or a category (its key)', () => {
+    expect(normalizeBudget({ scope: 'total', target: '', monthlyLimit: 500 })).toEqual({ scope: 'total', target: '', monthlyLimit: 500 })
+    expect(normalizeBudget({ scope: 'card', target: CARD, monthlyLimit: 300 }).target).toBe(CARD.toLowerCase())
+    expect(normalizeBudget({ scope: 'category', target: 'coffee', monthlyLimit: 40.5 }).target).toBe('coffee')
+  })
+
+  it('refuses a scope or a target it does not know', () => {
+    expect(code(() => normalizeBudget({ scope: 'week' as 'total', target: '', monthlyLimit: 5 }))).toBe('budgetScope')
+    expect(code(() => normalizeBudget({ scope: 'total', target: 'x', monthlyLimit: 5 }))).toBe('budgetScope')
+    expect(code(() => normalizeBudget({ scope: 'card', target: 'visa', monthlyLimit: 5 }))).toBe('budgetScope')
+    expect(code(() => normalizeBudget({ scope: 'category', target: 'fuel', monthlyLimit: 5 }))).toBe('budgetScope')
+    expect(code(() => normalizeBudget({ scope: 'category', target: 'Coffee', monthlyLimit: 5 }))).toBe('budgetScope')
+  })
+
+  it('needs a limit above 0 in cents, within range', () => {
+    expect(normalizeBudget({ scope: 'total', target: '', monthlyLimit: 99.999 }).monthlyLimit).toBe(100)
+    for (const bad of [0, -5, 0.004, NaN, MAX_AMOUNT + 1]) expect(code(() => normalizeBudget({ scope: 'total', target: '', monthlyLimit: bad })), String(bad)).toBe('budgetLimit')
   })
 })

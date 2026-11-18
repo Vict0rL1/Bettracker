@@ -19,6 +19,28 @@ describe('isMigrationNeededError', () => {
     expect(classifySyncError(describeError({ message: "Could not find the table 'public.bankroll_moves' in the schema cache" }))).toBe('behind')
   })
 
+  it('recognises the expenses, cards and budgets tables and the currency column (008 not run)', () => {
+    for (const t of ['expenses', 'expense_cards', 'expense_budgets']) {
+      const message = `Could not find the table 'public.${t}' in the schema cache`
+      expect(isMigrationNeededError(new Error(message)), t).toBe(true)
+      expect(classifySyncError(describeError({ message, code: 'PGRST205' }, 404)), t).toBe('behind')
+    }
+    expect(isMigrationNeededError(new Error('relation "public.expenses" does not exist'))).toBe(true)
+    expect(isMigrationNeededError(new Error('relation "public.expense_cards" does not exist'))).toBe(true)
+    const column = "Could not find the 'expense_currency' column of 'user_settings' in the schema cache"
+    expect(isMigrationNeededError(new Error(column))).toBe(true)
+    expect(classifySyncError(describeError({ message: column, code: 'PGRST204' }, 400))).toBe('behind')
+    expect(isMigrationNeededError(new Error('column "expense_currency" of relation "user_settings" does not exist'))).toBe(true)
+  })
+
+  it('leaves the refusals of the 008 tables alone: the table is there, the row is what was refused', () => {
+    expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "expenses_pkey"'))).toBe(false)
+    expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "expense_budgets_one_per_target"'))).toBe(false)
+    expect(isMigrationNeededError(new Error('new row for relation "expenses" violates check constraint "expenses_category_known"'))).toBe(false)
+    expect(isMigrationNeededError(new Error('new row for relation "user_settings" violates check constraint "user_settings_expense_currency"'))).toBe(false)
+    expect(isMigrationNeededError(new Error('permission denied for table expense_cards'))).toBe(false)
+  })
+
   it('recognises the one-bet-per-day constraint that 001 removes', () => {
     expect(isMigrationNeededError(new Error('duplicate key value violates unique constraint "entries_user_id_date_key"'))).toBe(true)
   })

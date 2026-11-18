@@ -15,7 +15,7 @@ import {
 } from './offline'
 import { backoff, migrationNotice, pushSettings, retryPlan, syncStatus, type SettingsAnswer, type SettingsPushResult, type SyncStatus } from './drain'
 import { classifySyncError, SignedOutError } from './errors'
-import { getSettings, saveSettings, subscribeToSettings } from './settings'
+import { getSettings, getSettingsRead, saveSettings, subscribeToSettings } from './settings'
 import { journalEntry, journalRemove, newerSettings, replayJournals, type JournalEdit, type SettingsSaveState } from './settingsJournal'
 import { freshImports, journalWanted } from './imports'
 import { queueStore, withLock } from './store'
@@ -357,12 +357,18 @@ export function useSettings(
   const refresh = useCallback(async (): Promise<void> => {
     if (!userId || !canSyncRef.current) return
     try {
-      const row = await getSettings(userId)
+      const read = await getSettingsRead(userId)
       if (userRef.current !== userId) return
-      // The table is there. Whatever stops the writes is theirs to clear.
-      noticeRef.current.clear()
-      setBlocked(false)
-      setServer(row ?? { ...DEFAULT_SETTINGS })
+      // The table is there. Whatever stops the writes is theirs to clear,
+      // except a missing column a queued patch needs: a read of the table
+      // doesn't add the currency column of 008 (the first one added after
+      // 004), so the patch that names it still can't go, and saying so again
+      // on every resume, or "Syncing" for a write that can't go, would be wrong.
+      if (read.hasCurrencyColumn || pendingRef.current?.patch.expenseCurrency === undefined) {
+        noticeRef.current.clear()
+        setBlocked(false)
+      }
+      setServer(read.settings ?? { ...DEFAULT_SETTINGS })
     } catch (err) {
       if (userRef.current !== userId) return
       // A read is retried by the timer anyway: only what it can't fix is said.

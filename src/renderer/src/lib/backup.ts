@@ -29,7 +29,8 @@ import { InputError, MAX_AMOUNT, normalizeInput, normalizeMove, round2 } from '.
 export const BACKUP_FORMAT = 'bettracker-backup'
 export const BACKUP_VERSION = 1
 
-export type BackupSettings = Omit<Settings, 'updatedAt'>
+/** `expenseCurrency` is optional: a backup from before expenses has none (missing = undefined, never null). */
+export type BackupSettings = Omit<Settings, 'updatedAt' | 'expenseCurrency'> & { expenseCurrency?: string }
 
 export interface Backup {
   format: typeof BACKUP_FORMAT
@@ -42,7 +43,8 @@ export interface Backup {
 }
 
 export function makeBackup(bets: readonly Bet[], moves: readonly BankrollMove[], settings: Settings, account: { id: string; email: string | null }, now = new Date()): Backup {
-  const { updatedAt: _ignored, ...rest } = settings
+  // The expenses' currency joins the file together with the expenses themselves.
+  const { updatedAt: _ignored, expenseCurrency: _notYet, ...rest } = settings
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,

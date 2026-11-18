@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks the schema files against a real, throwaway Postgres:
-#   A. the original schema upgraded with migrations 001..007, each run twice;
+#   A. the original schema upgraded with migrations 001..008, each run twice;
 #   B. the original schema upgraded by running schema.sql, twice;
 #   C. a fresh install from schema.sql (twice), then every migration on top;
 # then runs checks.sql on each (backfill, writes from older and current app
@@ -41,7 +41,7 @@ structure() {
 
 export PGOPTIONS='-c client_min_messages=error'
 
-echo "A. original schema, then 001..007 (each twice)"
+echo "A. original schema, then 001..008 (each twice)"
 fresh bettracker_test_migrations
 run bettracker_test_migrations "$HERE/original_schema.sql"
 run bettracker_test_migrations "$HERE/seed.sql"

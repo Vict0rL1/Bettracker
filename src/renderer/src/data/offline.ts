@@ -145,6 +145,17 @@ export const draftKey = (userId: string, slot: 'quick' | 'day'): string => `bett
 export const importsKey = (userId: string): string => `bettracker:imports:${userId}`
 /** Changes the server confirmed lately, for reads in other windows to lay over what they got (see data/confirmed.ts). */
 export const confirmedKey = (userId: string, name: string): string => `bettracker:confirmed-${name}:${userId}`
+/** The simple user-owned tables synced by useRowSync (see data/rowTable.ts). */
+export const ROW_TABLE_NAMES = ['expenses', 'expense-cards', 'expense-budgets'] as const
+export type RowTableName = (typeof ROW_TABLE_NAMES)[number]
+/** A row table's cache, queue and refused list. The colon after the name keeps "-outbox"/"-refused" out of EXPENDABLE (store.ts). */
+export const rowKeys = (userId: string, name: RowTableName) => ({
+  cache: `bettracker:${name}:${userId}`,
+  outbox: `bettracker:${name}-outbox:${userId}`,
+  refused: `bettracker:${name}-refused:${userId}`
+})
+/** The card and category the expense sheet last used on this device (see data/expenseLast.ts). */
+export const expenseLastKey = (userId: string): string => `bettracker:expense-last:${userId}`
 /** Settings edits on their way into the queue, one list per window (see useSettings). */
 export const settingsJournalPrefix = (userId: string): string => `bettracker:settings-journal:${userId}:`
 
@@ -157,10 +168,20 @@ export const queueKeys = (userId: string) => ({
   movesRefused: movesRefusedKey(userId),
   cache: cacheKey(userId),
   movesCache: movesKey(userId),
-  settingsCache: settingsKey(userId)
+  settingsCache: settingsKey(userId),
+  // The row tables (useRowSync reads rowKeys itself; listed so every queue key is in one place).
+  expenses: rowKeys(userId, 'expenses').outbox,
+  expensesRefused: rowKeys(userId, 'expenses').refused,
+  expensesCache: rowKeys(userId, 'expenses').cache,
+  expenseCards: rowKeys(userId, 'expense-cards').outbox,
+  expenseCardsRefused: rowKeys(userId, 'expense-cards').refused,
+  expenseCardsCache: rowKeys(userId, 'expense-cards').cache,
+  expenseBudgets: rowKeys(userId, 'expense-budgets').outbox,
+  expenseBudgetsRefused: rowKeys(userId, 'expense-budgets').refused,
+  expenseBudgetsCache: rowKeys(userId, 'expense-budgets').cache
 })
 
-function readJson<T>(key: string): T | null {
+export function readJson<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key)
     return raw ? (JSON.parse(raw) as T) : null
@@ -457,6 +478,14 @@ export function clearUserData(userId: string): void {
     localStorage.removeItem(importsKey(userId))
     localStorage.removeItem(confirmedKey(userId, 'bets'))
     localStorage.removeItem(confirmedKey(userId, 'moves'))
+    for (const name of ROW_TABLE_NAMES) {
+      const k = rowKeys(userId, name)
+      localStorage.removeItem(k.cache)
+      localStorage.removeItem(k.outbox)
+      localStorage.removeItem(k.refused)
+      localStorage.removeItem(confirmedKey(userId, name))
+    }
+    localStorage.removeItem(expenseLastKey(userId))
     const journals: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
@@ -529,7 +558,7 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
  * Whether a delete takes `row` away: always, unless it is an Undo's, which
  * takes only the row its batch wrote and nobody changed since (see ifStamp).
  */
-function removes(row: { updatedAt: string } | undefined, op: Extract<PendingOp<unknown>, { kind: 'delete' }>): boolean {
+export function removes(row: { updatedAt: string } | undefined, op: Extract<PendingOp<unknown>, { kind: 'delete' }>): boolean {
   return !op.ifStamp || (row !== undefined && sameStamp(row.updatedAt, op.ifStamp))
 }
 

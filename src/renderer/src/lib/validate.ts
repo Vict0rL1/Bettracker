@@ -1,4 +1,21 @@
-import { isBetStatus, statusForAmount, type BetInput, type BetStatus, type MoveInput, type Settings, type SettingsPatch } from '../../../shared/types'
+import {
+  BUDGET_SCOPES,
+  isBetStatus,
+  statusForAmount,
+  type BetInput,
+  type BetStatus,
+  type BudgetScope,
+  type CardKind,
+  type ExpenseBudgetInput,
+  type ExpenseCardInput,
+  type ExpenseCategory,
+  type ExpenseInput,
+  type ExpenseSource,
+  type MoveInput,
+  type Settings,
+  type SettingsPatch
+} from '../../../shared/types'
+import { isExpenseCategory, toCategory } from './categories'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -39,6 +56,12 @@ export type InputCode =
   | 'closingLow'
   | 'closingRange'
   | 'moveZero'
+  | 'expenseCard'
+  | 'cardName'
+  | 'cardLast4'
+  | 'cardKind'
+  | 'budgetScope'
+  | 'budgetLimit'
 
 /**
  * Bad input, refused before anything is queued. The message stays English
@@ -233,6 +256,114 @@ export function normalizeMove(input: MoveInput): CleanMove {
   if (amount === 0) throw new InputError('moveZero', 'Amount cannot be zero')
   if (Math.abs(amount) > MAX_AMOUNT) throw new InputError('amountRange', 'Amount is out of range')
   return { date: input.date, amount, note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH) }
+}
+
+export const MAX_MERCHANT_LENGTH = 80
+export const MAX_CARD_NAME_LENGTH = 40
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Free text typed or read from a picture: control characters out (as spaces,
+ * so "Café\nCentral" keeps its two words), whitespace collapsed, trimmed,
+ * capped. The cap never splits an emoji in half (the database would refuse
+ * the broken character).
+ */
+function cleanText(value: unknown, max: number): string {
+  const text = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : ''
+  if (text.length <= max) return text
+  let cut = text.slice(0, max)
+  if (/[\ud800-\udbff]$/.test(cut)) cut = cut.slice(0, -1)
+  return cut.trimEnd()
+}
+
+export interface CleanExpense {
+  date: string
+  amount: number
+  cardId: string | null
+  merchant: string
+  category: ExpenseCategory
+  note: string
+  source: ExpenseSource
+}
+
+export interface CleanCard {
+  name: string
+  last4: string
+  kind: CardKind
+  archived: boolean
+}
+
+export interface CleanBudget {
+  scope: BudgetScope
+  target: string
+  monthlyLimit: number
+}
+
+/**
+ * Validate and clean an expense before it is queued (table `expenses`,
+ * migration 008). Throws on bad input. The amount is signed (− a refund or a
+ * credit) and judged once rounded to cents, as stored: 0.004 is 0, which the
+ * database refuses. A category the app doesn't know is filed as 'other'.
+ */
+export function normalizeExpense(input: ExpenseInput): CleanExpense {
+  if (typeof input.date !== 'string' || !isValidDate(input.date)) throw new InputError('date', `"${String(input.date)}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new InputError('amountNumber', 'Amount must be a finite number')
+  const amount = roundCents(input.amount)
+  if (amount === 0) throw new InputError('moveZero', 'Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new InputError('amountRange', 'Amount is out of range')
+  let cardId: string | null = null
+  if (input.cardId !== undefined && input.cardId !== null && input.cardId !== '') {
+    if (typeof input.cardId !== 'string' || !UUID_RE.test(input.cardId)) throw new InputError('expenseCard', 'Not a card id')
+    cardId = input.cardId.toLowerCase()
+  }
+  return {
+    date: input.date,
+    amount,
+    cardId,
+    merchant: cleanText(input.merchant, MAX_MERCHANT_LENGTH),
+    category: toCategory(input.category),
+    note: cleanText(input.note, MAX_NOTE_LENGTH),
+    source: input.source === 'ai' ? 'ai' : 'manual'
+  }
+}
+
+/** Validate and clean a card (table `expense_cards`). Throws on bad input. */
+export function normalizeCard(input: ExpenseCardInput): CleanCard {
+  const name = cleanText(input.name, Number.POSITIVE_INFINITY)
+  if (name.length < 1 || name.length > MAX_CARD_NAME_LENGTH) throw new InputError('cardName', `A card name has 1 to ${MAX_CARD_NAME_LENGTH} characters`)
+  const last4 = input.last4 === undefined || input.last4 === null ? '' : input.last4
+  if (typeof last4 !== 'string' || (last4 !== '' && !/^\d{4}$/.test(last4))) throw new InputError('cardLast4', 'The last digits are 4 numbers or nothing')
+  const kind = input.kind === undefined ? 'credit' : input.kind
+  if (kind !== 'credit' && kind !== 'debit') throw new InputError('cardKind', 'A card is credit or debit')
+  return { name, last4, kind, archived: input.archived === true }
+}
+
+/**
+ * Validate and clean a monthly budget (table `expense_budgets`): the whole
+ * month (target ''), a card (target = its id, lowercased) or a category
+ * (target = its key). Throws on bad input.
+ */
+export function normalizeBudget(input: ExpenseBudgetInput): CleanBudget {
+  const scope = input.scope
+  if (!BUDGET_SCOPES.includes(scope)) throw new InputError('budgetScope', `"${String(scope)}" is not a budget scope`)
+  const raw = typeof input.target === 'string' ? input.target : null
+  let target: string
+  if (scope === 'total') {
+    if (raw !== '') throw new InputError('budgetScope', 'A total budget has no target')
+    target = ''
+  } else if (scope === 'card') {
+    if (raw === null || !UUID_RE.test(raw)) throw new InputError('budgetScope', 'A card budget names a card id')
+    target = raw.toLowerCase()
+  } else {
+    if (!isExpenseCategory(raw)) throw new InputError('budgetScope', 'A category budget names a category')
+    target = raw
+  }
+  const limit = input.monthlyLimit
+  if (typeof limit !== 'number' || !Number.isFinite(limit)) throw new InputError('budgetLimit', 'A budget must be a number')
+  const monthlyLimit = round2(limit)
+  if (monthlyLimit <= 0 || monthlyLimit > MAX_AMOUNT) throw new InputError('budgetLimit', 'A budget must be more than 0')
+  return { scope, target, monthlyLimit }
 }
 
 /**

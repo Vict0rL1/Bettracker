@@ -21,12 +21,14 @@ import Login from './auth/Login'
 import NewPassword from './auth/NewPassword'
 import { useAuth } from './auth/AuthProvider'
 import { authErrorKey } from './auth/authErrors'
-import { combinedStatus } from './data/drain'
+import { combinedStatus, migrationNotice } from './data/drain'
 import { classifySyncError } from './data/errors'
 import { StorageWriteError } from './data/store'
 import { hasStoredSession } from './lib/supabase'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
+import { useRowSync } from './data/useRowSync'
+import { budgetsTable, cardsTable, expensesTable } from './data/expenses'
 import { dayDraftId, loadDayDraft, loadQuickDraft, saveDayDraft, saveQuickDraft, type QuickDraft } from './data/drafts'
 import {
   batchOf,
@@ -203,11 +205,25 @@ export default function App() {
     saveAgain: saveSettingsAgain
   } = useSettings(activeUserId, Boolean(session), showError, showNotice, onSettingsOutcome)
   const moves = useMoves(activeUserId, Boolean(session), showError, showNotice, onBatch)
-  // One badge for the three queues. A settings change or a deposit is a
-  // queued change too: the badge says what holds it back (or that it is on
+  // Everyday expenses, their cards and monthly budgets (migration 008), each
+  // synced like the moves. One "database is behind" notice for the three
+  // tables, which arrive together with 008.
+  const rowNotice = useMemo(() => migrationNotice(), [activeUserId])
+  const rowOpts = { userId: activeUserId, canSync: Boolean(session), onError: showError, onNotice: showNotice, notice: rowNotice }
+  const expenses = useRowSync({ table: expensesTable, ...rowOpts })
+  const cards = useRowSync({ table: cardsTable, ...rowOpts })
+  const budgets = useRowSync({ table: budgetsTable, ...rowOpts })
+  const rowQueues = [expenses, cards, budgets]
+  // One badge for every queue. A settings change, a deposit or an expense is
+  // a queued change too: the badge says what holds it back (or that it is on
   // its way) even when no bet is queued. An empty queue has no say.
-  const badgeStatus = combinedStatus([status, moves.queuedCount > 0 ? moves.status : 'synced', settingsDirty ? settingsStatus : 'synced'])
-  const badgeQueued = queuedCount + moves.queuedCount
+  const badgeStatus = combinedStatus([
+    status,
+    moves.queuedCount > 0 ? moves.status : 'synced',
+    ...rowQueues.map((q) => (q.queuedCount > 0 ? q.status : 'synced')),
+    settingsDirty ? settingsStatus : 'synced'
+  ])
+  const badgeQueued = queuedCount + moves.queuedCount + rowQueues.reduce((n, q) => n + q.queuedCount, 0)
 
   // Signed out on another device: this device's session is gone for good,
   // and only a new sign-in sends what waits here (see SyncNotices).
@@ -221,8 +237,9 @@ export default function App() {
     (moves.unsaved ? moves.queuedCount : 0) +
     (settingsUnsaved ? 1 : 0) +
     (sync.refusedUnsaved ? sync.refused.length : 0) +
-    (moves.refusedUnsaved ? moves.refused.length : 0)
-  const refusedList = [...sync.refused, ...moves.refused]
+    (moves.refusedUnsaved ? moves.refused.length : 0) +
+    rowQueues.reduce((n, q) => n + (q.unsaved ? q.queuedCount : 0) + (q.refusedUnsaved ? q.refused.length : 0), 0)
+  const refusedList = [...sync.refused, ...moves.refused, ...expenses.refused, ...cards.refused, ...budgets.refused]
 
   // Amounts show in units when the user has a unit size and asked for them.
   const unit = effectiveUnit(settings)
@@ -1003,16 +1020,16 @@ export default function App() {
         else if (action === 'check') await checkBatch(b)
         else if (action === 'retrySettings') await continueOperation(ports, b.id, (x) => retrySettingsOf(x, new Date().toISOString()))
         else if (action === 'saveAgain') {
-          const all = await Promise.all([sync.saveAgain(), moves.saveAgain(), saveSettingsAgain()])
+          const all = await Promise.all([sync.saveAgain(), moves.saveAgain(), expenses.saveAgain(), cards.saveAgain(), budgets.saveAgain(), saveSettingsAgain()])
           if (!all.every(Boolean)) setToast({ kind: 'error', text: t('toast.notSaved') })
         } else if (action === 'sendAgain') {
-          await Promise.all([sync.retryRefused(), moves.retryRefused()])
+          await Promise.all([sync.retryRefused(), moves.retryRefused(), expenses.retryRefused(), cards.retryRefused(), budgets.retryRefused()])
         }
       } catch (err) {
         showError(err)
       }
     },
-    [activeUserId, portsFor, checkBatch, sync, moves, saveSettingsAgain, showError, t]
+    [activeUserId, portsFor, checkBatch, sync, moves, expenses, cards, budgets, saveSettingsAgain, showError, t]
   )
 
   // Written down but not queued yet: lost if the user signs out before it goes on.
@@ -1054,21 +1071,23 @@ export default function App() {
         <SyncNotices
           signedOut={sessionEnded ? badgeQueued + (settingsDirty ? 1 : 0) : null}
           unsaved={unsavedCount}
-          refusalBlocked={sync.refusalBlocked || moves.refusalBlocked}
+          refusalBlocked={sync.refusalBlocked || moves.refusalBlocked || expenses.refusalBlocked || cards.refusalBlocked || budgets.refusalBlocked}
           refused={refusedList.length > 0 ? { count: refusedList.length, reason: refusedList[0].reason } : null}
           onSignIn={() => setReauth(true)}
           onSaveAgain={() => {
-            void Promise.all([sync.saveAgain(), moves.saveAgain(), saveSettingsAgain()]).then((all) => {
+            void Promise.all([sync.saveAgain(), moves.saveAgain(), expenses.saveAgain(), cards.saveAgain(), budgets.saveAgain(), saveSettingsAgain()]).then((all) => {
               if (!all.every(Boolean)) setToast({ kind: 'error', text: t('toast.notSaved') })
             })
           }}
           onRetryRefused={() => {
             void sync.retryRefused()
             void moves.retryRefused()
+            for (const q of rowQueues) void q.retryRefused()
           }}
           onDiscardRefused={() => {
             void sync.discardRefused()
             void moves.discardRefused()
+            for (const q of rowQueues) void q.discardRefused()
           }}
         />
 
@@ -1244,7 +1263,8 @@ export default function App() {
             settings={settings}
             account={{ id: activeUserId, email: activeEmail }}
             oddsFormat={settings.oddsFormat}
-            complete={moves.loaded && settingsLoaded}
+            restoreReady={moves.loaded && settingsLoaded}
+            backupReady={moves.loaded && settingsLoaded && expenses.loaded && cards.loaded && budgets.loaded}
             batches={batches}
             importing={sync.importing}
             live={batchLive}
