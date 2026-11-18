@@ -152,7 +152,7 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, 
                           </span>
                           <span className="exp-item-sub">
                             <span>{t(categoryKey(toCategory(e.category)))}</span>
-                            <span>{cardName(e)}</span>
+                            <span className="exp-item-card">{cardName(e)}</span>
                             {e.note && <span className="exp-item-note">{e.note}</span>}
                           </span>
                         </button>

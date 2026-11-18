@@ -5712,6 +5712,7 @@ tr.is-pending td:first-child {
 .exp-item-sub {
   display: flex;
   min-width: 0;
+  overflow: hidden;
   color: var(--text-3);
   font-size: var(--fs-sm);
   line-height: 16px;
@@ -5728,11 +5729,18 @@ tr.is-pending td:first-child {
   margin: 0 6px;
 }
 
+/* A long card name or note gives way (with "…") before the row runs off a
+   phone; the note first. */
+.exp-item-sub > .exp-item-card,
 .exp-item-sub > .exp-item-note {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.exp-item-sub > .exp-item-note {
+  flex-shrink: 3;
 }
 
 .exp-more {

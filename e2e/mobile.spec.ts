@@ -91,6 +91,9 @@ for (const width of [320, 390]) {
       await expect(page.locator('.exp-today')).toBeVisible()
       await expect(page.locator('.expense-list-card')).toContainText('Teatro Nacional Sucre')
       expect(await overflow(page), 'expenses view').toBeLessThanOrEqual(0)
+      // Nothing inside the view runs past it either (a long card name in a phone
+      // row did, by a few pixels that a wider font turned into page overflow).
+      expect(await page.locator('.expenses-view').evaluate((el) => el.scrollWidth <= el.clientWidth), 'nothing sideways inside the expenses view').toBe(true)
 
       const expenseDialogs: [string, () => Promise<unknown>][] = [
         ['.expense-modal', () => page.click('.fab')],
