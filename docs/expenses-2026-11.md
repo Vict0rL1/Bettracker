@@ -27,7 +27,8 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   botones: en Gastos el principal es **Añadir gasto**; `T` y el **+** del
   móvil abren la hoja de gasto. Las flechas cambian el mes, compartido con el
   calendario de apuestas.
-- **El mes**: gastado (los reembolsos restan), presupuesto restante, gasto
+- **El mes**: gastado (los reembolsos restan) y cómo va frente al mes
+  anterior, presupuesto restante, gasto
   por tarjeta (las tres primeras y «+n más»), media diaria y a qué ritmo va el
   mes; un gráfico que apila el gasto de cada tarjeta con tintas neutras
   («Sin tarjeta», punteada) en dos vistas, acumulado contra la línea del
@@ -41,7 +42,9 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   baja lo gastado. El importe se lee como se teclea: «4,50», «1.234,50»,
   «1,234.50» y, en una moneda sin céntimos, «12.500»; debajo de la casilla se
   ve cómo se ha entendido («= $4.50»). La hoja recuerda la última tarjeta y
-  categoría del dispositivo. Alta, edición y borrado tienen Deshacer y
+  categoría del dispositivo, sugiere los comercios ya escritos y, con uno de
+  ellos, trae la categoría y la tarjeta con que se archivó la última vez
+  (ver «Pulido de noviembre»). Alta, edición y borrado tienen Deshacer y
   funcionan sin conexión.
 - **Tarjetas**: las que se quieran (nombre de hasta 40 caracteres, últimos 4
   dígitos opcionales, crédito o débito). Borrar una que tiene gastos la
@@ -268,6 +271,114 @@ que no debe depender de un tercero.
 solo lectura para el editor SQL: lista de la 002 a la 009 con «yes» o «NO».
 `run.sh` la prueba tras cada migración.
 
+## Pulido de noviembre
+
+De la misma petición («aparte de mejorar la estética de la app que tú
+sugieras y mejoras que sientas que necesite la app»). Cuatro cosas, ninguna
+con migración ni cambios en la sincronización.
+
+**Iconos de categoría.** `components/expenses/CategoryIcon.tsx` tiene los
+once, uno por clave (`coffee`, `food`, `groceries`, `transport`, `shopping`,
+`entertainment`, `health`, `home`, `subscriptions`, `travel`, `other`):
+taza, tenedor y cuchillo, carro, coche, bolsa, entrada, cruz de farmacia,
+casa, flechas que vuelven, avión y tres puntos. Dibujados para esta app (no
+salen de ninguna colección): `viewBox` de 16, trazo de 1,5 con extremos
+redondos, sin relleno y con `currentColor`. Reglas:
+
+- Son adorno junto a un nombre que ya está escrito: `aria-hidden` y
+  `focusable="false"`. El nombre accesible de cada ficha, fila o casilla
+  sigue siendo solo su texto.
+- Tinta neutra (`--text-3`; la de la ficha cuando está elegida). Nunca
+  verde, rojo ni ámbar: el color es dinero.
+- Dónde: las fichas de categoría de la hoja, la columna de categoría de la
+  tabla, delante de cada tarjeta de la lista en el móvil (la fila pasa a ser
+  una rejilla: icono | dos líneas), el desglose por categoría, la revisión
+  del escaneo, las filas de categoría del panel de presupuestos y sus
+  casillas en el editor. El total y las tarjetas no llevan icono.
+- Una categoría que la app no conoce se dibuja como «Otros», igual que se
+  archiva.
+
+**Frente al mes anterior.** Bajo «Gastado en…» hay una línea más:
+`vsLastMonth(gastos, mes, hoy)` en `lib/spend.ts`.
+
+- El **mes en curso** se compara **día por día**: los dos meses hasta el
+  número de día de hoy (el 31 contra un mes más corto cuenta ese mes hasta su
+  último día). Nunca diez días contra un mes entero. Un gasto fechado después
+  de hoy está en el total del mes, pero no en lo comparado.
+- Un **mes pasado** se compara entero con el anterior. Un mes futuro, nada.
+- No sale si el mes anterior **no tiene ningún gasto**.
+- Cómo se dice (`comparisonChange`): «12% más que el mes pasado a estas
+  alturas», «8% menos que en octubre de 2026», «Lo mismo que…» (solo si
+  coincide al céntimo; una diferencia que redondea a 0 es «<1%»). Si el mes
+  anterior no llevaba nada neto gastado a esas alturas, o tan poco que el
+  porcentaje pasaría de 1000, se dice el importe («$45.00 más…»).
+- Una flecha (un SVG, oculta al lector) y las palabras, en la tinta de la
+  línea de arriba. **Sin color**: gastar más no es perder. El `title` da la
+  cifra con la que se compara («Hasta el 18 oct 2026: $1,204.31»).
+- Las sumas van en céntimos enteros, como el resto de `spend.ts`.
+
+**El comercio trae su categoría y su tarjeta.** La hoja ya tenía la lista de
+comercios escritos (`merchantSuggestions`: cada uno una vez, el más reciente
+primero, 50 como mucho). Ahora, en un **gasto nuevo**:
+
+- `merchantLast(gastos, texto)` da la categoría y la tarjeta del gasto más
+  reciente de **exactamente** ese comercio (sin contar mayúsculas ni espacios
+  de los extremos; «Uber» no es «Uber Eats»).
+- `followMerchant` (en `lib/expenseForm.ts`, pura) las pone en la hoja
+  mientras el usuario **no haya elegido** categoría o tarjeta en esa hoja;
+  cada una por separado (`free`). Lo que el usuario elige no se toca más.
+- Sigue al texto **tal como está**: si se sigue escribiendo y deja de ser un
+  comercio conocido, las casillas vuelven a como abrió la hoja (`base`). Así
+  el resultado no depende de por dónde se pasó al teclear.
+- «Sin tarjeta» se adopta como una tarjeta más. Una tarjeta archivada o que
+  este dispositivo no conoce no: se queda la de la hoja.
+- Bajo la casilla, una línea dice qué trajo («Como la última vez: Café ·
+  Visa»), en una región `aria-live` que está siempre en la página.
+- **No** actúa al editar un gasto (sus datos son suyos) ni en una hoja que
+  vuelve de «Añadir tarjeta» (se queda con lo que traía).
+
+**Datos de ejemplo de la demo.** La barra de la demo tiene «Cargar datos de
+ejemplo» junto a «Empezar de cero». Sirve para ver la app llena antes de
+decidir nada: migrar, cambiar la moneda, usar los presupuestos.
+
+- `demo/sample.ts`, `sampleData(ahora, { userId, lang })`: **siempre las
+  mismas filas**, con las fechas contadas desde hoy y nada fechado después.
+  Las apuestas salen de un generador con semilla (`BET_SEED`); los gastos,
+  de dos meses escritos a mano (`THIS_MONTH`, hasta el día de hoy, y
+  `LAST_MONTH`, entero).
+- Qué trae: 60 apuestas en 58 días (ganadas, perdidas, alguna en «push» y 4
+  abiertas; deporte según el día de la semana, casa, tipo, cuota y, en
+  muchas, cuota de cierre), banca inicial de 500 y un ingreso de 250; dos
+  tarjetas («Visa TD» y «Amex Cobalt»); gastos en **CAD** con comercios de
+  Canadá, varios **pagados en USD** con sus tres campos (`original_amount`,
+  `original_currency`, `fx_rate` entre 1,38 y 1,41; `amount` es la conversión
+  que haría la app, con `convert` de `lib/fx.ts`), un reembolso, filas con
+  origen IA y alguna sin tarjeta; y cuatro presupuestos: total, Visa TD,
+  suscripciones y ocio.
+- **Uno cerca del límite y otro pasado, cualquier día**: las suscripciones
+  y las entradas del concierto son del día 1, así que el mes en curso los
+  enseña aunque se cargue el día 1 (un test recorre 400 días seguidos).
+- Las pocas palabras que no son nombres propios (algunas notas, «Fútbol»)
+  salen en el idioma de la interfaz al cargar.
+- Los sellos (`created_at`, `updated_at`) nunca son posteriores al momento
+  de cargar: una fila sellada en el futuro ganaría todos los conflictos a
+  las ediciones del usuario.
+- `loadSampleData` llama a `resetDemo` y escribe las tablas del servidor
+  falso (`demo:rows`, `demo:moves`, `demo:settings`, `demo:expenses`,
+  `demo:expense-cards`, `demo:expense-budgets`); la app recarga y las lee
+  del «servidor» como cualquier dispositivo. `bettracker:view` es del
+  dispositivo, así que vuelve a la misma vista. Los presupuestos llevan el
+  id que la app misma les daría (`budgetId`).
+- Reemplaza todo lo que haya. Si la demo ya tiene algo (`demoHasData`: una
+  fila en el servidor falso, ajustes cambiados o un cambio en cola en el
+  dispositivo), **pregunta antes** con el mismo gesto que «Empezar de cero»
+  (segundo clic en 4 s). Vacía, carga al primer clic.
+- Cargar no pide ninguna tasa de cambio (las filas ya la traen).
+- **Solo en la demo**: `DemoBanner` es lo único que lo importa y solo se
+  monta con `MODE === 'demo'`. `e2e/demo.spec.ts` lee todos los scripts del
+  build real (también los que se cargan a demanda) y comprueba que no llevan
+  ni un comercio del ejemplo ni la semilla de sus ids.
+
 ## Sincronización
 
 Una capa genérica para tablas sencillas de un usuario, en vez de copiar
@@ -484,7 +595,12 @@ reabrieron; las que más pesan:
   `expenseFx` (las dos casillas y lo que se guarda), y los casos nuevos de
   `validate`, `rowTable`, `rowStorage`, `errors`, `fakeSupabase`, `backup`,
   `expenseCsv`, `currency`, `expenseForm`, `expenseReview`, `expenseLast`,
-  `useRowSync` y `store`.
+  `useRowSync` y `store`. Con el pulido: `spend` (`vsLastMonth`,
+  `comparisonChange`, `merchantLast`), `expenseForm` (`followMerchant`),
+  `demo` (`demoHasData`) y `sample` (las filas del ejemplo pasan por
+  `normalizeInput`, `normalizeExpense`, `normalizeCard` y `normalizeBudget`
+  sin cambiar; ids únicos; nada en el futuro; presupuestos cerca y pasado
+  los 400 días que recorre).
 - **SQL**: `checks.sql` secciones 11 (008) y 12 (009) en las variantes A, B y
   C de `run.sh`, que además prueba `check_migrations.sql` tras cada
   migración.
@@ -507,7 +623,14 @@ reabrieron; las que más pesan:
   duplicado por lo pagado; la revisión sin tasas y la tasa para todas; la
   hoja y la revisión a 320 px en español). El servicio de tasas lo contesta
   el harness, y una petición a él que una prueba no haya pedido la hace
-  fallar.
+  fallar. Con el pulido, tres más en `expenses.spec.ts` (cada categoría con
+  su icono donde se nombra, oculto al lector y en tinta neutra, también en
+  el móvil; la comparación con el mes anterior, sin color, en es y en, y
+  ausente sin mes anterior; el comercio que trae categoría y tarjeta, lo que
+  el usuario elige y la edición, que no cambia) y cuatro en `demo.spec.ts`
+  (cargar el ejemplo en una demo vacía y volver a la misma vista, con sus
+  presupuestos, sus USD y sus apuestas; preguntar antes si hay datos; en
+  español; y que los scripts del build real no llevan el ejemplo).
 - **La función**: `deno check` (Deno 2.9.6) pasó en la etapa 2 contra los
   tipos reales del SDK y de supabase-js. Nunca se ha llamado a Anthropic ni a
   un proyecto de Supabase real.

@@ -218,16 +218,19 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 Para verla sin Supabase ni `.env`: `npm run demo` (http://localhost:5172).
 Entra ya con sesión y sin datos, contra un backend falso que guarda todo en
 el navegador; funciona igual que contra Supabase, sin conexión incluido.
-Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic).
+Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic) y
+"Cargar datos de ejemplo": dos meses de apuestas y de gastos de una persona
+inventada, para ver la app llena antes de meter nada propio (pregunta antes
+si la demo ya tiene datos, y recarga en la misma vista).
 Tras cerrar sesión, cualquier email y una contraseña de 6 caracteres o más
 vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 1531 tests unitarios en 58 archivos (vitest)
+npm test            # 1575 tests unitarios en 59 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 260 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 267 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
@@ -308,6 +311,48 @@ la página). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Pulido de Gastos y datos de ejemplo (noviembre 2026)
+
+La parte de «mejorar la estética de la app que tú sugieras y mejoras que
+sientas que necesite» de la misma petición. Cuatro cosas, sin migración y
+sin tocar la sincronización; el detalle está en `docs/expenses-2026-11.md`,
+«Pulido de noviembre».
+
+- **Un icono por categoría** (`components/expenses/CategoryIcon.tsx`): once
+  dibujos propios de trazo, en una caja de 16 px, con la tinta del texto
+  (nunca un color: el color es dinero) y ocultos al lector de pantalla. Van
+  junto al nombre de la categoría en las fichas de la hoja, la lista (en el
+  móvil, delante de cada tarjeta), el desglose, la revisión del escaneo, los
+  presupuestos y su editor.
+- **«Frente al mes pasado»** bajo lo gastado: el mes en curso se compara día
+  por día (los dos meses hasta el número de día de hoy) y un mes pasado,
+  entero. Una flecha y palabras («29% menos que el mes pasado a estas
+  alturas»), sin color; no sale si el mes anterior no tiene gastos.
+  `vsLastMonth` y `comparisonChange` en `lib/spend.ts`.
+- **El comercio trae su última categoría y tarjeta**: al escribir en un
+  gasto nuevo un comercio ya usado, la hoja adopta las de su gasto más
+  reciente mientras el usuario no las haya elegido en esa hoja, y lo dice
+  bajo la casilla («Como la última vez: Café · Visa»). `merchantLast` en
+  `lib/spend.ts` y `followMerchant` en `lib/expenseForm.ts`. Al editar un
+  gasto no cambia nada.
+- **Datos de ejemplo en la demo**: el botón «Cargar datos de ejemplo» de la
+  barra (`demo/sample.ts`). Sesenta apuestas en dos meses, banca inicial y
+  un ingreso, dos tarjetas, los gastos del mes pasado y de este hasta hoy en
+  CAD (varios pagados en USD con su tasa, un reembolso, filas leídas por IA)
+  y cuatro presupuestos, uno cerca del límite y otro pasado sea cual sea el
+  día. Siempre los mismos, con las fechas contadas desde hoy. Solo existe en
+  la demo: una prueba e2e lee los scripts del build real y comprueba que no
+  están.
+
+**Cómo se probó.** Unitarios: `spend` (`vsLastMonth`, `comparisonChange`,
+`merchantLast`), `expenseForm` (`followMerchant`), `demo` (`demoHasData`) y
+el nuevo `sample` (cada fila pasa las mismas validaciones que la app, y 400
+días seguidos dan todos un presupuesto cerca y otro pasado). e2e: tres en
+`expenses.spec.ts` (iconos, comparación, comercios) y cuatro en
+`demo.spec.ts` (cargar en vacío y volver a la misma vista, preguntar con
+datos, español, y que el build real no lleva los datos). Capturas a 1280 y
+390 px, en oscuro y claro. **Ninguna expectativa anterior cambió.**
 
 ### Gastos en otra moneda (noviembre 2026)
 
@@ -1102,15 +1147,18 @@ src/renderer/src/lib/
   currency.ts   formato de la moneda de los gastos (símbolo estrecho la principal; con código lo pagado en otra)
   fx.ts         tasas de cambio, la parte pura y sin imports: URL, lectura de la respuesta, conversión, caché
   expenseFx.ts  gasto en otra moneda: las casillas de tasa e importe convertido y lo que se guarda
-  spend.ts      gasto del mes, proyección, presupuestos, datos del gráfico, filtros
-  expenseForm.ts, expenseReview.ts      la hoja de gasto (importes como se teclean); la revisión de lo leído por la IA
+  spend.ts      gasto del mes, proyección, comparación con el mes anterior, presupuestos, datos del gráfico, filtros,
+                comercios ya escritos y cómo se archivó cada uno la última vez
+  expenseForm.ts, expenseReview.ts      la hoja de gasto (importes como se teclean; el comercio trae su categoría
+                                        y tarjeta); la revisión de lo leído por la IA
   cardMatch.ts  tarjeta por últimos 4 dígitos o nombre
   expenseCsv.ts CSV de gastos
   scanImage.ts, scanImageDom.ts         la imagen a escanear: tamaño, tipo, JPEG
 src/renderer/src/demo/
   fakeSupabase.ts   el Supabase falso de la demo y de la suite e2e
   start.ts          entrada de `npm run demo` (va delante de main.tsx)
-  demo.ts           usuario de la demo y "Empezar de cero"
+  demo.ts           usuario de la demo, "Empezar de cero" y si la demo tiene datos
+  sample.ts         "Cargar datos de ejemplo": dos meses de apuestas y gastos, siempre los mismos, fechados desde hoy
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
@@ -1147,8 +1195,9 @@ src/renderer/src/components/
 src/renderer/src/components/expenses/
   ExpensesView, SpendSummary, SpendChart(+Inner), BudgetsPanel, CategoryBreakdown,
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
-  BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText
-e2e/*.spec.ts                       260 comprobaciones (mobile.spec.ts: el móvil;
+  BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
+  CategoryIcon (los once iconos de categoría)
+e2e/*.spec.ts                       267 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;

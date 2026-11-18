@@ -3,6 +3,7 @@ import type { ExpenseLast } from '../data/expenseLast'
 import type { Problem } from './betForm'
 import { currencyDigits, EXPENSE_CURRENCIES } from './currency'
 import type { FxStored, FxTyped, FxView } from './expenseFx'
+import type { MerchantLast } from './spend'
 import { isValidDate, MAX_AMOUNT } from './validate'
 
 /**
@@ -48,6 +49,38 @@ export function initialDraft(o: { today: string; last: ExpenseLast | null; cards
 export function resumedDraft(draft: ExpenseDraft, cards: readonly ExpenseCard[], addedCardId: string | null): ExpenseDraft {
   const added = addedCardId === null ? undefined : cards.find((c) => c.id === addedCardId && !c.archived)
   return added ? { ...draft, cardId: added.id } : draft
+}
+
+/** The two boxes a merchant can fill in: true while the user has not set that one in this sheet. */
+export interface FollowFree {
+  category: boolean
+  card: boolean
+}
+
+/**
+ * The merchant box changed to `merchant`. A category or card the user has not set in this sheet (`free`) follows the
+ * merchant: one typed before brings what it was last filed under (`last`, lib/spend.ts merchantLast); any other text
+ * brings back what the sheet opened with (`base`), so the boxes depend on the text as it stands, never on what was
+ * typed on the way to it ("Uber" on the way to "Uber Eats"). A box the user set is never changed. The card comes along
+ * only when it can be chosen now: "No card", or an active card of `cards`; an archived or unknown one leaves the
+ * sheet's own. `adopted` says which boxes now hold the merchant's.
+ */
+export function followMerchant(
+  d: ExpenseDraft,
+  merchant: string,
+  o: { last: MerchantLast | null; free: FollowFree; base: Pick<ExpenseDraft, 'category' | 'cardId'>; cards: readonly ExpenseCard[] }
+): { draft: ExpenseDraft; adopted: FollowFree } {
+  const cardOk = o.last !== null && (o.last.cardId === null || o.cards.some((c) => c.id === o.last?.cardId && !c.archived))
+  const adopted: FollowFree = { category: o.free.category && o.last !== null, card: o.free.card && cardOk }
+  return {
+    draft: {
+      ...d,
+      merchant,
+      category: adopted.category && o.last ? o.last.category : o.free.category ? o.base.category : d.category,
+      cardId: adopted.card && o.last ? o.last.cardId : o.free.card ? o.base.cardId : d.cardId
+    },
+    adopted
+  }
 }
 
 /** Boxes that take typed text. */

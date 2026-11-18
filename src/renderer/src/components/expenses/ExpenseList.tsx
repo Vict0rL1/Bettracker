@@ -10,6 +10,7 @@ import { useMoney } from '../../lib/money'
 import { cardFilterChoices, filterExpenses, groupExpensesByDay, NO_CARD, type ExpenseFilter } from '../../lib/spend'
 import { NARROW, useMedia } from '../../lib/useMedia'
 import { DownloadIcon, PencilIcon, TrashIcon } from '../icons'
+import CategoryIcon from './CategoryIcon'
 
 interface Props {
   ym: MonthKey
@@ -157,6 +158,7 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency
                     return (
                       <li key={e.id} className="exp-item" data-id={e.id}>
                         <button type="button" className="exp-item-open" aria-label={t('explist.edit', { merchant, date: humanDate(e.date) })} onClick={() => onEdit(e)}>
+                          <CategoryIcon category={toCategory(e.category)} />
                           <span className="exp-item-top">
                             <span className={`exp-item-merchant${e.merchant.trim() === '' ? ' is-none' : ''}`}>{merchant}</span>
                             {e.source === 'ai' && <span className="tag exp-ai">{t('explist.ai')}</span>}
@@ -210,7 +212,10 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency
                           </span>
                           {e.source === 'ai' && <span className="tag exp-ai">{t('explist.ai')}</span>}
                         </td>
-                        <td className="exp-cat">{t(categoryKey(toCategory(e.category)))}</td>
+                        <td className="exp-cat">
+                          <CategoryIcon category={toCategory(e.category)} size={14} />
+                          {t(categoryKey(toCategory(e.category)))}
+                        </td>
                         <td className="exp-col-card" title={cardName(e)}>
                           {cardName(e)}
                         </td>

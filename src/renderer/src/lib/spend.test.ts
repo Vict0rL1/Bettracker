@@ -8,16 +8,19 @@ import {
   cardFilterChoices,
   cardKeyOf,
   categoryShares,
+  comparisonChange,
   expensesInMonth,
   filterExpenses,
   groupExpensesByDay,
+  merchantLast,
   merchantSuggestions,
   monthSpend,
   NO_CARD,
   pace,
   SERIES_INKS,
   spendChartData,
-  totalBudget
+  totalBudget,
+  vsLastMonth
 } from './spend'
 
 const A = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -98,6 +101,79 @@ describe('pace', () => {
 
   it('rounds to the cent', () => {
     expect(pace(10, NOV, '2026-11-03')).toMatchObject({ dailyAverage: 3.33, projected: 100 })
+  })
+})
+
+describe('vsLastMonth', () => {
+  const OCT = { year: 2026, month: 9 }
+  const list = [
+    exp({ date: '2026-10-03', amount: 40 }),
+    exp({ date: '2026-10-17', amount: 60 }),
+    exp({ date: '2026-10-18', amount: 500 }),
+    exp({ date: '2026-10-31', amount: 0.1 }),
+    exp({ date: '2026-11-02', amount: 100 }),
+    exp({ date: '2026-11-17', amount: 20.2 }),
+    exp({ date: '2026-11-10', amount: -8.2 }),
+    exp({ date: '2026-09-30', amount: 999 })
+  ]
+
+  it('the current month: both months up to today’s day number, never a part of a month against a whole one', () => {
+    expect(vsLastMonth(list, NOV, TODAY)).toEqual({ previousMonth: OCT, previousThrough: '2026-10-17', current: 112, previous: 100, diff: 12, ratio: 0.12 })
+    // A day later last month's big day counts too.
+    expect(vsLastMonth(list, NOV, '2026-11-18')).toMatchObject({ previousThrough: '2026-10-18', current: 112, previous: 600, diff: -488 })
+    // An expense dated after today is in the month's total, not in what is compared.
+    expect(vsLastMonth(list, NOV, '2026-11-02')).toMatchObject({ previousThrough: '2026-10-02', current: 100, previous: 0, diff: 100, ratio: null })
+  })
+
+  it('a past month: the whole of it against the whole month before', () => {
+    const whole = vsLastMonth(list, OCT, TODAY)
+    expect(whole).toMatchObject({ previousMonth: { year: 2026, month: 8 }, previousThrough: null, current: 600.1, previous: 999, diff: -398.9 })
+    expect(whole?.ratio).toBeCloseTo(-398.9 / 999, 12)
+  })
+
+  it('the 31st against a shorter month counts that month to its last day', () => {
+    const march = [exp({ date: '2027-02-28', amount: 10 }), exp({ date: '2027-02-01', amount: 5 }), exp({ date: '2027-03-31', amount: 30 })]
+    expect(vsLastMonth(march, { year: 2027, month: 2 }, '2027-03-31')).toMatchObject({ previousMonth: { year: 2027, month: 1 }, previousThrough: '2027-02-28', current: 30, previous: 15, diff: 15, ratio: 1 })
+  })
+
+  it('January looks back at December of the year before', () => {
+    const jan = [exp({ date: '2026-12-05', amount: 50 }), exp({ date: '2027-01-04', amount: 25 })]
+    expect(vsLastMonth(jan, { year: 2027, month: 0 }, '2027-01-10')).toMatchObject({ previousMonth: { year: 2026, month: 11 }, previousThrough: '2026-12-10', current: 25, previous: 50, ratio: -0.5 })
+  })
+
+  it('nothing to compare with: no expenses at all the month before, or a month that has not started', () => {
+    expect(vsLastMonth(list, { year: 2026, month: 8 }, TODAY)).toBeNull()
+    expect(vsLastMonth([], NOV, TODAY)).toBeNull()
+    expect(vsLastMonth(list, { year: 2026, month: 11 }, TODAY)).toBeNull()
+    // Expenses the month before, none of them yet by this day: still compared (by the amount, see comparisonChange).
+    expect(vsLastMonth(list, NOV, '2026-11-01')).toMatchObject({ current: 0, previous: 0, diff: 0, ratio: null })
+  })
+
+  it('sums in cents, and a month of refunds gives no share', () => {
+    const cents = [exp({ date: '2026-10-01', amount: 0.1 }), exp({ date: '2026-10-02', amount: 0.2 }), exp({ date: '2026-11-01', amount: 0.3 })]
+    expect(vsLastMonth(cents, NOV, TODAY)).toMatchObject({ current: 0.3, previous: 0.3, diff: 0, ratio: 0 })
+    const refunds = [exp({ date: '2026-10-01', amount: -20 }), exp({ date: '2026-11-01', amount: 5 })]
+    expect(vsLastMonth(refunds, NOV, TODAY)).toMatchObject({ current: 5, previous: -20, diff: 25, ratio: null })
+  })
+})
+
+describe('comparisonChange', () => {
+  it('more or less, by a whole percentage', () => {
+    expect(comparisonChange({ diff: 12, ratio: 0.12 })).toEqual({ direction: 'more', pct: 12 })
+    expect(comparisonChange({ diff: -488, ratio: -488 / 600 })).toEqual({ direction: 'less', pct: 81 })
+    expect(comparisonChange({ diff: -50, ratio: -1 })).toEqual({ direction: 'less', pct: 100 })
+  })
+
+  it('the same only to the cent; a difference under half a percent is still one (0, said as "<1%")', () => {
+    expect(comparisonChange({ diff: 0, ratio: 0 })).toEqual({ direction: 'same' })
+    expect(comparisonChange({ diff: 0, ratio: null })).toEqual({ direction: 'same' })
+    expect(comparisonChange({ diff: 0.01, ratio: 0.00001 })).toEqual({ direction: 'more', pct: 0 })
+  })
+
+  it('by the amount alone when the month before gives no share: nothing spent by then, or ten times less', () => {
+    expect(comparisonChange({ diff: 100, ratio: null })).toEqual({ direction: 'more', pct: null })
+    expect(comparisonChange({ diff: 499, ratio: 499 })).toEqual({ direction: 'more', pct: null })
+    expect(comparisonChange({ diff: 99.9, ratio: 9.99 })).toEqual({ direction: 'more', pct: 999 })
   })
 })
 
@@ -332,6 +408,45 @@ describe('merchantSuggestions', () => {
     ]
     expect(merchantSuggestions(list)).toEqual(['Starbucks', 'uber', 'Walmart'])
     expect(merchantSuggestions(list, 2)).toEqual(['Starbucks', 'uber'])
+  })
+})
+
+describe('merchantLast', () => {
+  const list = [
+    exp({ date: '2026-11-01', amount: 4, merchant: 'Starbucks', category: 'food', cardId: A }),
+    exp({ date: '2026-11-05', amount: 5, merchant: 'starbucks ', category: 'coffee', cardId: B }),
+    exp({ date: '2026-11-03', amount: 6, merchant: 'Starbucks', category: 'other', cardId: null }),
+    exp({ date: '2026-11-04', amount: 20, merchant: 'Uber', category: 'transport', cardId: null }),
+    exp({ date: '2026-11-06', amount: 30, merchant: 'Uber Eats', category: 'food', cardId: A }),
+    exp({ date: '2026-11-07', amount: 9, merchant: '', category: 'health', cardId: A })
+  ]
+
+  it('the category and card of the merchant’s most recent expense, case and outer spaces aside', () => {
+    expect(merchantLast(list, 'Starbucks')).toEqual({ category: 'coffee', cardId: B })
+    expect(merchantLast(list, '  STARBUCKS')).toEqual({ category: 'coffee', cardId: B })
+  })
+
+  it('the whole name, never the start of one: "Uber" is not "Uber Eats"', () => {
+    expect(merchantLast(list, 'Uber')).toEqual({ category: 'transport', cardId: null })
+    expect(merchantLast(list, 'uber eats')).toEqual({ category: 'food', cardId: A })
+    expect(merchantLast(list, 'Ube')).toBeNull()
+    expect(merchantLast(list, 'Uber Eats Montréal')).toBeNull()
+  })
+
+  it('no merchant, or one not typed before: nothing (an expense with no merchant is no match for an empty box)', () => {
+    expect(merchantLast(list, '')).toBeNull()
+    expect(merchantLast(list, '   ')).toBeNull()
+    expect(merchantLast(list, 'Walmart')).toBeNull()
+    expect(merchantLast([], 'Starbucks')).toBeNull()
+  })
+
+  it('on the same day, the one added last; a category this app doesn’t know is "other"', () => {
+    const sameDay = [
+      { ...exp({ date: '2026-11-05', amount: 1, merchant: 'Metro', category: 'groceries', cardId: A }), createdAt: '2026-11-05T09:00:00.000Z' },
+      { ...exp({ date: '2026-11-05', amount: 1, merchant: 'Metro', category: 'transport', cardId: B }), createdAt: '2026-11-05T18:00:00.000Z' }
+    ]
+    expect(merchantLast(sameDay, 'metro')).toEqual({ category: 'transport', cardId: B })
+    expect(merchantLast([exp({ date: '2026-11-05', amount: 1, merchant: 'X', category: 'pets' as Expense['category'] })], 'x')).toEqual({ category: 'other', cardId: null })
   })
 })
 

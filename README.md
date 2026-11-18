@@ -281,9 +281,21 @@ offline included — turn the Wi-Fi off and changes wait on the device, then
 sync when it's back. A bar across the top says it's the demo, and **Start
 over** (two clicks) empties it. Signing out leads to the sign-in screen; any
 email and a password of 6 or more characters sign you back in. The
-**Network** URL works on your phone too; each browser has its own demo. None
-of the demo's code goes into `npm run build` (only its three strings and the
-banner's CSS do).
+**Network** URL works on your phone too; each browser has its own demo.
+
+**Load sample data**, in the same bar, fills the demo so you can look at the
+app full before putting anything real in it: two months of a made-up
+person's bets (sixty, with a starting bankroll and a deposit) and everyday
+expenses in Canadian dollars (two cards, some paid in US dollars with their
+rate, a refund, rows read by AI, four budgets with one near its limit and
+one over). It is the same every time, dated back from today, and it replaces
+whatever the demo holds (it asks first when there is anything to replace);
+the app then reloads on the view you were on. From there it is ordinary
+data: edit it, add to it, or **Start over**.
+
+None of the demo's code or sample data goes into `npm run build` (only its
+strings and the banner's CSS do); the e2e suite reads the built scripts to
+make sure.
 
 ## Put it on your phone (deploy the PWA)
 
@@ -509,6 +521,17 @@ says which one is missing and what you add waits on the device.
   expense below zero: it shows in green and lowers that month's spending.
   Edit and delete from the list; each comes with an **Undo**. It all works
   offline and syncs like the bets.
+- **Merchants you have typed before** are suggested as you type (the latest
+  first). In a new expense, one of them also brings the **category and card
+  it was last filed under**, and a line under the box says so ("As last
+  time: Coffee · Visa"). It only fills what you haven't chosen yourself in
+  that sheet, it follows the name as it stands (type on past "Uber" to "Uber
+  Eats" and you get Uber Eats' own), and it never touches an expense you are
+  editing.
+- **Each category has a small glyph** next to its name wherever it is named:
+  the sheet's chips, the list (leading each row on a phone), the categories,
+  the scan review and the budgets. Decoration only, in a neutral ink (colour
+  is kept for money), and hidden from screen readers.
 - **Cards** — as many as you like (name, last 4 digits, credit or debit),
   under **Expense settings**. Deleting a card that has expenses archives it:
   it leaves the pickers and its expenses keep its name. An expense whose card
@@ -527,7 +550,13 @@ says which one is missing and what you add waits on the device.
   yours: pick it next to the amount, and the app converts it (see
   [Other currencies and exchange rates](#other-currencies-and-exchange-rates)).
 - **The month** — what was spent, what is left of the budget, each card's
-  share, the daily average and where the month is heading; one chart of every
+  share, the daily average and where the month is heading. Under what was
+  spent, one line compares it with **the month before**: day for day while
+  the month is under way ("12% less than at this point last month": both
+  months up to today's day number, never part of a month against a whole
+  one), whole months for a past one. An arrow and plain words, no colour;
+  hover it for the figure it is compared with. It is left out when the month
+  before has no expenses. Then one chart of every
   card's spending (running total against the budget, or per day), the
   categories, and the list (a table on a computer, cards on a phone; search,
   and filter by card and category). The arrows and `←`/`→` change the month,
@@ -769,7 +798,7 @@ Bettracker/
         ├── data/fxRates.ts     # exchange rates: the request, the device's cache, what is used offline
         ├── lib/fx.ts           # their pure part: the URL, reading the answer, the conversion, the cache's shape
         ├── lib/                # supabase client (requests time out after 30 s), validation, csv, odds, dates, stats, bankroll, format, strings, …
-        ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e) and its entry
+        ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e), its entry and the sample data
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, … (expenses/: the Expenses view)
 ```
 

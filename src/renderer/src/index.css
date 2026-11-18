@@ -5196,6 +5196,20 @@ tr.is-pending td:first-child {
   margin: 0 6px;
 }
 
+/* Against the month before: an arrow and plain words, in the quiet ink of the
+   line above it. More than last month is not a loss: no colour. */
+.spend-vs {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.spend-vs > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
 /* The budget cell is a button (it opens the budgets): its sub holds the words and the bar. */
 .key-card .key-sub.spend-budget-sub {
   flex-direction: column;
@@ -5656,9 +5670,9 @@ tr.is-pending td:first-child {
 
 /* The whole row is one target: it opens the expense (Delete is in its sheet). */
 .exp-item-open {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 12px;
   width: 100%;
   min-height: 44px;
   padding: 8px 4px;
@@ -5766,6 +5780,29 @@ tr.is-pending td:first-child {
 
 .exp-item-sub > .exp-original::before {
   content: none;
+}
+
+/* A category's glyph (CategoryIcon): beside the category's name wherever it
+   is named, in the quietest ink. Decoration only, never a money colour. */
+.cat-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* Inline before a name that may be cut with "…": it rides the text's line. */
+:is(.exp-cat, .spend-cat-name, .budget-name, .budget-box-label, .exp-review-meta > span) > .cat-icon {
+  margin-right: 8px;
+  vertical-align: -2px;
+}
+
+.exp-review-meta > span > .cat-icon {
+  margin-right: 5px;
+}
+
+/* On a phone the glyph leads the row, beside its two lines. */
+.exp-item-open > .cat-icon {
+  grid-row: 1 / span 2;
+  align-self: center;
 }
 
 .exp-more {
@@ -5879,6 +5916,17 @@ tr.is-pending td:first-child {
   margin: 0;
 }
 
+/* What a merchant typed before brought with it: one quiet line under its box.
+   Always in the page (a live region is heard when its text changes, not when
+   it appears); empty, it takes no room, not even the field's gap. */
+.exp-merchant-last {
+  margin: 0;
+}
+
+.exp-merchant-last:empty {
+  margin-top: -4px;
+}
+
 .exp-kind,
 .paycard-kind {
   align-self: flex-start;
@@ -5936,7 +5984,15 @@ tr.is-pending td:first-child {
 }
 
 .cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
+}
+
+/* The chosen category's glyph takes its chip's ink. */
+.cat-chip:is([aria-pressed='true'], :hover) > .cat-icon {
+  color: inherit;
 }
 
 .cat-chip:not([aria-pressed='true']):hover {

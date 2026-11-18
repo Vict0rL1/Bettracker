@@ -3,7 +3,7 @@ import type { Expense, ExpenseBudget, ExpenseCard } from '../../../../shared/typ
 import { currencyName } from '../../lib/currency'
 import { currentMonth, monthLabel, sameMonth, todayStr, type MonthKey } from '../../lib/dates'
 import { useLang } from '../../lib/i18n'
-import { budgetLines, categoryShares, expensesInMonth, monthSpend, totalBudget, type ExpenseFilter } from '../../lib/spend'
+import { budgetLines, categoryShares, expensesInMonth, monthSpend, totalBudget, vsLastMonth, type ExpenseFilter } from '../../lib/spend'
 import { ChevronLeftIcon, ChevronRightIcon, ReceiptIcon, SlidersIcon } from '../icons'
 import BudgetsPanel from './BudgetsPanel'
 import CategoryBreakdown from './CategoryBreakdown'
@@ -59,6 +59,7 @@ export default function ExpensesView(p: ExpensesViewProps) {
   const monthList = useMemo(() => expensesInMonth(p.expenses, p.ym), [p.expenses, p.ym])
   const lines = useMemo(() => budgetLines(p.budgets, month, p.cards), [p.budgets, month, p.cards])
   const shares = useMemo(() => categoryShares(month), [month])
+  const versus = useMemo(() => vsLastMonth(p.expenses, p.ym, today), [p.expenses, p.ym, today])
   const total = totalBudget(p.budgets)
   const onCurrent = sameMonth(p.ym, currentMonth())
   const first = p.expensesLoaded && p.cardsLoaded && p.budgetsLoaded && p.expenses.length === 0 && p.cards.length === 0 && p.budgets.length === 0
@@ -137,7 +138,7 @@ export default function ExpensesView(p: ExpensesViewProps) {
         </article>
       ) : (
         <>
-          <SpendSummary ym={p.ym} month={month} budgets={p.budgets} cards={p.cards} cardsLoaded={p.cardsLoaded} today={today} onManageBudgets={() => p.onManage('budgets')} />
+          <SpendSummary ym={p.ym} month={month} versus={versus} budgets={p.budgets} cards={p.cards} cardsLoaded={p.cardsLoaded} today={today} onManageBudgets={() => p.onManage('budgets')} />
           <div className="spend-grid">
             <SpendChart expenses={p.expenses} cards={p.cards} cardsLoaded={p.cardsLoaded} ym={p.ym} today={today} budget={total?.monthlyLimit ?? null} />
             <BudgetsPanel lines={lines} loaded={p.budgetsLoaded} onEdit={() => p.onManage('budgets')} />

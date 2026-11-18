@@ -183,6 +183,120 @@ test.describe('demo', () => {
     await expect.poll(() => storedExpenses(page)).toBe(2)
   })
 
+  // Two months of a made-up person's bets and expenses, to look at the app full before any real data goes in.
+  test('Load sample data fills an empty demo at once and comes back on the same view: bets, cards, expenses in CAD with some paid in USD, budgets near and over', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await page.locator('.view-tab-expenses').click()
+    await page.waitForSelector('.exp-first')
+
+    // Nothing to lose yet: one click, no question.
+    await page.locator('.demo-sample').click()
+    await page.waitForSelector('.exp-bar')
+    await expect(page.locator('.view-tab-expenses')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect(await storedBets(page)).toBe(60)
+    // Last month whole (28) and this one up to today (4 on its 1st alone).
+    expect(await storedExpenses(page)).toBeGreaterThanOrEqual(32)
+
+    // The Expenses view of a real month: Canadian dollars, two cards, a budget near its limit and one over it.
+    await expect(page.locator('.exp-currency-code [aria-hidden]')).toHaveText('CAD')
+    await expect(page.locator('.spend-card-name').nth(0)).toHaveText('Visa TD')
+    await expect(page.locator('.spend-card-name').nth(1)).toHaveText('Amex Cobalt')
+    await expect(page.locator('.budget-row')).toHaveCount(4)
+    await expect(page.locator('.budget-row.is-near')).toHaveAttribute('data-target', 'subscriptions')
+    await expect(page.locator('.budget-row.is-over')).toHaveAttribute('data-target', 'entertainment')
+    await expect(page.locator('.spend-vs')).toBeVisible()
+    // Paid in US dollars on the 1st: what was paid shows beside its amount in CAD, and its rate is stored with it.
+    const dropbox = page.locator('.exp-row', { hasText: 'Dropbox' })
+    await expect(dropbox.locator('.exp-amount-main')).toHaveText('$16.83')
+    await expect(dropbox.locator('.exp-original [aria-hidden]')).toHaveText('USD 11.99')
+    const usd = await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:expenses') ?? '[]') as Record<string, unknown>[]).filter((r) => r.original_currency === 'USD'))
+    expect(usd.length).toBeGreaterThanOrEqual(5)
+    for (const r of usd) {
+      expect(typeof r.original_amount).toBe('number')
+      expect(r.fx_rate as number).toBeGreaterThanOrEqual(1.38)
+      expect(r.fx_rate as number).toBeLessThanOrEqual(1.41)
+    }
+    // Last month too: a refund in green and rows read by AI.
+    await page.locator('.exp-month-nav .nav-btn').first().click()
+    await expect(page.locator('.exp-row')).toHaveCount(28)
+    await expect(page.locator('.exp-row .exp-amount.refund')).toHaveText(/-\$25\.00/)
+    await expect(page.locator('.exp-row .exp-ai')).toHaveCount(2)
+
+    // The bets: sixty of them, four still open, the bankroll from its start, the deposit and what was won.
+    await page.locator('.view-tab-bets').click()
+    await expect(page.locator('.history-card tbody tr')).toHaveCount(25)
+    await expect(page.locator('.history-card')).toContainText('60 bets')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('$836.40')
+    expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as { status: string }[]).filter((r) => r.status === 'pending').length)).toBe(4)
+    expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:moves') ?? '[]') as unknown[]).length)).toBe(1)
+
+    // It is ordinary data from here on: an edit syncs, and survives a reload.
+    await addLoss(page, '20')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect(await storedBets(page)).toBe(61)
+    await page.reload()
+    await expect(page.locator('.history-card')).toContainText('61 bets')
+  })
+
+  test('Load sample data asks first when the demo already holds data, takes its question back, and then replaces everything', async ({ page }) => {
+    await page.goto('/')
+    await addLoss(page, '77')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+
+    const sample = page.locator('.demo-sample')
+    await expect(sample).toHaveText('Load sample data')
+    await sample.click()
+    await expect(sample).toHaveText('Replace everything?')
+    // Nothing was touched by the question, and asking Start over instead drops it.
+    expect(await storedBets(page)).toBe(1)
+    await page.locator('.demo-reset').click()
+    await expect(page.locator('.demo-reset')).toHaveText('Delete everything?')
+    await expect(sample).toHaveText('Load sample data')
+    await expect(page.locator('.demo-reset')).toHaveText('Start over', { timeout: 8000 })
+    await expect(page.locator('.history-card tbody tr')).toHaveCount(1)
+
+    await sample.click()
+    await expect(sample).toHaveText('Replace everything?')
+    await sample.click()
+    await expect(page.locator('.history-card')).toContainText('60 bets')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    expect(await storedBets(page)).toBe(60)
+    // The bet that was there is gone, on the server and on this device.
+    await expect(page.locator('.history-card tbody tr', { hasText: '-$77.00' })).toHaveCount(0)
+    expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as { amount: number }[]).some((r) => r.amount === -77))).toBe(false)
+
+    // Loaded again over itself: the same sixty, never a second set.
+    await sample.click()
+    await expect(sample).toHaveText('Replace everything?')
+    await sample.click()
+    await expect(page.locator('.history-card')).toContainText('60 bets')
+    expect(await storedBets(page)).toBe(60)
+    // And Start over still empties it all.
+    await page.locator('.demo-reset').click()
+    await page.locator('.demo-reset').click()
+    await expect(page.locator('.history-card tbody tr')).toHaveCount(0)
+    expect(await storedBets(page)).toBe(0)
+    expect(await storedExpenses(page)).toBe(0)
+  })
+
+  test('in Spanish the sample’s few words are Spanish', async ({ page }) => {
+    await page.addInitScript(() => {
+      if (!localStorage.getItem('bettracker:lang')) localStorage.setItem('bettracker:lang', 'es')
+    })
+    await page.goto('/')
+    await expect(page.locator('.sync-badge')).toHaveText('Sincronizado')
+    await expect(page.locator('.demo-sample')).toHaveText('Cargar datos de ejemplo')
+    await page.locator('.demo-sample').click()
+    await expect(page.locator('.history-card')).toContainText('60 apuestas')
+    await page.locator('.view-tab-expenses').click()
+    await expect(page.locator('.exp-row', { hasText: 'Ticketmaster' }).locator('.exp-note')).toHaveText('entradas del concierto')
+    // Now there is something to lose: it asks, in Spanish.
+    await page.locator('.demo-sample').click()
+    await expect(page.locator('.demo-sample')).toHaveText('¿Reemplazar todo?')
+  })
+
   test('Start over takes back its question after a few seconds', async ({ page }) => {
     await page.goto('/')
     await addLoss(page, '20')
@@ -220,6 +334,37 @@ test.describe('demo', () => {
     expect(await storedBets(page)).toBe(0)
     expect(await storedExpenses(page)).toBe(0)
   })
+})
+
+/** Every script of the build served at `base`: the page's own, and the chunks those name (loaded on demand). */
+async function bundle(page: Page, base: string): Promise<string> {
+  const html = await (await page.request.get(`${base}/`)).text()
+  const seen = new Set<string>()
+  const queue = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1].replace(/^\//, ''))
+  let all = ''
+  while (queue.length > 0) {
+    const src = queue.pop() as string
+    if (seen.has(src)) continue
+    seen.add(src)
+    const res = await page.request.get(`${base}/${src}`)
+    if (!res.ok()) continue
+    const js = await res.text()
+    all += js
+    for (const m of js.matchAll(/["'`](?:\.\/|assets\/)?([\w.-]+\.js)["'`]/g)) queue.push(`assets/${m[1]}`)
+  }
+  expect(seen.size).toBeGreaterThan(1)
+  return all
+}
+
+// The sample data is the demo's alone: its merchants and its ids' seed are in no script of the real app.
+test('the sample data is in the demo’s bundle and in none of the real app’s scripts', async ({ page }) => {
+  const marks = ['Tacos Frida', 'demo-sample|', 'Amex Cobalt']
+  const demo = await bundle(page, DEMO_URL)
+  for (const mark of marks) expect(demo, `the demo has "${mark}"`).toContain(mark)
+  const app = await bundle(page, APP_URL)
+  // The real app's scripts were really read: its own words are there.
+  expect(app).toContain('expense-budget|')
+  for (const mark of marks) expect(app, `the real app has no "${mark}"`).not.toContain(mark)
 })
 
 test.describe('the real app', () => {

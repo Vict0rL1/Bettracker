@@ -23,6 +23,7 @@ import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
 import FieldError, { describedBy } from '../FieldError'
 import { PencilIcon } from '../icons'
+import CategoryIcon from './CategoryIcon'
 import Paged from '../Paged'
 import { originLine } from './fxText'
 import { useRates } from './useRates'
@@ -208,7 +209,10 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
             <span className="exp-review-line">
               <span className="exp-review-date-text">{shortDate(r.date)}</span>
               <span className="exp-review-meta">
-                <span>{t(categoryKey(r.category))}</span>
+                <span>
+                  <CategoryIcon category={r.category} size={12} />
+                  {t(categoryKey(r.category))}
+                </span>
                 <span>{cardName(r.cardId)}</span>
               </span>
             </span>

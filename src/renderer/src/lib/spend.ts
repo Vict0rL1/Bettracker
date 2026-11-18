@@ -1,6 +1,6 @@
 import { EXPENSE_CATEGORIES, type BudgetScope, type Expense, type ExpenseBudget, type ExpenseCard, type ExpenseCategory } from '../../../shared/types'
 import { categoryKey, toCategory } from './categories'
-import { daysInMonth, monthPrefix, toDateStr, type MonthKey } from './dates'
+import { addMonths, daysInMonth, monthPrefix, toDateStr, type MonthKey } from './dates'
 import { NEAR_RATIO } from './lossLimit'
 import type { StringKey } from './strings'
 
@@ -91,6 +91,69 @@ export function pace(total: number, ym: MonthKey, today: string): Pace {
     projected: fromCents(Math.round((cents(total) / td) * days)),
     state: 'current'
   }
+}
+
+export interface MonthComparison {
+  /** The month before the shown one. */
+  previousMonth: MonthKey
+  /**
+   * The current month: the day both months are counted up to, as a date of the month before (today's day number, or
+   * that month's last day when it is shorter). Null for a past month: both months are counted whole.
+   */
+  previousThrough: string | null
+  /** Net spent in the shown month over the days compared. */
+  current: number
+  /** Net spent in the month before over the same days. */
+  previous: number
+  /** current − previous: above 0 is more than the month before. */
+  diff: number
+  /** diff / previous (0.12: 12 % more), or null when the month before spent nothing net by then (no share to speak of). */
+  ratio: number | null
+}
+
+/**
+ * The shown month against the one before it. The current month is compared day for day: both up to today's day
+ * number (the 31st against a shorter month's last day), so the 10th is never held against a whole month. A past month
+ * is compared whole. Null when there is nothing to compare with: the month before has no expenses at all, or the
+ * shown month has not started.
+ */
+export function vsLastMonth(list: readonly Expense[], ym: MonthKey, today: string): MonthComparison | null {
+  const [ty, tm, td] = today.split('-').map(Number)
+  const order = ym.year * 12 + ym.month - (ty * 12 + (tm - 1))
+  if (order > 0) return null
+  const previousMonth = addMonths(ym, -1)
+  const before = expensesInMonth(list, previousMonth)
+  if (before.length === 0) return null
+  /** Each month is counted up to this day number; a month's days never reach 32. */
+  const through = order === 0 ? td : 31
+  const upTo = (rows: readonly Expense[]): number => rows.reduce((sum, e) => (Number(e.date.slice(8, 10)) <= through ? sum + cents(e.amount) : sum), 0)
+  const current = upTo(expensesInMonth(list, ym))
+  const previous = upTo(before)
+  return {
+    previousMonth,
+    previousThrough: order === 0 ? toDateStr(previousMonth.year, previousMonth.month, Math.min(td, daysInMonth(previousMonth))) : null,
+    current: fromCents(current),
+    previous: fromCents(previous),
+    diff: fromCents(current - previous),
+    ratio: previous > 0 ? (current - previous) / previous : null
+  }
+}
+
+/** A share is said up to here; past it (ten times the month before) only the amount means anything. */
+const MAX_RATIO = 10
+
+/**
+ * How a comparison is said: nothing to it ('same', to the cent), or more or less by a whole percentage (0 stands for
+ * "under half a percent": something, said as "<1%"), or by the amount alone (`pct` null) when the month before gives
+ * no share to speak of: nothing net spent by then, or so little that the percentage would run to thousands.
+ */
+export type ComparisonChange = { direction: 'same' } | { direction: 'more' | 'less'; pct: number | null }
+
+export function comparisonChange(c: Pick<MonthComparison, 'diff' | 'ratio'>): ComparisonChange {
+  if (cents(c.diff) === 0) return { direction: 'same' }
+  const direction = c.diff > 0 ? 'more' : 'less'
+  if (c.ratio === null || Math.abs(c.ratio) >= MAX_RATIO) return { direction, pct: null }
+  return { direction, pct: Math.round(Math.abs(c.ratio) * 100) }
 }
 
 export type BudgetLevel = 'none' | 'ok' | 'near' | 'over'
@@ -339,17 +402,44 @@ export function cardFilterChoices(cards: readonly ExpenseCard[], monthList: read
   return { cards: cards.filter((c) => !c.archived || used.has(c.id) || c.id === value), value }
 }
 
+/** The latest first: by date, then by when it was added. */
+const mostRecentFirst = (a: Expense, b: Expense): number => (a.date > b.date ? -1 : a.date < b.date ? 1 : newestFirst(a, b))
+
+/** A merchant as it is compared: the spaces around it and its case aside ("starbucks " is "Starbucks"). */
+const merchantKey = (m: string): string => m.trim().toLowerCase()
+
 /** The merchants typed before, each once (whatever its case), most recent first: the sheet's suggestions. */
 export function merchantSuggestions(list: readonly Expense[], max = 50): string[] {
-  const recent = [...list].sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : newestFirst(a, b)))
+  const recent = [...list].sort(mostRecentFirst)
   const seen = new Set<string>()
   const out: string[] = []
   for (const e of recent) {
     const m = e.merchant.trim()
-    if (m === '' || seen.has(m.toLowerCase())) continue
-    seen.add(m.toLowerCase())
+    if (m === '' || seen.has(merchantKey(m))) continue
+    seen.add(merchantKey(m))
     out.push(m)
     if (out.length >= max) break
   }
   return out
+}
+
+/** How a merchant was last filed: the sheet offers it again (lib/expenseForm.ts followMerchant). */
+export interface MerchantLast {
+  category: ExpenseCategory
+  /** The card's id, or null: paid with no card. */
+  cardId: string | null
+}
+
+/**
+ * The category and card of the most recent expense of exactly this merchant (as merchantSuggestions tells them
+ * apart: case and outer spaces aside, "Uber" is not "Uber Eats"), or null for a merchant not typed before, or none.
+ */
+export function merchantLast(list: readonly Expense[], merchant: string): MerchantLast | null {
+  const key = merchantKey(merchant)
+  if (key === '') return null
+  let latest: Expense | null = null
+  for (const e of list) {
+    if (merchantKey(e.merchant) === key && (latest === null || mostRecentFirst(e, latest) < 0)) latest = e
+  }
+  return latest === null ? null : { category: toCategory(latest.category), cardId: latest.cardId }
 }

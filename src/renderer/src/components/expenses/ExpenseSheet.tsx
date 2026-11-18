@@ -12,22 +12,25 @@ import {
   draftToInput,
   expenseAmountProblem,
   expenseDateProblem,
+  followMerchant,
   initialDraft,
   paidInAnother,
   parseAmountText,
   pasteIsTyping,
   resumedDraft,
   storedFx,
-  type ExpenseDraft
+  type ExpenseDraft,
+  type FollowFree
 } from '../../lib/expenseForm'
 import { fxView, settledFx, type FxStored } from '../../lib/expenseFx'
 import { buildReview, type ReviewRow } from '../../lib/expenseReview'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
 import type { PreparedImage } from '../../lib/scanImageDom'
-import { merchantSuggestions } from '../../lib/spend'
+import { merchantLast, merchantSuggestions } from '../../lib/spend'
 import FieldError, { describedBy } from '../FieldError'
 import { CloseIcon, ReceiptIcon } from '../icons'
+import CategoryIcon from './CategoryIcon'
 import { originLine } from './fxText'
 import ScanPanel, { useScan } from './ScanPanel'
 import ScanReview from './ScanReview'
@@ -84,6 +87,11 @@ const SEGMENTED_MAX = 3
  * is fetched (data/fxRates.ts) and shown with the amount in the main
  * currency, both boxes the user can type in (lib/expenseFx.ts); nothing waits
  * for it, and without a rate the expense is not saved until one is typed.
+ *
+ * The merchant box suggests the merchants typed before, and in a new expense
+ * one of them brings the category and card it was last filed under, for as
+ * long as the user has not chosen either here (lib/expenseForm.ts
+ * followMerchant); a line under the box says what it brought.
  */
 export default function ExpenseSheet(p: ExpenseSheetProps) {
   const { t } = useLang()
@@ -113,6 +121,27 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
         : initialDraft({ today, last: p.last, cards, currency: main, preferCardId: p.preferCardId ?? undefined })
   )
   const set = (patch: Partial<ExpenseDraft>): void => setD((x) => ({ ...x, ...patch }))
+  // The category and the card follow the merchant typed until the user sets them. Only in an expense started here: one
+  // being edited keeps what it was saved with, and a draft back from "Add card" keeps what it came back with.
+  const [free, setFree] = useState<FollowFree>(() => ({ category: !editing && !p.draft, card: !editing && !p.draft }))
+  const [base] = useState(() => ({ category: d.category, cardId: d.cardId }))
+  // Which of the two now hold what the merchant was last filed under (said under the merchant box).
+  const [adopted, setAdopted] = useState<FollowFree>({ category: false, card: false })
+  const pickCategory = (category: ExpenseDraft['category']): void => {
+    set({ category })
+    setFree((f) => ({ ...f, category: false }))
+    setAdopted((a) => ({ ...a, category: false }))
+  }
+  const pickCard = (cardId: string | null): void => {
+    set({ cardId })
+    setFree((f) => ({ ...f, card: false }))
+    setAdopted((a) => ({ ...a, card: false }))
+  }
+  const typeMerchant = (merchant: string): void => {
+    const o = { last: merchantLast(p.existing, merchant), free, base, cards }
+    setD((x) => followMerchant(x, merchant, o).draft)
+    setAdopted(followMerchant(d, merchant, o).adopted)
+  }
   const [shown, setShown] = useState<ReadonlySet<Field>>(new Set())
   const [refusal, setRefusal] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -289,6 +318,13 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
     void p.onDelete(editing).then(p.onClose, (err) => setRefusal(refusalText(err, t)))
   }
 
+  // What the merchant brought, in the sheet's own words: "Coffee · Visa".
+  const brought = [
+    adopted.category ? t(categoryKey(d.category)) : null,
+    adopted.card ? (cards.find((c) => c.id === d.cardId)?.name ?? t('spend.noCard')) : null
+  ].filter((x): x is string => x !== null)
+  const broughtText = brought.length > 0 ? t('exp.merchantLast', { what: brought.join(' · ') }) : ''
+
   const scanOff = scanBlocked ? t(`scan.err.${scanBlocked}`) : null
   const title = stage === 'review' ? t('scan.reviewTitle') : stage === 'scan' ? t('scan.title') : editing ? t('exp.editTitle') : t('exp.addTitle')
   const cardLabelId = `${fieldId}-card`
@@ -307,17 +343,17 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
       </p>
     ) : selectable.length <= SEGMENTED_MAX ? (
       <div className="scope-toggle exp-paycard-seg" role="group" aria-labelledby={cardLabelId}>
-        <button type="button" className="scope-btn" aria-pressed={d.cardId === null} title={t('spend.noCard')} onClick={() => set({ cardId: null })}>
+        <button type="button" className="scope-btn" aria-pressed={d.cardId === null} title={t('spend.noCard')} onClick={() => pickCard(null)}>
           {t('spend.noCard')}
         </button>
         {selectable.map((c) => (
-          <button key={c.id} type="button" className="scope-btn" aria-pressed={d.cardId === c.id} title={c.name} onClick={() => set({ cardId: c.id })}>
+          <button key={c.id} type="button" className="scope-btn" aria-pressed={d.cardId === c.id} title={c.name} onClick={() => pickCard(c.id)}>
             {c.name}
           </button>
         ))}
       </div>
     ) : (
-      <select className="exp-paycard-select" aria-labelledby={cardLabelId} value={d.cardId ?? ''} onChange={(e) => set({ cardId: e.target.value === '' ? null : e.target.value })}>
+      <select className="exp-paycard-select" aria-labelledby={cardLabelId} value={d.cardId ?? ''} onChange={(e) => pickCard(e.target.value === '' ? null : e.target.value)}>
         <option value="">{t('spend.noCard')}</option>
         {selectable.map((c) => (
           <option key={c.id} value={c.id}>
@@ -495,16 +531,20 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
         </span>
         <div className="cat-chips" role="group" aria-labelledby={catLabelId}>
           {EXPENSE_CATEGORIES.map((c) => (
-            <button key={c} type="button" className="chip cat-chip" data-cat={c} aria-pressed={d.category === c} onClick={() => set({ category: c })}>
+            <button key={c} type="button" className="chip cat-chip" data-cat={c} aria-pressed={d.category === c} onClick={() => pickCategory(c)}>
+              <CategoryIcon category={c} size={14} />
               {t(categoryKey(c))}
             </button>
           ))}
         </div>
       </div>
 
-      <label className="field">
-        <span className="field-label">{t('exp.merchant')}</span>
+      <div className="field exp-merchant-field">
+        <label className="field-label" htmlFor={`${fieldId}-merchant`}>
+          {t('exp.merchant')}
+        </label>
         <input
+          id={`${fieldId}-merchant`}
           type="text"
           className="exp-merchant"
           maxLength={80}
@@ -512,9 +552,14 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
           autoComplete="off"
           placeholder={t('exp.merchantPlaceholder')}
           value={d.merchant}
-          onChange={(e) => set({ merchant: e.target.value })}
+          aria-describedby={`${fieldId}-merchant-last`}
+          onChange={(e) => typeMerchant(e.target.value)}
         />
-      </label>
+        {/* Always there (empty until a merchant typed before brings its category or card), so it is announced when it speaks. */}
+        <p className="hint exp-merchant-last" id={`${fieldId}-merchant-last`} aria-live="polite">
+          {broughtText}
+        </p>
+      </div>
       <datalist id={listId}>
         {suggestions.map((m) => (
           <option key={m} value={m} />

@@ -130,6 +130,19 @@ export const SparkIcon = ({ size = 20 }: IconProps) => (
   </svg>
 )
 
+/** Up and down: more or less than before (beside the words that say so). */
+export const ArrowUpIcon = ({ size = 12 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M12 19V5M6 11l6-6 6 6" />
+  </svg>
+)
+
+export const ArrowDownIcon = ({ size = 12 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M12 5v14M6 13l6 6 6-6" />
+  </svg>
+)
+
 /** A receipt with a torn foot: scanning one with AI. */
 export const ReceiptIcon = ({ size = 14 }: IconProps) => (
   <svg {...svgProps(size)}>

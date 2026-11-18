@@ -7,6 +7,7 @@ import {
   draftToInput,
   expenseAmountProblem,
   expenseDateProblem,
+  followMerchant,
   formatAmountText,
   initialDraft,
   merchantLabel,
@@ -345,6 +346,64 @@ describe('the sheet’s draft', () => {
     const t = () => 'No merchant'
     expect(merchantLabel('Uber', t)).toBe('Uber')
     expect(merchantLabel('  ', t)).toBe('No merchant')
+  })
+})
+
+describe('followMerchant: a merchant typed before brings its category and card', () => {
+  const C = 'cccccccc-0000-4000-8000-000000000003'
+  const cards = [card(A), card(B), card(C, true)]
+  const base = { category: 'other' as const, cardId: A }
+  const draft = initialDraft({ today: '2026-11-17', last: { cardId: A, category: 'other' }, cards, currency: 'CAD' })
+  const both = { category: true, card: true }
+  const coffeeOnB = { category: 'coffee' as const, cardId: B }
+
+  it('a new sheet nobody touched: the merchant’s last category and card, and the rest of the draft as it was', () => {
+    const typed = { ...draft, amount: '4,50', note: 'with Ana' }
+    const out = followMerchant(typed, 'Starbucks', { last: coffeeOnB, free: both, base, cards })
+    expect(out.draft).toEqual({ ...typed, merchant: 'Starbucks', category: 'coffee', cardId: B })
+    expect(out.adopted).toEqual({ category: true, card: true })
+  })
+
+  it('a merchant not typed before only changes the merchant', () => {
+    const out = followMerchant(draft, 'Somewhere new', { last: null, free: both, base, cards })
+    expect(out.draft).toEqual({ ...draft, merchant: 'Somewhere new' })
+    expect(out.adopted).toEqual({ category: false, card: false })
+  })
+
+  it('what the user chose in this sheet is never changed', () => {
+    const chosen = { ...draft, category: 'food' as const, cardId: null }
+    expect(followMerchant(chosen, 'Starbucks', { last: coffeeOnB, free: { category: false, card: false }, base, cards })).toEqual({
+      draft: { ...chosen, merchant: 'Starbucks' },
+      adopted: { category: false, card: false }
+    })
+    // Each box on its own: the category chosen stays, the card still follows.
+    const out = followMerchant(chosen, 'Starbucks', { last: coffeeOnB, free: { category: false, card: true }, base, cards })
+    expect(out.draft).toMatchObject({ category: 'food', cardId: B })
+    expect(out.adopted).toEqual({ category: false, card: true })
+  })
+
+  it('follows the text as it stands: typing on past a known merchant gives back what the sheet opened with', () => {
+    const atUber = followMerchant(draft, 'Uber', { last: { category: 'transport', cardId: null }, free: both, base, cards })
+    expect(atUber.draft).toMatchObject({ merchant: 'Uber', category: 'transport', cardId: null })
+    const atUberX = followMerchant(atUber.draft, 'Uberx', { last: null, free: both, base, cards })
+    expect(atUberX.draft).toMatchObject({ merchant: 'Uberx', category: 'other', cardId: A })
+    expect(atUberX.adopted).toEqual({ category: false, card: false })
+    const atUberEats = followMerchant(atUber.draft, 'Uber Eats', { last: { category: 'food', cardId: B }, free: both, base, cards })
+    expect(atUberEats.draft).toMatchObject({ category: 'food', cardId: B })
+    // …but a box the user set meanwhile stays where they put it.
+    const kept = followMerchant({ ...atUber.draft, category: 'travel' }, 'Uberx', { last: null, free: { category: false, card: true }, base, cards })
+    expect(kept.draft).toMatchObject({ category: 'travel', cardId: A })
+  })
+
+  it('"No card" comes along like a card; a card that can’t be chosen any more (archived, or unknown here) does not', () => {
+    const none = followMerchant(draft, 'Marché', { last: { category: 'groceries', cardId: null }, free: both, base, cards })
+    expect(none.draft).toMatchObject({ category: 'groceries', cardId: null })
+    expect(none.adopted).toEqual({ category: true, card: true })
+    for (const cardId of [C, 'dddddddd-0000-4000-8000-000000000004']) {
+      const out = followMerchant(draft, 'Marché', { last: { category: 'groceries', cardId }, free: both, base, cards })
+      expect(out.draft).toMatchObject({ category: 'groceries', cardId: A })
+      expect(out.adopted).toEqual({ category: true, card: false })
+    }
   })
 })
 

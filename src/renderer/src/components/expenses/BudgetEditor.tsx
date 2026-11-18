@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { EXPENSE_CATEGORIES, type BudgetScope, type ExpenseBudget, type ExpenseCard } from '../../../../shared/types'
+import { EXPENSE_CATEGORIES, type BudgetScope, type ExpenseBudget, type ExpenseCard, type ExpenseCategory } from '../../../../shared/types'
 import { categoryKey } from '../../lib/categories'
 import { currencySymbol } from '../../lib/currency'
 import { monthInline, type MonthKey } from '../../lib/dates'
@@ -9,6 +9,7 @@ import { useMoney } from '../../lib/money'
 import type { MonthSpend } from '../../lib/spend'
 import { useBox } from '../../lib/useBox'
 import FieldError, { describedBy } from '../FieldError'
+import CategoryIcon from './CategoryIcon'
 
 /** Each box's commit, by key: Expense settings runs them all on every way out (React fires no blur on unmount). */
 export type CommitRegistry = Map<string, () => void>
@@ -29,6 +30,8 @@ interface BoxProps {
   scope: BudgetScope
   target: string
   label: string
+  /** A category's box: its glyph goes before the name. */
+  category?: ExpenseCategory
   /** What the month spent on it. */
   spent: number
   ym: MonthKey
@@ -39,7 +42,7 @@ interface BoxProps {
   onSet: (scope: BudgetScope, target: string, limit: number | null) => Promise<void>
 }
 
-function BudgetBox({ scope, target, label, spent, ym, current, enabled, currency, registry, onSet }: BoxProps) {
+function BudgetBox({ scope, target, label, category, spent, ym, current, enabled, currency, registry, onSet }: BoxProps) {
   const { t } = useLang()
   const money = useMoney()
   const id = useId()
@@ -77,6 +80,7 @@ function BudgetBox({ scope, target, label, spent, ym, current, enabled, currency
   return (
     <li className={`budget-box budget-box-${scope}`}>
       <label className="budget-box-label" htmlFor={id} title={label}>
+        {category && <CategoryIcon category={category} size={14} />}
         {label}
       </label>
       <div className="amount-wrap exp-amount-wrap budget-amount" style={{ ['--cur-ch' as string]: symbol.length }}>
@@ -141,7 +145,7 @@ export default function BudgetEditor({ cards, budgets, month, ym, enabled, curre
             <BudgetBox key={c.id} scope="card" target={c.id} label={c.name} spent={month.byCard.get(c.id) ?? 0} current={limitOf('card', c.id)} {...common} />
           ))}
         {EXPENSE_CATEGORIES.map((c) => (
-          <BudgetBox key={c} scope="category" target={c} label={t(categoryKey(c))} spent={month.byCategory.get(c) ?? 0} current={limitOf('category', c)} {...common} />
+          <BudgetBox key={c} scope="category" target={c} label={t(categoryKey(c))} category={c} spent={month.byCategory.get(c) ?? 0} current={limitOf('category', c)} {...common} />
         ))}
       </ul>
     </section>
