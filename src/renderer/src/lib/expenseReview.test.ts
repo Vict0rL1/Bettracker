@@ -141,6 +141,19 @@ describe('buildReview', () => {
     expect(archived).toMatchObject({ cardId: null, cardUnknownLast4: '5555' })
   })
 
+  it('a card saved without its last 4 is still found by its name when the image shows digits', () => {
+    const apple = card('dddddddd-0000-4000-8000-000000000004', 'Apple Card', '')
+    const cards = [...CARDS, apple]
+    const [row] = buildReview(result([read({ cardLast4: '4321', cardHint: 'Apple Card' })]), { today: TODAY, cards, existing: [], currency: 'USD' })
+    expect(row).toMatchObject({ cardId: apple.id, cardHow: 'name', cardUnknownLast4: null })
+    // A card with other digits on record is still ruled out by them.
+    const [visa] = buildReview(result([read({ cardLast4: '4321', cardHint: 'Visa Oro' })]), { today: TODAY, cards, existing: [], currency: 'USD' })
+    expect(visa).toMatchObject({ cardId: null, cardHow: 'none', cardUnknownLast4: '4321' })
+    // No name to go by: no card, and the review says which digits.
+    const [unnamed] = buildReview(result([read({ cardLast4: '4321' })]), { today: TODAY, cards, existing: [], currency: 'USD' })
+    expect(unnamed).toMatchObject({ cardId: null, cardHow: 'none', cardUnknownLast4: '4321' })
+  })
+
   it('no date read: today, guessed, and the row opens; so does a low-confidence one', () => {
     const rows = buildReview(result([read({ date: null, confidence: 'low' }), read({ confidence: 'low' })]), { today: TODAY, cards: CARDS, existing: [], currency: 'USD' })
     expect(rows[0]).toMatchObject({ date: TODAY, dateGuessed: true, open: true })

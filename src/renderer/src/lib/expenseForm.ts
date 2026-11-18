@@ -1,7 +1,7 @@
 import type { Expense, ExpenseCard, ExpenseCategory, ExpenseInput, ExpenseSource } from '../../../shared/types'
 import type { ExpenseLast } from '../data/expenseLast'
 import type { Problem } from './betForm'
-import { currencyDigits } from './currency'
+import { currencyDigits, EXPENSE_CURRENCIES } from './currency'
 import { isValidDate, MAX_AMOUNT } from './validate'
 
 /**
@@ -29,6 +29,38 @@ export function initialDraft(o: { today: string; last: ExpenseLast | null; cards
   const isActive = (id: string | null | undefined): id is string => id !== null && id !== undefined && active.some((c) => c.id === id)
   const cardId = isActive(o.preferCardId) ? o.preferCardId : isActive(o.last?.cardId) ? (o.last?.cardId ?? null) : active.length === 1 ? active[0].id : null
   return { amount: '', refund: false, date: o.today, cardId, category: o.last?.category ?? 'other', merchant: '', note: '' }
+}
+
+/** A draft handed back after "Add card": what was typed, with the card added then chosen while it is active (else the draft's own card). */
+export function resumedDraft(draft: ExpenseDraft, cards: readonly ExpenseCard[], addedCardId: string | null): ExpenseDraft {
+  const added = addedCardId === null ? undefined : cards.find((c) => c.id === addedCardId && !c.archived)
+  return added ? { ...draft, cardId: added.id } : draft
+}
+
+/** Boxes that take typed text. */
+const TYPED_INPUTS: ReadonlySet<string> = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number'])
+
+/** What pasteIsTyping reads of the paste's target (an element; plain objects in tests). */
+export interface PasteTarget {
+  tagName?: string
+  type?: string
+  readOnly?: boolean
+  disabled?: boolean
+  isContentEditable?: boolean
+}
+
+/**
+ * A paste the sheet leaves to the box it lands in: text (text/plain on the clipboard) into a box that takes typed text
+ * (Amount, Merchant, Note). Excel and Word copy a picture of the cells beside their text, and that picture is no
+ * receipt: reading it would drop the text and pay for an AI call. An image pasted without text, or anywhere else in
+ * the sheet, is still read.
+ */
+export function pasteIsTyping(target: PasteTarget | null, types: readonly string[]): boolean {
+  if (target === null || !types.includes('text/plain')) return false
+  if (target.isContentEditable) return true
+  if (target.readOnly || target.disabled) return false
+  const tag = (target.tagName ?? '').toUpperCase()
+  return tag === 'TEXTAREA' || (tag === 'INPUT' && TYPED_INPUTS.has((target.type || 'text').toLowerCase()))
 }
 
 /** A saved expense in the sheet's boxes: refund = amount < 0, the amount unsigned (formatAmountText). */
@@ -62,26 +94,63 @@ function roundTo(n: number, digits: number): number {
 const groupsOk = (parts: readonly string[]): boolean => parts.every((p, i) => (i === 0 ? /^\d+$/.test(p) : /^\d{3}$/.test(p)))
 
 /**
- * What a person typed as an amount, read the way they meant it. Spaces, currency symbols and letters are stripped
- * ("$", "€", "COP", "MX$"); then:
+ * The number in what was typed: from its first digit (or the separator just before it: ".5", "$.50", but not the dot
+ * that ends a sign such as "S/." or "Bs.") to its last digit or separator. Whatever stands around it must be a currency
+ * mark (isCurrencyMark).
+ */
+const NUMBER = /(?:(?<![\p{L}/])[.,])?\d(?:[\d.,\s]*[\d.,])?/u
+
+/** Signs of the picker's currencies written in letters: quetzal, lempira, sol, boliviano, guaraní. */
+const LETTER_SIGNS: ReadonlySet<string> = new Set(['Q', 'L', 'S/', 'S/.', 'Bs', 'Bs.', 'Gs', 'Gs.'])
+
+let isoCodes: ReadonlySet<string> | null = null
+/** A currency's ISO code in any case ("COP", "usd"): the picker's, and every one Intl knows. "mil" is none. */
+function isIsoCode(w: string): boolean {
+  isoCodes ??= new Set<string>([...EXPENSE_CURRENCIES, ...(typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('currency') : [])])
+  return /^[a-z]{3}$/i.test(w) && isoCodes.has(w.toUpperCase())
+}
+
+/**
+ * What may stand before or after an amount's digits, spaces aside: nothing; a currency symbol with up to 3 letters on
+ * either side ("$", "€", "US$", "MX$", "R$", "RD$", "$U"); a currency's ISO code ("COP", "usd"); or a letter sign of a
+ * picker currency ("Q", "S/", "Bs"). Any other letter ("12k", "12 mil", "1e3", "1O.50") makes the amount unreadable:
+ * it is never dropped unseen.
+ */
+function isCurrencyMark(text: string): boolean {
+  const w = text.replace(/\s/g, '')
+  return w === '' || /^\p{L}{0,3}\p{Sc}+\p{L}{0,3}$/u.test(w) || isIsoCode(w) || LETTER_SIGNS.has(w)
+}
+
+/**
+ * What a person typed as an amount, read the way they meant it. A currency mark before or after the number is left
+ * out ("$", "€", "COP", "MX$", "4.50 USD"; isCurrencyMark); a letter anywhere else makes it 'invalid'. Spaces inside
+ * the number group thousands only ("12 500", "1 234,50": the separator after them is the decimal one). Then:
  *  - "," and "." both present → the LAST one is the decimal separator, the other is grouping ("1.234,50", "1,234.50");
  *  - one kind present once, followed by exactly 3 digits → grouping ("12.500" = 12500, "4,500" = 4500), except after a
  *    lone 0 ("0.500" is a half) and for a currency with 3 minor digits (a dinar's "1.500" is one and a half);
  *  - one kind present once otherwise → decimal ("4,50", "12.5");
  *  - one kind present more than once → grouping ("1.234.567");
- *  - a fraction for a 0-digit currency (CLP, PYG) → 'noMinorUnits'; more fraction digits than the currency has → rounded to
- *    the currency's digits (2-digit currencies: cents).
+ *  - for a 0-digit currency (COP, CLP, PYG), a fraction of zeros is dropped ("12.500,00", as invoices print it) and any
+ *    other fraction → 'noMinorUnits'; more fraction digits than the currency has → rounded to the currency's digits
+ *    (2-digit currencies: cents).
  * '' → null; anything else that isn't a finite number → 'invalid'. Never negative (the Spent/Refund toggle sets the sign).
  */
 export function parseAmountText(text: string, digits: number): number | null | 'invalid' | 'noMinorUnits' {
   if (text.trim() === '') return null
-  const s = text.replace(/[\s\p{L}\p{Sc}]/gu, '')
-  if (!/^[\d.,]+$/.test(s) || !/\d/.test(s)) return 'invalid'
+  const found = NUMBER.exec(text)
+  if (!found) return 'invalid'
+  const s = found[0]
+  if (!isCurrencyMark(text.slice(0, found.index)) || !isCurrencyMark(text.slice(found.index + s.length))) return 'invalid'
   const dots = s.split('.').length - 1
   const commas = s.split(',').length - 1
   let whole: string
   let fraction = ''
-  if (dots > 0 && commas > 0) {
+  if (/\s/.test(s)) {
+    const spaced = /^(\d{1,3}(?:\s+\d{3})+)(?:[.,](\d*))?$/u.exec(s)
+    if (!spaced) return 'invalid'
+    whole = spaced[1].replace(/\s+/g, '')
+    fraction = spaced[2] ?? ''
+  } else if (dots > 0 && commas > 0) {
     const decimal = s.lastIndexOf('.') > s.lastIndexOf(',') ? '.' : ','
     const grouping = decimal === '.' ? ',' : '.'
     const at = s.lastIndexOf(decimal)
@@ -106,6 +175,7 @@ export function parseAmountText(text: string, digits: number): number | null | '
     }
   }
   if (!/^\d+$/.test(whole) || !/^\d*$/.test(fraction)) return 'invalid'
+  if (digits === 0 && /^0*$/.test(fraction)) fraction = ''
   if (fraction !== '' && digits === 0) return 'noMinorUnits'
   const n = Number(fraction === '' ? whole : `${whole}.${fraction}`)
   if (!Number.isFinite(n)) return 'invalid'

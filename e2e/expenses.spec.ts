@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { budgetId } from '../src/renderer/src/lib/stableId'
-import { USER, bigPng, boot, budget, card, expense, menu, reload, scanFile } from './harness'
+import { TINY_PNG, USER, bigPng, boot, budget, card, expense, menu, reload, scanFile } from './harness'
 import { APP_URL } from './urls'
 
 /**
@@ -286,6 +286,34 @@ test('cards: add, rename, archive a used card, delete an unused one; never a har
   await context.close()
 })
 
+test('a card added from the sheet comes back chosen, with what was typed', async ({ page }) => {
+  await boot(page, { view: 'expenses', cards: [], expenses: [], budgets: [], settings: {} })
+  await page.locator('.add-expense-btn').click()
+  const sheet = page.locator('.expense-modal')
+  await sheet.locator('.exp-amount').fill('4.50')
+  await sheet.locator('.exp-merchant').fill('Kiosk')
+  await sheet.locator('.exp-add-card').click()
+  await expect(sheet).toHaveCount(0)
+
+  const settings = page.locator('.expense-settings-modal')
+  await expect(settings.locator('.paycard-name-input')).toBeFocused()
+  await settings.locator('.paycard-name-input').fill('Visa')
+  await settings.locator('.paycard-add').click()
+  await expect(settings.locator('.paycard-row', { hasText: 'Visa' })).toHaveCount(1)
+  await settings.locator('.expset-done').click()
+  await expect(settings).toHaveCount(0)
+
+  // Back in the sheet: the amount and merchant as typed, and the new card pressed, not "No card".
+  await expect(sheet.locator('.exp-amount')).toHaveValue('4.50')
+  await expect(sheet.locator('.exp-merchant')).toHaveValue('Kiosk')
+  const segments = sheet.locator('.exp-paycard-seg .scope-btn')
+  await expect(segments.filter({ hasText: 'Visa' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(segments.filter({ hasText: 'No card' })).toHaveAttribute('aria-pressed', 'false')
+  await sheet.locator('.exp-save').click()
+  await expect(sheet).toHaveCount(0)
+  await expect(page.locator('.exp-row .exp-col-card')).toHaveText('Visa')
+})
+
 test('budgets: total, per card and per category, near and over; untouched boxes write nothing; Escape keeps what was typed', async ({ page }) => {
   await boot(page, {
     backend: 'live',
@@ -560,6 +588,48 @@ test('cancelling while reading adds nothing, even when the answer comes later', 
   await expect(page.locator('.exp-row')).toHaveCount(0)
 })
 
+test('text pasted into a box is typing, even with a picture of the copied cells; an image pasted anywhere else is read', async ({ page }) => {
+  await boot(page, { backend: 'live', view: 'expenses', cards: [cardA], ai: { hold: true } })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  await page.locator('.add-expense-btn').click()
+  const sheet = page.locator('.expense-modal')
+  await expect(sheet.locator('.exp-amount')).toBeFocused()
+
+  /** A paste on `selector`, as Excel or Word copy cells: text and a PNG of them (or the PNG alone); true when the sheet took it. */
+  const paste = (selector: string, text: string | null): Promise<boolean> =>
+    page.evaluate(
+      ({ selector, text, png }) => {
+        const data = new DataTransfer()
+        if (text !== null) data.setData('text/plain', text)
+        data.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], 'cells.png', { type: 'image/png' }))
+        const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
+        const target = document.querySelector(selector)
+        if (!target) throw new Error(`nothing matches ${selector}`)
+        target.dispatchEvent(event)
+        return event.defaultPrevented
+      },
+      { selector, text, png: TINY_PNG.toString('base64') }
+    )
+
+  // Into Amount, Merchant or Note: the text is the paste; no reading starts.
+  for (const box of ['.exp-amount', '.exp-merchant', '.exp-note']) expect(await paste(`.expense-modal ${box}`, '4.50'), box).toBe(false)
+  await expect(sheet.locator('.exp-amount')).toBeVisible()
+  await expect(page.locator('.exp-reading')).toHaveCount(0)
+
+  // Elsewhere in the sheet (a category chip), the image is a receipt.
+  expect(await paste('.expense-modal .cat-chip[data-cat="coffee"]', '4.50')).toBe(true)
+  await expect(page.locator('.exp-reading')).toBeVisible()
+  await page.locator('.exp-scan-cancel').click()
+  await page.locator('.exp-scan-back').click()
+  await expect(sheet.locator('.exp-amount')).toBeVisible()
+
+  // An image with no text, even into a box, is read too.
+  expect(await paste('.expense-modal .exp-amount', null)).toBe(true)
+  await expect(page.locator('.exp-reading')).toBeVisible()
+  await page.locator('.exp-scan-cancel').click()
+  expect(await counter(page, 'ai-calls')).toBe(0)
+})
+
 test('before 008: only proof counts; expenses wait as Update needed, budgets and the currency are off, and all goes once it runs', async ({ page }) => {
   // No connection at first: nothing is known of 008 yet.
   await page.addInitScript(() => localStorage.setItem('e2e:down', '1'))
@@ -643,9 +713,14 @@ test('on a 320px phone the review fits, in Spanish and in English', async ({ pag
     // The row with no date is open, its date and amount side by side.
     const guessed = rows.nth(2)
     await expect(guessed).toHaveClass(/is-open/)
-    const date = await guessed.locator('.exp-review-field-date').boundingBox()
-    const amount = await guessed.locator('.exp-review-field-amount').boundingBox()
-    if (!date || !amount) throw new Error('no fields')
+    // Both boxes from one frame: the review can show while the phone sheet still rises (sheet-in moves it up to 24px).
+    const [date, amount] = await guessed.evaluate((row) =>
+      ['.exp-review-field-date', '.exp-review-field-amount'].map((selector) => {
+        const field = row.querySelector(selector)
+        if (!field) throw new Error(`no ${selector}`)
+        return field.getBoundingClientRect().toJSON() as DOMRect
+      })
+    )
     expect(Math.abs(date.y - amount.y), `${lang}: on one line`).toBeLessThan(2)
     expect(date.x + date.width, `${lang}: date before amount`).toBeLessThanOrEqual(amount.x)
     expect(amount.x + amount.width, `${lang}: amount on the screen`).toBeLessThanOrEqual(320)

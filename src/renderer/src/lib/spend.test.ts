@@ -5,6 +5,7 @@ import { getLang, setLang } from './i18n'
 import {
   budgetLines,
   budgetState,
+  cardFilterChoices,
   cardKeyOf,
   categoryShares,
   expensesInMonth,
@@ -275,6 +276,48 @@ describe('groupExpensesByDay', () => {
     const days = groupExpensesByDay([first, other, second])
     expect(days.map((d) => d.date)).toEqual(['2026-11-05', '2026-11-03'])
     expect(days[1]).toEqual({ date: '2026-11-03', total: 3.3, items: [second, first] })
+  })
+
+  it('a page of the list: only the newest rows, but a day split by the page keeps the total of all its rows', () => {
+    const late = exp({ date: '2026-11-05', amount: 10, createdAt: '2026-11-05T09:00:00Z' })
+    const mid = exp({ date: '2026-11-04', amount: 7, createdAt: '2026-11-04T12:00:00Z' })
+    const early = exp({ date: '2026-11-04', amount: 3, createdAt: '2026-11-04T08:00:00Z' })
+    const old = exp({ date: '2026-11-01', amount: 1 })
+    const list = [old, early, late, mid]
+    expect(groupExpensesByDay(list, 2)).toEqual([
+      { date: '2026-11-05', total: 10, items: [late] },
+      { date: '2026-11-04', total: 10, items: [mid] }
+    ])
+    expect(groupExpensesByDay(list, 3).map((d) => [d.date, d.total, d.items.length])).toEqual([
+      ['2026-11-05', 10, 1],
+      ['2026-11-04', 10, 2]
+    ])
+    expect(groupExpensesByDay(list, 4)).toEqual(groupExpensesByDay(list))
+    expect(groupExpensesByDay(list, 60)).toEqual(groupExpensesByDay(list))
+    expect(groupExpensesByDay(list, 0)).toEqual([])
+  })
+})
+
+describe('cardFilterChoices', () => {
+  // CARDS: Visa (B) and Amex (A) active, Old (C) archived.
+  const month = [exp({ date: '2026-11-03', amount: 4, cardId: A })]
+  const ids = (r: { cards: ExpenseCard[] }): string[] => r.cards.map((c) => c.id)
+
+  it('the active cards, and an archived one only when the month uses it', () => {
+    expect(cardFilterChoices(CARDS, month, 'all')).toEqual({ cards: [CARDS[0], CARDS[1]], value: 'all' })
+    expect(ids(cardFilterChoices(CARDS, [...month, exp({ date: '2026-11-04', amount: 2, cardId: C })], 'all'))).toEqual([B, A, C])
+    expect(cardFilterChoices(CARDS, month, NO_CARD)).toMatchObject({ value: NO_CARD })
+  })
+
+  it('an archived card chosen in another month is still offered and shown, never "All cards" while filtering by it', () => {
+    expect(cardFilterChoices(CARDS, month, C)).toEqual({ cards: CARDS, value: C })
+    expect(cardFilterChoices(CARDS, [], C)).toEqual({ cards: CARDS, value: C })
+    expect(cardFilterChoices(CARDS, [], B)).toMatchObject({ value: B })
+  })
+
+  it('a card this device no longer knows (deleted since) filters nothing, as the box says', () => {
+    expect(cardFilterChoices(CARDS, month, GONE)).toEqual({ cards: [CARDS[0], CARDS[1]], value: 'all' })
+    expect(cardFilterChoices([], month, A)).toEqual({ cards: [], value: 'all' })
   })
 })
 

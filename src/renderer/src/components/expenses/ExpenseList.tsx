@@ -5,7 +5,7 @@ import { humanDate, monthInline, type MonthKey } from '../../lib/dates'
 import { merchantLabel } from '../../lib/expenseForm'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
-import { filterExpenses, groupExpensesByDay, NO_CARD, type ExpenseFilter } from '../../lib/spend'
+import { cardFilterChoices, filterExpenses, groupExpensesByDay, NO_CARD, type ExpenseFilter } from '../../lib/spend'
 import { NARROW, useMedia } from '../../lib/useMedia'
 import { DownloadIcon, PencilIcon, TrashIcon } from '../icons'
 
@@ -27,9 +27,6 @@ interface Props {
 
 /** Rows shown at first, and added by each "Show more". */
 const PAGE = 60
-
-const newestFirst = (a: Expense, b: Expense): number =>
-  a.date > b.date ? -1 : a.date < b.date ? 1 : a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : a.id > b.id ? -1 : a.id < b.id ? 1 : 0
 
 /**
  * The month's expenses, newest day first, each day with its total: a table
@@ -57,16 +54,13 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, 
     const card = e.cardId === null ? undefined : cards.find((c) => c.id === e.cardId)
     return card ? card.name : t('spend.noCard')
   }
-  // The cards the filter offers: the active ones and any that appears this month (archived kept), then "No card".
-  const filterCards = useMemo(() => {
-    const used = new Set(expenses.map((e) => e.cardId))
-    return cards.filter((c) => !c.archived || used.has(c.id))
-  }, [cards, expenses])
-
-  const filtered = useMemo(() => [...filterExpenses(expenses, filter, known)].sort(newestFirst), [expenses, filter, known])
-  const visible = filtered.slice(0, shown)
-  const days = groupExpensesByDay(visible)
-  const hasFilters = filter.card !== 'all' || filter.category !== 'all' || filter.query.trim() !== ''
+  // The cards the filter offers: the active ones, any that appears this month (archived kept) and the one chosen, then
+  // "No card". The list filters by what the box shows.
+  const choice = useMemo(() => cardFilterChoices(cards, expenses, filter.card), [cards, expenses, filter.card])
+  const filtered = useMemo(() => filterExpenses(expenses, { ...filter, card: choice.value }, known), [expenses, filter, choice.value, known])
+  // The page's rows, each day's total from all of the day's rows.
+  const days = useMemo(() => groupExpensesByDay(filtered, shown), [filtered, shown])
+  const hasFilters = choice.value !== 'all' || filter.category !== 'all' || filter.query.trim() !== ''
   const setFilter = (patch: Partial<ExpenseFilter>): void => {
     setShown(PAGE)
     onFilter({ ...filter, ...patch })
@@ -105,9 +99,9 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, filter, 
             value={filter.query}
             onChange={(e) => setFilter({ query: e.target.value })}
           />
-          <select className="exp-filter-card" aria-label={t('explist.colCard')} value={filter.card} disabled={!cardsLoaded} onChange={(e) => setFilter({ card: e.target.value })}>
+          <select className="exp-filter-card" aria-label={t('explist.colCard')} value={choice.value} disabled={!cardsLoaded} onChange={(e) => setFilter({ card: e.target.value })}>
             <option value="all">{t('explist.allCards')}</option>
-            {filterCards.map((c) => (
+            {choice.cards.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>

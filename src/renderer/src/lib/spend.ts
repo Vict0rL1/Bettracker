@@ -303,20 +303,40 @@ export interface ExpenseDay {
 const newestFirst = (a: Expense, b: Expense): number =>
   a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : a.id > b.id ? -1 : a.id < b.id ? 1 : 0
 
-/** Days newest first, each with its net total and its expenses newest first. */
-export function groupExpensesByDay(list: readonly Expense[]): ExpenseDay[] {
+/**
+ * Days newest first, each with its net total and its expenses newest first. `limit` lists only the newest that many
+ * expenses (a page of the list, days with none of them left out), but a day's total always counts every expense of
+ * that day in `list`: a page that ends inside a day never shows part of its total.
+ */
+export function groupExpensesByDay(list: readonly Expense[], limit = Infinity): ExpenseDay[] {
   const byDate = new Map<string, Expense[]>()
   for (const e of list) {
     const day = byDate.get(e.date)
     if (day) day.push(e)
     else byDate.set(e.date, [e])
   }
-  return [...byDate.keys()]
-    .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0))
-    .map((date) => {
-      const items = (byDate.get(date) ?? []).sort(newestFirst)
-      return { date, total: fromCents(items.reduce((sum, e) => sum + cents(e.amount), 0)), items }
-    })
+  const days: ExpenseDay[] = []
+  let left = limit
+  for (const date of [...byDate.keys()].sort((a, b) => (a > b ? -1 : a < b ? 1 : 0))) {
+    if (left <= 0) break
+    const all = (byDate.get(date) ?? []).sort(newestFirst)
+    const items = all.length > left ? all.slice(0, left) : all
+    left -= items.length
+    days.push({ date, total: fromCents(all.reduce((sum, e) => sum + cents(e.amount), 0)), items })
+  }
+  return days
+}
+
+/**
+ * The card filter's choices for a month's list (`monthList`): the active cards, any archived one the month uses, and
+ * the card chosen, whatever month it was chosen in, so the box always shows what the list is filtered by. `value` is
+ * the box's value and the card to filter by: `selected` ('all', NO_CARD or a card's id), or 'all' when it names no
+ * card this device knows (deleted since), so the list never filters by a card the box can't show.
+ */
+export function cardFilterChoices(cards: readonly ExpenseCard[], monthList: readonly Expense[], selected: string): { cards: ExpenseCard[]; value: string } {
+  const value = selected === 'all' || selected === NO_CARD || cards.some((c) => c.id === selected) ? selected : 'all'
+  const used = new Set(monthList.map((e) => e.cardId))
+  return { cards: cards.filter((c) => !c.archived || used.has(c.id) || c.id === value), value }
 }
 
 /** The merchants typed before, each once (whatever its case), most recent first: the sheet's suggestions. */

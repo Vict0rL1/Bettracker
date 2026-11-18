@@ -10,7 +10,9 @@ import {
   formatAmountText,
   initialDraft,
   merchantLabel,
-  parseAmountText
+  parseAmountText,
+  pasteIsTyping,
+  resumedDraft
 } from './expenseForm'
 import { normalizeExpense } from './validate'
 
@@ -68,6 +70,72 @@ describe('parseAmountText: what a person typed, read the way they meant it', () 
   ])('"%s" with %i digits → %s', (text, digits, expected) => {
     expect(parseAmountText(text, digits)).toBe(expected)
   })
+
+  it.each<[string, ReturnType<typeof parseAmountText>]>([
+    // A letter that isn't a currency mark is never dropped unseen: "12k" is not 12, "1e3" not 13, "1O.50" not 1.5.
+    ['12k', 'invalid'],
+    ['12K', 'invalid'],
+    ['12 mil', 'invalid'],
+    ['12 MIL', 'invalid'],
+    ['1e3', 'invalid'],
+    ['1E3', 'invalid'],
+    ['1O.50', 'invalid'],
+    ['4o', 'invalid'],
+    ['$12k', 'invalid'],
+    ['12 pesos', 'invalid'],
+    // Spaces between digits only group thousands.
+    ['4 50', 'invalid'],
+    ['1 2', 'invalid'],
+    // Currency marks before or after the number.
+    ['US$ 4.50', 4.5],
+    ['4.50 USD', 4.5],
+    ['4.50 usd', 4.5],
+    ['4,50 €', 4.5],
+    ['4,50€', 4.5],
+    ['$4.50 USD', 4.5],
+    ['R$ 10,00', 10],
+    ['$U 100', 100],
+    ['RD$ 1.500', 1500],
+    ['COP $ 12.500', 12500],
+    ['Q 45.00', 45],
+    ['Q45', 45],
+    ['S/ 12.50', 12.5],
+    ['S/. 12.50', 12.5],
+    ['S/.12.50', 12.5],
+    ['Bs.10', 10],
+    ['$.50', 0.5],
+    // Spaces (also the no-break ones Intl writes) grouping thousands; the separator after them is the decimal one.
+    ['12 500', 12500],
+    ['1 234,50', 1234.5],
+    ['1\u202f234,500', 1234.5],
+    ['1\u00a0234\u00a0567.89 €', 1234567.89]
+  ])('"%s" with 2 digits → %s', (text, expected) => {
+    expect(parseAmountText(text, 2)).toBe(expected)
+  })
+
+  it('a letter inside an amount is a problem in the amount box and a refused budget, never a smaller number', () => {
+    for (const text of ['12k', '12 mil', '1e3', '1O.50']) {
+      expect(expenseAmountProblem(text, 'USD'), text).toEqual({ key: 'field.resultInvalid' })
+      expect(budgetCommit(text, null, 'USD'), text).toBe('revert')
+    }
+  })
+
+  it('a currency without cents takes a fraction of zeros (as invoices print it) and drops it; real cents are still refused', () => {
+    for (const [text, n] of [
+      ['12.500,00', 12500],
+      ['12,500.00', 12500],
+      ['1.500.000,00', 1500000],
+      ['12.00', 12],
+      ['12,0', 12],
+      ['COP 12.500,00', 12500],
+      ['12 500,00', 12500]
+    ] as const) {
+      expect(parseAmountText(text, 0), text).toBe(n)
+    }
+    expect(parseAmountText('12.500,50', 0)).toBe('noMinorUnits')
+    expect(parseAmountText('12.05', 0)).toBe('noMinorUnits')
+    expect(parseAmountText('0,00', 0)).toBe(0)
+  })
 })
 
 describe('formatAmountText', () => {
@@ -107,6 +175,15 @@ describe('expenseAmountProblem', () => {
     expect(expenseAmountProblem('12.500', 'CLP')).toBeNull()
   })
 
+  it('pesos: ",00" is fine in the amount box, cents are not', () => {
+    for (const currency of ['COP', 'CLP']) {
+      expect(expenseAmountProblem('12.500,00', currency), currency).toBeNull()
+      expect(expenseAmountProblem('12,500.00', currency), currency).toBeNull()
+      expect(expenseAmountProblem('12.500,50', currency), currency).toEqual({ key: 'field.noMinorUnits', vars: { currency } })
+      expect(expenseAmountProblem('0,00', currency), currency).toEqual({ key: 'field.resultRequired' })
+    }
+  })
+
   it('and the date box', () => {
     expect(expenseDateProblem('2026-11-17')).toBeNull()
     expect(expenseDateProblem('2026-02-30')).toEqual({ key: 'field.dateInvalid' })
@@ -139,6 +216,16 @@ describe('the sheet’s draft', () => {
     expect(initialDraft({ today: '2026-11-17', last: null, cards: [] }).cardId).toBeNull()
   })
 
+  it('back from "Add card": what was typed, with the card added chosen while it is active', () => {
+    const typed = { amount: '4.50', refund: false, date: '2026-11-16', cardId: null, category: 'coffee' as const, merchant: 'Kiosk', note: 'n' }
+    expect(resumedDraft(typed, cards, B)).toEqual({ ...typed, cardId: B })
+    expect(resumedDraft({ ...typed, cardId: A }, cards, B)).toEqual({ ...typed, cardId: B })
+    // No card added, an archived one or one this device doesn't know: the draft as it was.
+    expect(resumedDraft({ ...typed, cardId: A }, cards, null)).toEqual({ ...typed, cardId: A })
+    expect(resumedDraft(typed, cards, 'cccccccc-0000-4000-8000-000000000003')).toEqual(typed)
+    expect(resumedDraft(typed, cards, 'gone')).toEqual(typed)
+  })
+
   it('an expense in the boxes: a refund is the toggle and an unsigned amount', () => {
     expect(draftOf(expense({ amount: -12.5 }), 'USD')).toEqual({ amount: '12.50', refund: true, date: '2026-11-17', cardId: A, category: 'coffee', merchant: 'Café Central', note: 'with Ana' })
     expect(draftOf(expense({ amount: 12500 }), 'CLP')).toMatchObject({ amount: '12500', refund: false })
@@ -157,6 +244,31 @@ describe('the sheet’s draft', () => {
     const t = () => 'No merchant'
     expect(merchantLabel('Uber', t)).toBe('Uber')
     expect(merchantLabel('  ', t)).toBe('No merchant')
+  })
+})
+
+describe('pasteIsTyping', () => {
+  const both = ['text/plain', 'text/html', 'Files']
+
+  it('text pasted into a box that takes text is typing, a picture of the cells beside it or not', () => {
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'text' }, both)).toBe(true)
+    expect(pasteIsTyping({ tagName: 'input', type: 'search' }, both)).toBe(true)
+    expect(pasteIsTyping({ tagName: 'INPUT' }, both)).toBe(true)
+    expect(pasteIsTyping({ tagName: 'TEXTAREA' }, both)).toBe(true)
+    expect(pasteIsTyping({ tagName: 'DIV', isContentEditable: true }, both)).toBe(true)
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'text' }, ['text/plain'])).toBe(true)
+  })
+
+  it('an image with no text, or a paste anywhere else in the sheet, is left to the scan', () => {
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'text' }, ['Files'])).toBe(false)
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'text' }, ['text/html', 'Files'])).toBe(false)
+    expect(pasteIsTyping({ tagName: 'DIV', isContentEditable: false }, both)).toBe(false)
+    expect(pasteIsTyping({ tagName: 'BUTTON', type: 'button' }, both)).toBe(false)
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'date' }, both)).toBe(false)
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'checkbox' }, both)).toBe(false)
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'text', readOnly: true }, both)).toBe(false)
+    expect(pasteIsTyping({ tagName: 'INPUT', type: 'text', disabled: true }, both)).toBe(false)
+    expect(pasteIsTyping(null, both)).toBe(false)
   })
 })
 
@@ -197,5 +309,11 @@ describe('budgetCommit', () => {
     expect(budgetCommit('1.234,5', 100, 'EUR')).toEqual({ limit: 1234.5 })
     expect(budgetCommit('250', null, 'USD')).toEqual({ limit: 250 })
     expect(budgetCommit('12.500', null, 'CLP')).toEqual({ limit: 12500 })
+  })
+
+  it('pesos: a limit typed with ",00" is taken; one with cents goes back', () => {
+    expect(budgetCommit('1.500.000,00', null, 'COP')).toEqual({ limit: 1500000 })
+    expect(budgetCommit('1,500,000.00', 1500000, 'CLP')).toBeNull()
+    expect(budgetCommit('1.500.000,50', null, 'COP')).toBe('revert')
   })
 })

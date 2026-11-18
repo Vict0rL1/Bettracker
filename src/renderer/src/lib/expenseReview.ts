@@ -101,16 +101,21 @@ export function reviewRowProblem(row: ReviewRow, currency: string): Problem | nu
 }
 
 /**
- * The rows of a reading. Card: by the digits the image shows, else by its name (cardMatch); digits that match no
- * active card leave it unset, and say so (`cardUnknownLast4`). A row like an expense already saved (queued ones too)
- * starts unticked, next to its match; a guessed date, low confidence or a problem opens the row.
+ * The rows of a reading. Card: by the digits the image shows, else by its name (cardMatch). Digits that match no
+ * active card rule out a card found by name only when that card has digits of its own recorded (they differ); last 4
+ * is optional, so a card saved without them is still found by its name. A row left without a card by such digits says
+ * so (`cardUnknownLast4`). A row like an expense already saved (queued ones too) starts unticked, next to its match; a
+ * guessed date, low confidence or a problem opens the row.
  */
 export function buildReview(result: ExtractResult, ctx: { today: string; cards: readonly ExpenseCard[]; existing: readonly Expense[]; currency: string }): ReviewRow[] {
   const active = ctx.cards.filter((c) => !c.archived)
   const taken = new Set<string>()
   return result.expenses.map((e, i) => {
     const unknownDigits = e.cardLast4 !== null && !active.some((c) => c.last4 === e.cardLast4)
-    const match = unknownDigits ? null : matchCard({ last4: e.cardLast4, name: e.cardHint }, ctx.cards)
+    const found = matchCard({ last4: e.cardLast4, name: e.cardHint }, ctx.cards)
+    // Unknown digits leave only a name match, and veto it when the card named has other digits on record.
+    const vetoed = unknownDigits && found.cardId !== null && active.some((c) => c.id === found.cardId && c.last4 !== '')
+    const match = vetoed ? null : found
     const date = e.date ?? ctx.today
     const cardId = match?.cardId ?? null
     const duplicateOf = findDuplicate({ date, amount: e.amount, cardId, merchant: e.merchant }, ctx.existing, taken)
@@ -126,7 +131,7 @@ export function buildReview(result: ExtractResult, ctx: { today: string; cards: 
       category: e.category,
       cardId,
       cardHow: match?.how ?? 'none',
-      cardUnknownLast4: unknownDigits ? e.cardLast4 : null,
+      cardUnknownLast4: unknownDigits && cardId === null ? e.cardLast4 : null,
       note: e.note,
       pending: e.pending,
       confidence: e.confidence,

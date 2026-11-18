@@ -14,6 +14,8 @@ import {
   expenseDateProblem,
   initialDraft,
   parseAmountText,
+  pasteIsTyping,
+  resumedDraft,
   type ExpenseDraft
 } from '../../lib/expenseForm'
 import { buildReview, findDuplicate, type ReviewRow } from '../../lib/expenseReview'
@@ -86,8 +88,13 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
   const dateRef = useRef<HTMLInputElement>(null)
 
   const [stage, setStage] = useState<Stage>(p.startWithScan && !editing && !scanBlocked ? 'scan' : 'form')
-  const [d, setD] = useState<ExpenseDraft>(
-    () => p.draft ?? (editing ? draftOf(editing, currency) : initialDraft({ today, last: p.last, cards, preferCardId: p.preferCardId ?? undefined }))
+  // Back from "Add card": what was typed, with the card added chosen.
+  const [d, setD] = useState<ExpenseDraft>(() =>
+    p.draft
+      ? resumedDraft(p.draft, cards, p.preferCardId)
+      : editing
+        ? draftOf(editing, currency)
+        : initialDraft({ today, last: p.last, cards, preferCardId: p.preferCardId ?? undefined })
   )
   const set = (patch: Partial<ExpenseDraft>): void => setD((x) => ({ ...x, ...patch }))
   const [shown, setShown] = useState<ReadonlySet<Field>>(new Set())
@@ -172,6 +179,8 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
       take(files.find((f) => f.type.startsWith('image/')) ?? files[0])
     }
     const onPaste = (e: ClipboardEvent): void => {
+      // Text pasted into a box is typing, even with a picture beside it (Excel and Word copy one).
+      if (pasteIsTyping(e.target instanceof HTMLElement ? e.target : null, Array.from(e.clipboardData?.types ?? []))) return
       const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'))
       if (file && take(file)) e.preventDefault()
     }
