@@ -3,7 +3,7 @@ import { newId } from '../lib/uuid'
 import { MAX_READS, REREAD_MS, sharedLog } from './confirmed'
 import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, sharedMigrationNotice, syncStatus, type DrainResult, type SharedMigrationNotice, type SyncStatus } from './drain'
 import { SignedOutError } from './errors'
-import { oneAtATime } from './oneAtATime'
+import { drainTurns, oneAtATime } from './oneAtATime'
 import { confirmedKey, rowKeys, writable, type PendingOp, type Refused } from './offline'
 import { addManyOps, addOp, answerNotice, restoreOp } from './rowOps'
 import { applyRowOutbox, loadRowCache, loadRowRefused, readRowOutbox, reconcileRow, saveRowCache, saveRowOutbox, saveRowRefused, type RowBase } from './rowStorage'
@@ -102,8 +102,8 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
   const serverRef = useRef<T[] | null>(null)
   // As useBetSync: what a read out while a change was confirmed lays over what it got.
   const confirmedRef = useRef(confirmedLog<T>())
-  // The user whose sync is running, if any.
-  const syncingRef = useRef<string | null>(null)
+  // The user whose sync is running, if any, and whether one more was asked for meanwhile.
+  const turnsRef = useRef(drainTurns<string>())
   // As useBetSync: what a sync of an earlier user brings back is dropped.
   const userRef = useRef(userId)
   userRef.current = userId
@@ -274,9 +274,11 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current === userId || !canSyncRef.current || !userId) return
+    if (!canSyncRef.current || !userId) return
     if (backoffRef.current.waiting || refusalBlockedRef.current) return
-    syncingRef.current = userId
+    // A drain is out: one more after it, since it may have read the queue (or
+    // met the connection) before what this call is about.
+    if (!turnsRef.current.start(userId)) return
     let result: DrainResult | null
     try {
       result = await drain<T>({
@@ -309,7 +311,7 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
         }
       })
     } finally {
-      if (syncingRef.current === userId) syncingRef.current = null
+      if (turnsRef.current.end(userId)) setTimeout(() => void syncNowRef.current(), 0)
     }
     if (!result || userRef.current !== userId) return
     if (result.stop === 'offline') {

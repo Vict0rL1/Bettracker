@@ -33,3 +33,35 @@ export function oneAtATime(fn: () => Promise<void>, still: () => boolean = () =>
     return again
   }
 }
+
+/**
+ * The drains of one queue, one at a time per user, never dropping a call. A
+ * call while a drain for that user is out may come too late for it: the drain
+ * may already have read the queue, or met the connection as it was before a
+ * reconnect or a resume. So `start` (false while one is out) remembers the
+ * call, and `end` says whether one more drain is due after this one, however
+ * many calls came meanwhile. A drain still out for a user who has signed out
+ * never holds up the next user's.
+ */
+export function drainTurns<K>(): { start(key: K): boolean; end(key: K): boolean } {
+  let current: K | null = null
+  let again: K | null = null
+  return {
+    start(key) {
+      if (current === key) {
+        again = key
+        return false
+      }
+      current = key
+      // Whatever was asked for before now, this drain sees.
+      if (again === key) again = null
+      return true
+    },
+    end(key) {
+      if (current === key) current = null
+      if (again !== key) return false
+      again = null
+      return true
+    }
+  }
+}

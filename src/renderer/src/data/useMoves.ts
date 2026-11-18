@@ -6,7 +6,7 @@ import { MAX_READS, REREAD_MS, sharedLog } from './confirmed'
 import { afterFailedRead, backoff, confirmedLog, foldApplied, migrationNotice, retryPlan, syncStatus, type DrainResult, type SyncStatus } from './drain'
 import { SignedOutError } from './errors'
 import { addAnswer, opsAsEvents, undoAnswer, type BatchEvent, type MovePayload } from './imports'
-import { oneAtATime } from './oneAtATime'
+import { drainTurns, oneAtATime } from './oneAtATime'
 import { getMoves, sendMoveOp, subscribeToMoves } from './moves'
 import {
   applyMoveOutbox,
@@ -117,8 +117,8 @@ export function useMoves(
   const serverRef = useRef<BankrollMove[] | null>(null)
   // As useBetSync: what a read out while a change was confirmed lays over what it got.
   const confirmedRef = useRef(confirmedLog<BankrollMove>())
-  // The user whose sync is running, if any.
-  const syncingRef = useRef<string | null>(null)
+  // The user whose sync is running, if any, and whether one more was asked for meanwhile.
+  const turnsRef = useRef(drainTurns<string>())
   // As useBetSync: what a sync of an earlier user brings back is dropped.
   const userRef = useRef(userId)
   userRef.current = userId
@@ -277,9 +277,11 @@ export function useMoves(
   const syncNowRef = useRef<() => Promise<void>>(async () => {})
 
   const syncNow = useCallback(async (): Promise<void> => {
-    if (syncingRef.current === userId || !canSyncRef.current || !userId) return
+    if (!canSyncRef.current || !userId) return
     if (backoffRef.current.waiting || refusalBlockedRef.current) return
-    syncingRef.current = userId
+    // A drain is out: one more after it, since it may have read the queue (or
+    // met the connection) before what this call is about.
+    if (!turnsRef.current.start(userId)) return
     let result: DrainResult | null
     try {
       result = await drain<BankrollMove>({
@@ -319,7 +321,7 @@ export function useMoves(
         }
       })
     } finally {
-      if (syncingRef.current === userId) syncingRef.current = null
+      if (turnsRef.current.end(userId)) setTimeout(() => void syncNowRef.current(), 0)
     }
     if (!result || userRef.current !== userId) return
     if (result.stop === 'offline') {

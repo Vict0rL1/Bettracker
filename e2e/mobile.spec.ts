@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { boot, entry, menu, SEED } from './harness'
+import { boot, card, entry, expense, menu, SEED } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const daysAgo = (n: number): string => {
@@ -18,6 +18,23 @@ const BUSY = [
 ]
 const SETTINGS = { startingBankroll: 1000, unitSize: 25, oddsFormat: 'american', lossLimit: 150 }
 
+// Expenses: three cards with long names (the sheet's segmented picker, at its
+// widest), a few expenses today and in the last September past (the longest
+// month name in both languages), a refund among them.
+const CARDS = [
+  card({ id: '6f9619ff-8b86-4011-b42d-00cf4fc964ff', name: 'Tarjeta de crédito Banco del Pacífico', last4: '1234' }),
+  card({ id: '7a1c3e55-0d2b-4f6e-9a8b-1c2d3e4f5a6b', name: 'Débito cuenta nómina Banco Pichincha', last4: '9876', kind: 'debit' }),
+  card({ id: '8b2d4f66-1e3c-4a7f-8b9c-2d3e4f5a6b7c', name: 'Mastercard Black Viajes y Millas', last4: '5555' })
+]
+const SEPTEMBER = ((d: Date) => `${d.getMonth() + 1 > 9 ? d.getFullYear() : d.getFullYear() - 1}-09-15`)(new Date())
+const EXPENSES = [
+  expense({ id: '10000000-0000-4000-8000-000000000001', date: daysAgo(0), amount: 4.5, cardId: CARDS[0].id, category: 'coffee', merchant: 'Café Central' }),
+  expense({ id: '10000000-0000-4000-8000-000000000002', date: daysAgo(0), amount: 1234.56, cardId: CARDS[1].id, category: 'groceries', merchant: 'Supermercado Internacional de Productos Frescos' }),
+  expense({ id: '10000000-0000-4000-8000-000000000003', date: daysAgo(0), amount: -12, category: 'shopping', merchant: 'Devolución' }),
+  expense({ id: '10000000-0000-4000-8000-000000000004', date: SEPTEMBER, amount: 89.9, cardId: CARDS[2].id, category: 'entertainment', merchant: 'Teatro Nacional Sucre, dos entradas', note: 'Con la familia' }),
+  expense({ id: '10000000-0000-4000-8000-000000000005', date: SEPTEMBER, amount: 32.4, category: 'transport', merchant: 'Taxi aeropuerto' })
+]
+
 /** On a phone the history is a list of cards: open the first, then edit its bet. */
 async function editFirstCard(page: Page): Promise<void> {
   const card = page.locator('.hcard').first()
@@ -30,7 +47,14 @@ const overflow = (page: Page): Promise<number> => page.evaluate(() => document.d
 
 async function open(page: Page, lang: 'en' | 'es'): Promise<void> {
   await page.addInitScript((l) => localStorage.setItem('bettracker:lang', l), lang)
-  await boot(page, { entries: BUSY, settings: SETTINGS, moves: [] })
+  await boot(page, { entries: BUSY, settings: SETTINGS, moves: [], cards: CARDS, expenses: EXPENSES, budgets: [] })
+}
+
+/** A dialog fits the phone: nothing pushes the page or the dialog sideways, and it is inside the screen. */
+async function fits(page: Page, modal: string, width: number): Promise<void> {
+  expect(await overflow(page), modal).toBeLessThanOrEqual(0)
+  const box = await page.locator(modal).boundingBox()
+  expect(box && box.x >= 0 && box.x + box.width <= width, `${modal} inside the screen`).toBe(true)
 }
 
 for (const width of [320, 390]) {
@@ -50,9 +74,33 @@ for (const width of [320, 390]) {
       for (const [modal, show] of dialogs) {
         await show()
         await expect(page.locator(modal)).toBeVisible()
-        expect(await overflow(page), modal).toBeLessThanOrEqual(0)
-        const box = await page.locator(modal).boundingBox()
-        expect(box && box.x >= 0 && box.x + box.width <= width, `${modal} inside the screen`).toBe(true)
+        await fits(page, modal, width)
+        await page.keyboard.press('Escape')
+        await expect(page.locator(modal)).toHaveCount(0)
+      }
+
+      // The Expenses view, on a past month with the longest name (the Today chip shows too).
+      await page.locator('.view-tab-expenses').click()
+      await page.waitForSelector('.expense-list-card')
+      const title = page.locator('.exp-month-title')
+      for (let i = 0; i < 12; i++) {
+        await page.locator('.exp-month-nav .nav-btn').first().click()
+        if (/septiembre|september/i.test((await title.textContent()) ?? '')) break
+      }
+      await expect(title).toHaveText(/septiembre|september/i)
+      await expect(page.locator('.exp-today')).toBeVisible()
+      await expect(page.locator('.expense-list-card')).toContainText('Teatro Nacional Sucre')
+      expect(await overflow(page), 'expenses view').toBeLessThanOrEqual(0)
+
+      const expenseDialogs: [string, () => Promise<unknown>][] = [
+        ['.expense-modal', () => page.click('.fab')],
+        ['.expense-settings-modal', () => page.click('.exp-manage-btn')]
+      ]
+      for (const [modal, show] of expenseDialogs) {
+        await show()
+        await expect(page.locator(modal)).toBeVisible()
+        await fits(page, modal, width)
+        expect(await page.locator(modal).evaluate((el) => el.scrollWidth <= el.clientWidth), `${modal}: nothing sideways inside`).toBe(true)
         await page.keyboard.press('Escape')
         await expect(page.locator(modal)).toHaveCount(0)
       }
@@ -85,6 +133,20 @@ test('on a phone, no field is under 16px, so iOS does not zoom in on it', async 
   await page.keyboard.press('Escape')
   await editFirstCard(page)
   expect(await small(), 'day').toEqual([])
+  await page.keyboard.press('Escape')
+
+  // The Expenses view, its sheet and its settings.
+  await page.locator('.view-tab-expenses').click()
+  await page.waitForSelector('.expense-list-card')
+  expect(await small(), 'expenses').toEqual([])
+  await page.click('.fab')
+  await expect(page.locator('.expense-modal .exp-amount')).toBeVisible()
+  expect(await small(), 'expense sheet').toEqual([])
+  await page.keyboard.press('Escape')
+  await page.click('.exp-manage-btn')
+  const settings = page.locator('.expense-settings-modal')
+  for (const box of ['.paycard-name-input', '.paycard-last4-input', '.budget-input', '.currency-select']) await expect(settings.locator(box).first()).toBeVisible()
+  expect(await small(), 'expense settings').toEqual([])
 })
 
 test('at the bottom of the page, the + button leaves the history pager free to tap', async ({ page }) => {

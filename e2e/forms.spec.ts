@@ -181,6 +181,25 @@ test.describe('editing one bet from the history', () => {
     await expect(day.locator('.bet-item')).toHaveCount(2)
   })
 
+  // The pencil focused the stake a moment later, even when another box had
+  // been focused since: what was typed there went into the stake.
+  test('a box focused right after Edit keeps the focus: what is typed goes there', async ({ page }) => {
+    await boot(page, { entries: BETS })
+    await rows(page).filter({ hasText: 'first of the day' }).locator('.td-day').click()
+    const day = page.locator('.day-modal')
+    await expect(day.locator('.bet-item')).toHaveCount(2)
+    // Edit, then straight into the note, before the dialog has had a moment.
+    await page.evaluate(() => {
+      const item = Array.from(document.querySelectorAll('.day-modal .bet-item')).find((li) => li.textContent?.includes('second of the day'))
+      ;(item?.querySelector('.bet-actions .btn-icon') as HTMLElement).click()
+      ;(document.querySelector('.day-modal .field-wide input') as HTMLInputElement).focus()
+    })
+    await page.keyboard.type(', checked')
+    await expect(day.locator('.field-wide input')).toHaveValue('second of the day, checked')
+    await expect(day.locator('.field-wide input')).toBeFocused()
+    await expect(day.locator('.field').nth(0).locator('input')).toHaveValue('60')
+  })
+
   test('an unfinished edit survives closing the dialog, and Discard changes puts the bet back', async ({ page }) => {
     await boot(page, { entries: BETS })
     await rows(page).filter({ hasText: 'second of the day' }).locator('.td-edit').click()

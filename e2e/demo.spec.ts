@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
-import { menu } from './harness'
+import { menu, scanFile } from './harness'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
@@ -8,6 +8,8 @@ test.use({ baseURL: DEMO_URL })
 
 const storedBets = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as unknown[]).length)
+const storedExpenses = (page: Page): Promise<number> =>
+  page.evaluate(() => (JSON.parse(localStorage.getItem('demo:expenses') ?? '[]') as unknown[]).length)
 
 async function addLoss(page: Page, stake: string): Promise<void> {
   await page.click('.add-bet-btn')
@@ -161,6 +163,22 @@ test.describe('demo', () => {
     expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:moves') ?? '[]') as unknown[]).length)).toBe(1)
   })
 
+  test('scanning a receipt shows a sample, says the image stays here, and adds what is ticked', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await page.locator('.view-tab-expenses').click()
+    await page.locator('.exp-scan-open').click()
+    // No Anthropic and no Supabase here: the demo says so before anything is picked.
+    await expect(page.locator('.exp-privacy')).toHaveText('Demo: the image stays on this device and a sample result is shown.')
+    await page.setInputFiles('.exp-scan-input', scanFile)
+    await expect(page.locator('.exp-sample')).toHaveText('Demo: a sample result, your image was not read.')
+    await expect(page.locator('.exp-review-row')).toHaveCount(2)
+    await page.locator('.exp-review-add').click()
+    await expect(page.locator('.toast')).toContainText('2 expenses added')
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    await expect.poll(() => storedExpenses(page)).toBe(2)
+  })
+
   test('Start over takes back its question after a few seconds', async ({ page }) => {
     await page.goto('/')
     await addLoss(page, '20')
@@ -178,6 +196,14 @@ test.describe('demo', () => {
     await page.goto('/')
     await addLoss(page, '20')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    // An expense on the demo's server too (as one synced from the Expenses view).
+    await page.evaluate(() =>
+      localStorage.setItem(
+        'demo:expenses',
+        JSON.stringify([{ id: '10000000-0000-4000-8000-000000000001', user_id: 'demo', date: '2026-11-17', amount: '4.50', card_id: null, merchant: 'Café', category: 'coffee', note: '', source: 'manual', created_at: '2026-11-17T09:00:00.000Z', updated_at: '2026-11-17T09:00:00.000Z' }])
+      )
+    )
+    expect(await storedExpenses(page)).toBe(1)
 
     const reset = page.locator('.demo-reset')
     await reset.click()
@@ -188,6 +214,7 @@ test.describe('demo', () => {
     await expect(page.locator('.demo-reset')).toHaveText('Start over')
     await expect(page.locator('.history-card tbody tr')).toHaveCount(0)
     expect(await storedBets(page)).toBe(0)
+    expect(await storedExpenses(page)).toBe(0)
   })
 })
 

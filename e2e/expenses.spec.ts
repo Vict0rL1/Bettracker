@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { budgetId } from '../src/renderer/src/lib/stableId'
-import { USER, boot, budget, card, expense, menu, reload } from './harness'
+import { USER, bigPng, boot, budget, card, expense, menu, reload, scanFile } from './harness'
 import { APP_URL } from './urls'
 
 /**
@@ -408,4 +408,257 @@ test('the chart stacks each card’s spending, with the budget line', async ({ p
   await expect(chart.locator('.spend-budget-line')).toHaveCount(0)
   // Nothing moves at rest.
   await page.waitForFunction(() => document.getAnimations().length === 0)
+})
+
+/** A row of the fake AI reading's answer (the shape of the Edge Function's). */
+const aiRow = (o: { amount: number; merchant: string; category: string; date?: string | null; cardLast4?: string | null; confidence?: string }) => ({
+  date: o.date === undefined ? TODAY : o.date,
+  amount: o.amount,
+  merchant: o.merchant,
+  category: o.category,
+  cardLast4: o.cardLast4 ?? null,
+  cardHint: null,
+  note: '',
+  pending: false,
+  confidence: o.confidence ?? 'high'
+})
+
+/** Whether the focus is inside the expense sheet. */
+const focusInSheet = (page: Page) => page.evaluate(() => Boolean(document.activeElement?.closest('.expense-modal')))
+
+test('AI scan: matches the card by its last 4, unticks a duplicate, adds the rest, Undo removes them; no image kept; the focus stays in the dialog', async ({ page }) => {
+  await boot(page, {
+    backend: 'live',
+    view: 'expenses',
+    cards: [cardA],
+    expenses: [expense({ id: '10000000-0000-4000-8000-000000000001', date: TODAY, amount: 23.18, cardId: CARD_A, category: 'groceries', merchant: 'Supermercado La Plaza' })],
+    ai: {
+      rows: [
+        aiRow({ amount: 4.5, merchant: 'Café Central', category: 'coffee', cardLast4: '1234' }),
+        aiRow({ amount: 23.18, merchant: 'SUPERMERCADO LA PLAZA #123', category: 'groceries', cardLast4: '1234' }),
+        aiRow({ amount: -12, merchant: 'Tienda', category: 'shopping' })
+      ]
+    }
+  })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+
+  await page.locator('.exp-scan-open').click()
+  await page.setInputFiles('.exp-scan-input', await bigPng(page))
+  const rows = page.locator('.exp-review-row')
+  await expect(rows).toHaveCount(3)
+  expect(await focusInSheet(page)).toBe(true)
+  await page.keyboard.press('Tab')
+  expect(await focusInSheet(page)).toBe(true)
+
+  // The coffee: its card found by the last 4 digits.
+  await expect(rows.nth(0).locator('.exp-review-meta')).toContainText('Visa A')
+  await expect(rows.nth(0).locator('.exp-review-cardhow')).toHaveText('Matched by its last 4 digits')
+  await expect(rows.nth(0).locator('.exp-review-include')).toBeChecked()
+  // The groceries: already saved, so unticked, next to what it matches.
+  await expect(rows.nth(1)).toHaveClass(/is-dup/)
+  await expect(rows.nth(1).locator('.exp-review-include')).not.toBeChecked()
+  await expect(rows.nth(1).locator('.exp-review-match')).toContainText('Supermercado La Plaza')
+  // The refund: green.
+  const refund = rows.nth(2).locator('.exp-review-amount-text')
+  await expect(refund).toHaveClass(/refund/)
+  await expect(refund).toHaveCSS('color', await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--green').trim()).then(hexToRgb))
+
+  await expect(page.locator('.exp-review-add')).toHaveText('Add 2 expenses')
+  await page.locator('.exp-review-add').click()
+  await expect(page.locator('.expense-modal')).toHaveCount(0)
+  await expect(page.locator('.toast')).toContainText('2 expenses added')
+  await expect.poll(async () => (await server(page, 'expenses')).length).toBe(3)
+  const added = (await server(page, 'expenses')).filter((e) => e.source === 'ai')
+  expect(added.map((e) => [Number(e.amount), e.card_id]).sort()).toEqual([
+    [-12, null],
+    [4.5, CARD_A]
+  ])
+  await page.locator('.toast-action').click()
+  await expect.poll(async () => (await server(page, 'expenses')).length).toBe(1)
+  await expect(page.locator('.exp-row')).toHaveCount(1)
+
+  // What was sent: a JPEG of the image, and nothing of it is kept anywhere but the fake's own record.
+  const last = await page.evaluate(() => JSON.parse(localStorage.getItem('e2e:ai-last') ?? '{}') as { mediaType: string; chars: number; head: string })
+  expect(last.mediaType).toBe('image/jpeg')
+  expect(last.chars).toBeGreaterThan(10_000)
+  expect(last.chars).toBeLessThanOrEqual(1_500_000)
+  expect(last.head).toHaveLength(32)
+  const holding = await page.evaluate(
+    (head) =>
+      [
+        ...Object.keys(localStorage)
+          .filter((k) => k !== 'e2e:ai-last' && (localStorage.getItem(k) ?? '').includes(head))
+          .map((k) => `local:${k}`),
+        ...Object.keys(sessionStorage)
+          .filter((k) => (sessionStorage.getItem(k) ?? '').includes(head))
+          .map((k) => `session:${k}`)
+      ],
+    last.head
+  )
+  expect(holding).toEqual([])
+  expect(await counter(page, 'ai-calls')).toBe(1)
+})
+
+test('AI failures say why, and typing the expense still works', async ({ page }) => {
+  await boot(page, { backend: 'live', view: 'expenses', ai: { fail: 'not_deployed' } })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  const error = page.locator('.exp-scan-error')
+  const retry = page.locator('.exp-scan-retry')
+
+  await page.locator('.exp-scan-open').click()
+  await page.setInputFiles('.exp-scan-input', scanFile)
+  await expect(error).toContainText('isn’t set up')
+  await expect(retry).toBeFocused()
+
+  await page.evaluate(() => localStorage.setItem('e2e:ai-fail', 'limit_reached'))
+  await retry.click()
+  await expect(error).toContainText('spend limit')
+  await page.evaluate(() => localStorage.setItem('e2e:ai-fail', 'refused'))
+  await retry.click()
+  await expect(error).toContainText('declined')
+  expect(await counter(page, 'ai-calls')).toBe(3)
+
+  // Typed instead.
+  await page.locator('.exp-scan-manual').click()
+  const sheet = page.locator('.expense-modal')
+  await expect(sheet.locator('.exp-amount')).toBeVisible()
+
+  // The connection drops: no reading can start, and the sheet says why.
+  await page.evaluate(() => {
+    localStorage.setItem('e2e:down', '1')
+    window.dispatchEvent(new Event('offline'))
+  })
+  await expect(sheet.locator('.exp-scan-btn')).toBeDisabled()
+  await expect(sheet.locator('.exp-scan-off')).toHaveText('AI reading needs a connection. You can still type the expense.')
+  await expect(page.locator('.exp-scan-open')).toBeDisabled()
+  await sheet.locator('.exp-amount').fill('6')
+  await sheet.locator('.exp-save').click()
+  await expect(sheet).toHaveCount(0)
+  await expect(page.locator('.exp-row')).toHaveCount(1)
+  await expect(page.locator('.exp-row .exp-amount')).toHaveText('$6.00')
+  expect(await counter(page, 'ai-calls')).toBe(3)
+})
+
+test('cancelling while reading adds nothing, even when the answer comes later', async ({ page }) => {
+  await boot(page, { backend: 'live', view: 'expenses', ai: { hold: true, ignoreAbort: true } })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  await page.locator('.exp-scan-open').click()
+  await page.setInputFiles('.exp-scan-input', scanFile)
+  await expect(page.locator('.exp-reading')).toBeVisible()
+  await expect(page.locator('.exp-scan-cancel')).toBeFocused()
+  await page.locator('.exp-scan-cancel').click()
+  await expect(page.locator('.exp-drop')).toBeVisible()
+
+  // The answer the cancelled call still gets.
+  await page.evaluate(() => localStorage.removeItem('e2e:ai-hold'))
+  await expect.poll(() => counter(page, 'ai-answered')).toBe(1)
+  await expect(page.locator('.exp-review-row')).toHaveCount(0)
+  await expect(page.locator('.exp-drop')).toBeVisible()
+  expect(await server(page, 'expenses')).toEqual([])
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.expense-modal')).toHaveCount(0)
+  await expect(page.locator('.exp-row')).toHaveCount(0)
+})
+
+test('before 008: only proof counts; expenses wait as Update needed, budgets and the currency are off, and all goes once it runs', async ({ page }) => {
+  // No connection at first: nothing is known of 008 yet.
+  await page.addInitScript(() => localStorage.setItem('e2e:down', '1'))
+  await boot(page, { backend: 'behind-008', view: 'expenses', moves: [] })
+  await page.locator('.exp-manage-btn').click()
+  const settings = page.locator('.expense-settings-modal')
+  await expect(settings.locator('.expset-connect')).toHaveText('Connect once on this device to set budgets and the currency.')
+  await expect(settings.locator('.currency-select')).toBeDisabled()
+  await expect(settings.locator('.budget-input').first()).toBeDisabled()
+  await expect(page.locator('.exp-migration')).toHaveCount(0)
+  await settings.locator('.expset-done').click()
+  await expect(settings).toHaveCount(0)
+
+  // Back online: the reads find the tables missing, which the view says (no toast for a read).
+  await page.evaluate(() => {
+    localStorage.removeItem('e2e:down')
+    window.dispatchEvent(new Event('online'))
+  })
+  await expect(page.locator('.exp-migration')).toBeVisible()
+  await expect(page.locator('.toast')).toHaveCount(0)
+
+  // An expense waits on this device, said once.
+  await addExpense(page, { amount: '4.50', category: 'coffee' })
+  await expect(page.locator('.sync-badge')).toHaveText('Update needed · 1 queued')
+  await expect(page.locator('.exp-row')).toHaveCount(1)
+  // Said once, for the three tables (expenses-sync.spec.ts: not again on a resume or a reconnect).
+  await expect(page.locator('.toast')).toContainText('Your database is behind the app')
+  await expect(page.locator('.toast')).toHaveCount(1)
+  await page.locator('.exp-manage-btn').click()
+  await expect(settings.locator('.expset-needs008')).toBeVisible()
+  await expect(settings.locator('.currency-select')).toBeDisabled()
+  await expect(settings.locator('.budget-input').first()).toBeDisabled()
+  await settings.locator('.expset-done').click()
+
+  // 008 runs.
+  await page.evaluate(() => {
+    localStorage.setItem('e2e:migrated-008', '1')
+    window.dispatchEvent(new Event('online'))
+  })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  await expect.poll(async () => (await server(page, 'expenses')).length).toBe(1)
+  await expect(page.locator('.exp-migration')).toHaveCount(0)
+  await page.locator('.exp-manage-btn').click()
+  await expect(settings.locator('.currency-select')).toBeEnabled()
+  await expect(settings.locator('.budget-input').first()).toBeEnabled()
+  await expect(settings.locator('.expset-needs008')).toHaveCount(0)
+  await expect(settings.locator('.expset-connect')).toHaveCount(0)
+})
+
+test('on a 320px phone the review fits, in Spanish and in English', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('bettracker:lang')) localStorage.setItem('bettracker:lang', 'es')
+  })
+  await boot(page, {
+    backend: 'live',
+    view: 'expenses',
+    cards: [cardA],
+    expenses: [],
+    ai: {
+      rows: [
+        aiRow({ amount: 4.5, merchant: 'Café Central', category: 'coffee', cardLast4: '1234' }),
+        aiRow({ amount: 1234.56, merchant: 'Supermercado Internacional de Productos Frescos La Esperanza', category: 'groceries' }),
+        aiRow({ amount: 18, merchant: 'Farmacia', category: 'health', date: null })
+      ]
+    }
+  })
+  await expect(page.locator('.sync-badge')).toHaveText(/Sincronizado|Synced/)
+
+  for (const lang of ['es', 'en'] as const) {
+    await page.locator('.exp-scan-open').click()
+    await page.setInputFiles('.exp-scan-input', scanFile)
+    const rows = page.locator('.exp-review-row')
+    await expect(rows).toHaveCount(3)
+    for (const box of await rows.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect))) {
+      expect(box.x, `${lang}: a row starts on the screen`).toBeGreaterThanOrEqual(0)
+      expect(box.x + box.width, `${lang}: a row ends on the screen`).toBeLessThanOrEqual(320)
+    }
+    const modal = page.locator('.expense-modal')
+    expect(await modal.evaluate((el) => el.scrollWidth <= el.clientWidth), `${lang}: nothing sideways in the dialog`).toBe(true)
+    // The row with no date is open, its date and amount side by side.
+    const guessed = rows.nth(2)
+    await expect(guessed).toHaveClass(/is-open/)
+    const date = await guessed.locator('.exp-review-field-date').boundingBox()
+    const amount = await guessed.locator('.exp-review-field-amount').boundingBox()
+    if (!date || !amount) throw new Error('no fields')
+    expect(Math.abs(date.y - amount.y), `${lang}: on one line`).toBeLessThan(2)
+    expect(date.x + date.width, `${lang}: date before amount`).toBeLessThanOrEqual(amount.x)
+    expect(amount.x + amount.width, `${lang}: amount on the screen`).toBeLessThanOrEqual(320)
+
+    // Discard it (two presses), then the other language.
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await expect(modal).toHaveCount(0)
+    if (lang === 'es') {
+      await menu(page, '.lang-btn')
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.app-menu')).toHaveCount(0)
+      await expect(page.locator('.view-tab-expenses')).toHaveText('Expenses')
+    }
+  }
 })

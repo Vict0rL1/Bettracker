@@ -806,12 +806,18 @@ export default function App() {
     setToast({ kind: 'ok', text: t('toast.exported', { bets: tn('bet', count) }) })
   }, [bets, t, tn])
 
+  // The expenses, cards and budgets go in the file too (DataDialog offers the
+  // download only once they have loaded: its `backupReady`).
   const handleBackup = useCallback(() => {
     if (!activeUserId || !bets) return
-    const backup = makeBackup(bets, moves.moves, settings, { id: activeUserId, email: activeEmail })
+    const backup = makeBackup(bets, moves.moves, settings, { id: activeUserId, email: activeEmail }, new Date(), {
+      expenses: expenses.rows,
+      expenseCards: cards.rows,
+      expenseBudgets: budgets.rows
+    })
     downloadBackup(backup)
     setToast({ kind: 'ok', text: t('backup.downloaded', { bets: tn('bet', backup.bets.length), moves: tn('move', backup.moves.length) }) })
-  }, [activeUserId, activeEmail, bets, moves.moves, settings, t, tn])
+  }, [activeUserId, activeEmail, bets, moves.moves, settings, expenses.rows, cards.rows, budgets.rows, t, tn])
 
   // The latest copy, for an Undo clicked long after the change it undoes.
   const betsRef = useRef(bets)
@@ -1108,7 +1114,7 @@ export default function App() {
     async (choice: RestoreChoice): Promise<RestoreOutcome> => {
       const uid = activeUserId
       if (!uid) return { kind: 'nothing' }
-      const now = { userId: uid, bets: betsRef.current ?? [], moves: movesRef.current, settings: settingsRef.current }
+      const now = { userId: uid, bets: betsRef.current ?? [], moves: movesRef.current, settings: settingsRef.current, currencyWritable: has008 }
       const fresh = planRestore(choice.backup, now, newId)
       if (fresh.signature !== choice.plan.signature) return { kind: 'changed', plan: fresh }
       const { plan } = choice
@@ -1152,7 +1158,7 @@ export default function App() {
       }
       return { kind: 'done', batch: entry.id }
     },
-    [activeUserId, portsFor]
+    [activeUserId, portsFor, has008]
   )
 
   /**
@@ -1568,6 +1574,7 @@ export default function App() {
             oddsFormat={settings.oddsFormat}
             restoreReady={moves.loaded && settingsLoaded}
             backupReady={moves.loaded && settingsLoaded && expenses.loaded && cards.loaded && budgets.loaded}
+            currencyWritable={has008}
             batches={batches}
             importing={sync.importing}
             live={batchLive}

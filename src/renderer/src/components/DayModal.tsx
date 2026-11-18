@@ -251,8 +251,15 @@ export default function DayModal({ date, bets, edit, oddsFormat, suggestions, ba
 
   const startEdit = (b: Bet, as?: BetStatus): void => {
     switchTo(b, as)
-    // After the boxes are filled in.
-    setTimeout(() => (as === 'won' || as === 'lost' ? amountRef : stakeRef).current?.focus(), 0)
+    // After the boxes are filled in, unless the focus has moved on meanwhile
+    // (a box clicked or tabbed into while the dialog was busy): taking it
+    // back would send what is typed next into the wrong box.
+    const from = document.activeElement
+    setTimeout(() => {
+      const now = document.activeElement
+      if (now !== from && now !== null && now !== document.body) return
+      ;(as === 'won' || as === 'lost' ? amountRef : stakeRef).current?.focus()
+    }, 0)
   }
 
   /** Put the boxes back as they opened, and let the draft go. */

@@ -58,12 +58,43 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    edición la convierte en push) → `007_deleted_rows.sql` (después de la
    005: una fila borrada ya no vuelve cuando otro dispositivo reenvía un alta
    cuya respuesta se perdió; sin ella todo funciona, pero ese reintento la
-   resucita). Todas son aditivas y re-ejecutables (`if not exists`,
+   resucita) → `008_expenses.sql` (después de la 007 y la 004, y se para con
+   un mensaje si falta alguna: las tablas de gastos, tarjetas y presupuestos
+   mensuales y la moneda de los gastos en `user_settings`; sin ella las
+   apuestas funcionan igual, y la vista Gastos avisa y guarda lo que se añada
+   en el dispositivo). Todas son aditivas y re-ejecutables (`if not exists`,
    `drop … if exists` antes de cada constraint, policy y trigger).
    `supabase/schema.sql` contiene lo mismo acumulado por si prefieres
    ejecutar un solo archivo. La 001 ya estaba aplicada antes de este
    trabajo.
-2. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
+2. **Lectura con IA (opcional)**, después de la 008 y antes de publicar la
+   app. Es la Edge Function `extract-expenses`; se despliega con la CLI de
+   Supabase desde la raíz del repositorio (importa
+   `src/shared/expenseExtraction.ts`, así que el editor del panel no sirve).
+   Pasos, coste y privacidad en el README, «AI reading of receipts
+   (optional)»; en corto:
+
+   ```bash
+   npx supabase@3.2.0 login
+   # supabase/functions/.env (ignorado por git), con:
+   #   ANTHROPIC_API_KEY=<clave de un workspace de Anthropic solo para esto, con límite de gasto mensual>
+   #   EXTRACT_ALLOWED_USERS=<tu id de usuario de Supabase>
+   npx supabase@3.2.0 secrets set --remote=<ref> --env-file supabase/functions/.env
+   rm supabase/functions/.env
+   npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-jwt
+   ```
+
+   `EXTRACT_ALLOWED_USERS` es la lista de quién puede escanear (ids, o
+   correos confirmados, separados por comas). Sin ella nadie puede; `*` deja
+   a cualquier usuario con sesión, y nunca debe usarse con el registro
+   abierto (Authentication → Sign In / Providers → «Allow new users to sign
+   up»). La clave va solo en los secretos de la función: nunca en `.env` ni
+   en una variable `VITE_` (el build se para si la ve). El límite de gasto
+   del workspace es el único tope duro. Sin desplegar la función, escanear
+   dice que la lectura con IA no está configurada y escribir el gasto a mano
+   funciona. La CLI 3.2.0 acepta `supabase/config.toml` (comprobado en la
+   etapa 2) y los parámetros de arriba (etapa 4); no se ha desplegado nada.
+3. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
    el proyecto que ya existe: Settings → Git, conectar este repositorio y
    poner el directorio raíz en `/`. Así se conservan el dominio y las
    variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
@@ -86,9 +117,9 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    sitios crea otro, con otra dirección. El build comprueba antes la URL y
    la clave (ver "Decisiones"). El instalador de escritorio se construye
    con `npm run build:desktop`.
-3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
+4. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
    conexión (una recarga basta); el escritorio hay que reinstalarlo.
-4. **Revisar la feature 4** (unidades y bankroll, su propio PR) y las
+5. **Revisar la feature 4** (unidades y bankroll, su propio PR) y las
    preguntas que deja abiertas: ver "Feature 4 · preguntas abiertas"
    abajo.
 
@@ -153,6 +184,16 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
   public.entries; drop trigger bankroll_moves_skip_deleted on
   public.bankroll_moves;` (y los dos `*_remember_deleted`); la tabla puede
   quedarse o borrarse después, no la usa nada más.
+- **La 008 tampoco hace falta para arrancar.** Sin ella, leer gastos,
+  tarjetas o presupuestos encuentra la tabla ausente y no es un error (no sale
+  aviso; la vista Gastos muestra un aviso fijo que dice que falta la 008); lo
+  que se añada espera en su cola con «Falta actualizar · n en cola» y un solo
+  aviso para las tres tablas, y se envía en cuanto corre la 008. Los
+  presupuestos y la moneda se quedan desactivados hasta que una lectura o una
+  escritura de esas tablas funcione en esa sesión (prueba positiva: sin
+  conexión no se sabe y tampoco se activan), porque una moneda enviada a una
+  base sin la columna frenaría el resto de ajustes. Una restauración tampoco
+  toca la moneda sin esa prueba.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
 
@@ -167,12 +208,23 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 655 tests unitarios (vitest)
+npm test            # 1270 tests unitarios en 54 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 171 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 251 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
+# La Edge Function de la lectura con IA (opcional; npx descarga Deno):
+npx --yes deno@2.9.6 check --config supabase/functions/extract-expenses/deno.json supabase/functions/extract-expenses/index.ts
 ```
+
+El `deno check` de la función se ejecutó en la etapa 2 de los gastos y pasó
+(Deno 2.9.6, contra los tipos reales de `@anthropic-ai/sdk@1.8.0` y
+`@supabase/supabase-js@2.110.7`; una copia con campos mal escritos falló con
+10 errores, así que comprueba de verdad). Detrás de un proxy con certificado
+propio hace falta `DENO_CERT` apuntando a él. No está en CI todavía (ver
+pendientes en `docs/expenses-2026-11.md`). Ninguna prueba llama a Anthropic
+ni a Supabase: la lectura con IA de la demo y de la suite e2e la contesta el
+servidor falso.
 
 CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
 con gitleaks, tests y build, el esquema SQL contra un Postgres de usar y
@@ -180,13 +232,14 @@ tirar, y la suite e2e.
 
 `supabase/tests/run.sh` monta la base de tres formas: (A) el esquema con el
 que se publicó la app (`supabase/tests/original_schema.sql`) con filas,
-subido con las migraciones 001→005, cada una dos veces; (B) lo mismo subido
+subido con las migraciones 001→008, cada una dos veces; (B) lo mismo subido
 con `schema.sql` dos veces; (C) una instalación desde cero con `schema.sql`
 dos veces y todas las migraciones encima, con filas escritas como las
 escribe una versión antigua (sin `status`). En A y B comprueba el backfill;
 en C, el trigger; en las tres, las escrituras de versiones antiguas y
-nuevas, las constraints y, para `bankroll_moves`, la regla de conflicto, la
-cascada al borrar el usuario y las policies ejercidas como un usuario
+nuevas, las constraints y, para `bankroll_moves` y las tres tablas de gastos
+(sección 11 de `checks.sql`), la regla de conflicto, la cascada al borrar el
+usuario y las policies ejercidas como un usuario
 conectado (rol `authenticated`, que crea `stubs.sql`; por eso necesita un
 superusuario, como el `postgres` de CI: hace falta crear el rol y luego
 poder hacer `set role` a él). Luego compara las tres estructuras (tablas,
@@ -208,23 +261,99 @@ que usa `npm run demo` (`src/renderer/src/demo/fakeSupabase.ts`), con su
 estado bajo `e2e:` en vez de `demo:`; `e2e/demo.spec.ts` prueba la demo tal
 cual se construye (`npm run demo:serve`, en el puerto 4182). `'behind'` es
 una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
-(`e2e:migrated-005` la "ejecuta"). La opción `moves` siembra la caché de
+(`e2e:migrated-005` la "ejecuta"); `'behind-008'`, con la 004, la 005 y la
+007 y sin la 008 (`e2e:migrated-008`). La opción `moves` siembra la caché de
 ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
-cargado). En este entorno hizo falta `NO_PROXY='*'` para que
+cargado); `expenses`, `cards` y `budgets`, las de gastos, tarjetas y
+presupuestos (con `moves` y sin ellas valen `[]`; `null`, ninguna caché);
+`view: 'expenses'` abre en la vista Gastos; `ai` dirige la lectura con IA
+falsa (`rows`, `fail` con un código, `hold`, `ignoreAbort`), y el harness
+exporta `TINY_PNG`, `scanFile` y `bigPng` (un recibo de 1200×1600 dibujado en
+la página). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
-### Gastos (en curso, noviembre 2026)
+### Gastos (noviembre 2026)
 
-Pestaña de gastos del día a día con tarjetas, presupuestos y lectura de
-recibos con IA, en cinco etapas en esta rama. Hecha la **etapa 1**: la
-migración 008 (no aplicada en ningún sitio), la sincronización de sus tres
-tablas y la moneda de los gastos como ajuste, todavía sin interfaz. **No
-publicar ninguna etapa suelta antes de la 4:** hasta entonces «Descargar
-copia» ya espera a que carguen gastos, tarjetas y presupuestos (en un
-dispositivo recién actualizado y sin conexión queda desactivado), pero la
-copia aún no los incluye.
+Petición del usuario: una pestaña para los gastos del día a día (un café,
+cosas), con presupuesto, sus dos tarjetas por separado y un gráfico que las
+una, y el registro a mano o con IA a partir de la foto de una factura o de
+una captura de Apple Wallet. Detalle completo en `docs/expenses-2026-11.md`.
+En corto:
+
+- **Vista Gastos** junto a Apuestas (pestañas bajo la cabecera, recordadas
+  por dispositivo; solo se monta la activa). En ella el botón principal es
+  **Añadir gasto**, y `T` y el **+** del móvil abren la hoja de gasto. Mes
+  con flechas (compartido con el calendario de apuestas), resumen (gastado,
+  presupuesto restante, por tarjeta, media diaria y proyección), un gráfico
+  que apila el gasto de cada tarjeta (acumulado contra la línea del
+  presupuesto, o por día), barras de presupuestos, desglose por categoría y
+  la lista (tabla en escritorio, tarjetas en el móvil; búsqueda y filtros).
+- **Gasto**: fecha, importe (negativo = reembolso, en verde), tarjeta
+  opcional, comercio, una de 11 categorías fijas, nota y origen (a mano o
+  IA). Se escribe como se teclea («4,50», «1.234,50», «12.500» en COP).
+  Deshacer en cada alta, edición y borrado; todo funciona sin conexión.
+- **Tarjetas** (las que se quieran; nombre, últimos 4, crédito o débito);
+  borrar una con gastos la archiva. **Presupuestos** mensuales: total, por
+  tarjeta y por categoría, ámbar desde el 80 % y rojo al pasarse, nunca
+  bloquean. **Moneda** de los gastos a elegir (USD por defecto); cambiarla
+  no convierte nada y las apuestas siguen en dólares.
+- **Lectura con IA**: «Escanear recibo» envía la imagen (reducida a 1600 px,
+  JPEG) a la Edge Function `extract-expenses`, que la lee con Claude Opus 5.5
+  con la clave de Anthropic del proyecto (solo en sus secretos) y devuelve los
+  gastos para **revisarlos** antes de guardar nada: tarjeta reconocida por
+  sus 4 últimos dígitos, posibles duplicados desmarcados, filas dudosas
+  abiertas. La imagen no se guarda en ningún sitio. Unos 3 a 10 céntimos de
+  dólar por escaneo.
+- **Copia completa**: el archivo incluye ahora `expenses`, `expenseCards`,
+  `expenseBudgets` y `settings.expenseCurrency` (sigue siendo la versión 1;
+  una copia anterior sigue valiendo y una app anterior los ignora). Esta
+  versión los lee y los cuenta pero **aún no los restaura**: la revisión lo
+  dice. «Descargar copia» espera a que carguen gastos, tarjetas y
+  presupuestos; «Restaurar» solo a apuestas, movimientos y ajustes. **CSV de
+  gastos** aparte, desde la lista; el CSV de apuestas no cambia.
+- **Datos**: migración 008 (tres tablas con RLS, realtime y los triggers de
+  la 007; `card_id` sin clave foránea; ids de presupuesto deterministas) y
+  una capa de sincronización genérica para las tres (`data/useRowSync.ts`),
+  con las mismas reglas que apuestas y movimientos.
+
+**Cómo se probó.** Unitarios de toda la lógica nueva (sincronización por
+tabla con `describe.each`, gasto del mes y proyección, presupuestos, moneda,
+lectura de importes, tarjeta por últimos dígitos, duplicados, CSV, imagen,
+el módulo compartido de la IA con su prompt, esquema y validación, el
+cliente de la función, la copia); `checks.sql` sección 11 contra Postgres;
+e2e: `expenses.spec.ts` (12: pestañas, alta/edición/borrado sin conexión,
+sincronización y cierre de sesión con una escritura en vuelo, tarjetas,
+presupuestos, moneda, gráfico, escaneo con duplicado y Deshacer sin guardar
+la imagen, fallos de la IA, cancelar a media lectura, antes de la 008, la
+revisión a 320 px en es y en), `expenses-sync.spec.ts` (3), y añadidos en
+`mobile.spec.ts` (la vista y sus diálogos a 320 y 390 px, campos de 16 px),
+`demo.spec.ts` (escaneo de ejemplo; «Empezar de cero» vacía los gastos) y
+`backup.spec.ts` (la copia lleva los gastos; la moneda solo se ofrece con la
+008 probada). La lectura con IA nunca se ha probado contra Anthropic de
+verdad, ni la 008 ni la función contra el proyecto real: no hay acceso desde
+aquí.
+
+**De paso**, en las apuestas: al pulsar el lápiz de una apuesta en el
+diálogo del día, el foco saltaba a la casilla del stake un instante después
+aunque ya se hubiera pasado a otra casilla, y lo que se escribía acababa en el
+stake (por eso `e2e/clv.spec.ts` fallaba de vez en cuando, más con la app más
+cargada). Ahora `DayModal.startEdit` solo mueve el foco si sigue donde estaba
+al pulsar; `forms.spec.ts` lo comprueba de forma determinista. Y un aviso de
+conexión, una vuelta a la app o un cambio nuevo que llegaban mientras la cola
+se estaba enviando se perdían (`syncNow` volvía sin hacer nada) y lo pendiente
+esperaba al reintento de 20 s (por eso `migration.spec.ts` «says so once…»
+fallaba a veces). Ahora una llamada durante un envío pide otro justo después
+(`drainTurns` en `data/oneAtATime.ts`, con su test), en apuestas, movimientos
+y las tres tablas de gastos; tras un fallo pasajero sigue mandando la espera.
+
+**Dudas abiertas.** Restaurar gastos, tarjetas y presupuestos desde una
+copia (el formato ya los guarda); un `deno check` de la función en CI; una
+cuota diaria duradera por usuario para la IA (hoy el límite de verdad es el
+del workspace de Anthropic); si conviene versionar un `deno.lock` (hoy
+`"lock": false`, ver «Decisiones»). Lista completa en
+`docs/expenses-2026-11.md`.
 
 ### Rediseño visual «Graphite Ledger» (noviembre 2026)
 
@@ -797,12 +926,61 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   sitio; así el trigger existe desde el momento en que `status` pasa a ser
   obligatorio. La regla de "migraciones nuevas para cada cambio" sigue
   valiendo para todo lo ya aplicado.
+- **Gastos: una capa de sincronización genérica** (`data/rowTable.ts`,
+  `data/rowStorage.ts`, `data/useRowSync.ts`) para gastos, tarjetas y
+  presupuestos, con las mismas piezas que los movimientos (`useOpQueue`,
+  `drainOutbox`, registro de confirmaciones entre pestañas, lectura que no
+  encuentra la tabla = ninguno todavía) pero sin lotes ni restauraciones.
+  `useMoves` no se tocó: copiarlo tres veces habría triplicado el código, y
+  refactorizarlo habría puesto en riesgo lo que ya funciona. Cada tabla tiene
+  su cola, su caché y su canal (`bettracker:<nombre>…:<uid>`), así que una
+  frenada no frena las demás, y un solo aviso de «falta actualizar» vale para
+  las tres.
+- **`expenses.card_id` sin clave foránea.** Las tarjetas y los gastos van
+  por colas distintas: un gasto puede llegar al servidor antes que su
+  tarjeta, y con una FK se rechazaría para siempre. Un id sin tarjeta se
+  muestra como «Sin tarjeta». Borrar una tarjeta con gastos la archiva; solo
+  se borra de verdad cuando la lista de gastos está cargada y leída en esta
+  sesión y ninguno la usa.
+- **Ids de presupuesto deterministas** (`lib/stableId.ts`, a partir de
+  usuario, ámbito y destino): dos dispositivos que ponen el mismo
+  presupuesto sin conexión acaban en una sola fila (`unique (user_id, scope,
+  target)`); el alta que choca aplica su valor si es más reciente. El
+  algoritmo está congelado por un test con valores fijos.
+- **Moneda solo de los gastos, sin conversión.** `user_settings.expense_currency`;
+  las apuestas siguen en dólares y las unidades nunca se aplican a gastos.
+  Cambiarla solo cambia cómo se escriben los mismos números (la app lo dice).
+  Se activa solo con prueba de que existe la 008 en esa sesión (una lectura
+  o escritura de las tablas que funcionó): un parche con la columna contra
+  una base sin ella frenaría todos los ajustes.
+- **IA vía Edge Function, con la clave en sus secretos y lista de
+  permitidos.** La clave de Anthropic nunca llega a la app (el build se para
+  si ve una `VITE_*ANTHROPIC*` o un valor `sk-ant-`). La función comprueba
+  la sesión del usuario (`auth.getUser`) y `EXTRACT_ALLOWED_USERS` (sin ella,
+  nadie), sin reintentos del SDK y con un plazo de 108 s, por debajo de los
+  115 s de la app, para no facturar dos veces. El prompt, el esquema JSON y
+  la validación están en un módulo sin imports (`src/shared/expenseExtraction.ts`)
+  que comparten la función, la app (que vuelve a validar la respuesta) y los
+  tests. Las tarjetas se mandan como pistas (nombre, últimos 4, tipo), nunca
+  sus ids: el cliente decide la tarjeta.
+- **`deno.json` con `"lock": false`.** Sin eso, cada `deno check` escribe un
+  `deno.lock` en el repositorio. Las dependencias directas ya van fijadas en
+  el import (`npm:@anthropic-ai/sdk@1.8.0`, `npm:@supabase/supabase-js@2.110.7`);
+  versionar un lock fijaría también las transitivas con su hash, y es una
+  decisión para cuando haya un `deno check` en CI que lo mantenga al día.
+- **La copia guarda los gastos pero aún no los restaura** (versión 1 del
+  formato, claves opcionales). Restaurarlos pide decidir cómo se mezclan
+  con lo que hay (ids de tarjeta de otra cuenta, presupuestos con id
+  determinista por usuario); mientras, no se pierde nada: están en el
+  archivo y la revisión dice cuántos hay. Una lista de gastos mal formada
+  cuenta como ausente: nunca impide restaurar las apuestas.
 
 ## Mapa de archivos nuevos o muy cambiados
 
 ```
-src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput
-src/shared/supabaseEnv.ts           comprueba VITE_SUPABASE_URL y _ANON_KEY (el build y la app)
+src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput, Expense, ExpenseCard, ExpenseBudget
+src/shared/supabaseEnv.ts           comprueba VITE_SUPABASE_URL y _ANON_KEY (el build y la app); rechaza una clave de Anthropic
+src/shared/expenseExtraction.ts     lectura con IA: categorías, prompt, esquema JSON, validación (app, función y tests)
 src/renderer/src/auth/authErrors.ts los rechazos de Supabase Auth, en palabras (en y es)
 src/renderer/src/lib/
   stats.ts      resumen, ROI, CLV, breakdown por tag/banda/día/mes
@@ -820,6 +998,14 @@ src/renderer/src/lib/
   uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
+  view.ts       vista Apuestas o Gastos, recordada por dispositivo
+  categories.ts, stableId.ts            categorías de gasto; ids deterministas de presupuesto
+  currency.ts   formato de la moneda de los gastos
+  spend.ts      gasto del mes, proyección, presupuestos, datos del gráfico, filtros
+  expenseForm.ts, expenseReview.ts      la hoja de gasto (importes como se teclean); la revisión de lo leído por la IA
+  cardMatch.ts  tarjeta por últimos 4 dígitos o nombre
+  expenseCsv.ts CSV de gastos
+  scanImage.ts, scanImageDom.ts         la imagen a escanear: tamaño, tipo, JPEG
 src/renderer/src/demo/
   fakeSupabase.ts   el Supabase falso de la demo y de la suite e2e
   start.ts          entrada de `npm run demo` (va delante de main.tsx)
@@ -835,6 +1021,11 @@ src/renderer/src/data/
   store.ts                                las colas en el almacenamiento, compartidas entre ventanas con candado
                                           y versión en IndexedDB; lo retenido se reaplica
   useOpQueue.ts                           una cola de operaciones (apuestas o movimientos): candados, rechazadas
+  rowTable.ts, rowStorage.ts, useRowSync.ts, rowOps.ts
+                                          gastos, tarjetas y presupuestos: servidor, almacenamiento y sincronización
+  expenseSpecs.ts, expenses.ts            las tres tablas descritas para esa capa
+  expenseLast.ts                          última tarjeta y categoría usadas en el dispositivo
+  extract.ts                              llamada a la Edge Function extract-expenses
 src/renderer/src/lib/betForm.ts     los problemas de cada casilla, en palabras; rechazos
 src/renderer/src/lib/importPlan.ts  revisión de una importación: duplicados, huella del archivo
 src/renderer/src/lib/backup.ts      copia completa: formato, validación, plan de restauración
@@ -849,12 +1040,21 @@ src/renderer/src/components/
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
-  BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner
-e2e/*.spec.ts                       171 comprobaciones (mobile.spec.ts: el móvil;
+  BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner,
+  ViewTabs (Apuestas | Gastos), Paged
+src/renderer/src/components/expenses/
+  ExpensesView, SpendSummary, SpendChart(+Inner), BudgetsPanel, CategoryBreakdown,
+  ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
+  BudgetEditor, CurrencyPicker, useDialog
+e2e/*.spec.ts                       251 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
-                                    importación cortada, lecturas tardías, paginación, ajustes en vuelo)
+                                    importación cortada, lecturas tardías, paginación, ajustes en vuelo;
+                                    expenses.spec.ts y expenses-sync.spec.ts: los gastos)
 e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
-supabase/migrations/00{2,3,4,5,6}_*.sql, supabase/schema.sql
+supabase/migrations/00{2,3,4,5,6,7,8}_*.sql, supabase/schema.sql
+supabase/functions/extract-expenses/ la Edge Function de la lectura con IA (index.ts, deno.json)
+supabase/config.toml                ajustes de la CLI: sin la comprobación JWT de la pasarela para esa función
+docs/expenses-2026-11.md            los gastos: decisiones, datos, sincronización, IA, pruebas, pendientes
 supabase/tests/                     el esquema contra un Postgres real
 ```

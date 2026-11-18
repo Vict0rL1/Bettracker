@@ -1,13 +1,26 @@
-import { isOddsFormat, type BankrollMove, type Bet, type Settings, type SettingsPatch } from '../../../shared/types'
+import {
+  isCurrencyCode,
+  isOddsFormat,
+  type BankrollMove,
+  type Bet,
+  type BudgetScope,
+  type CardKind,
+  type Expense,
+  type ExpenseBudget,
+  type ExpenseCard,
+  type Settings,
+  type SettingsPatch
+} from '../../../shared/types'
 import { duplicateKey } from './importPlan'
 import type { StringKey } from './strings'
-import { InputError, MAX_AMOUNT, normalizeInput, normalizeMove, round2 } from './validate'
+import { InputError, MAX_AMOUNT, normalizeBudget, normalizeCard, normalizeExpense, normalizeInput, normalizeMove, round2 } from './validate'
 
 /**
  * A full backup: every bet, every deposit and withdrawal, and the settings,
- * in one JSON file. Unlike the bets CSV (for spreadsheets and other
- * trackers), it keeps ids, so restoring it twice adds nothing the second
- * time, and nothing is lost in a round trip.
+ * in one JSON file, and the expenses with their cards and monthly budgets.
+ * Unlike the bets CSV (for spreadsheets and other trackers), it keeps ids,
+ * so restoring it twice adds nothing the second time, and nothing is lost in
+ * a round trip.
  *
  *   {
  *     "format": "bettracker-backup",
@@ -19,8 +32,22 @@ import { InputError, MAX_AMOUNT, normalizeInput, normalizeMove, round2 } from '.
  *                 "createdAt", "updatedAt" } ],
  *     "moves": [ { "id", "date", "amount", "note", "createdAt", "updatedAt" } ],
  *     "settings": { "oddsFormat", "unitSize", "showUnits", "startingBankroll",
- *                   "defaultStake", "lossLimit" }
+ *                   "defaultStake", "lossLimit", "expenseCurrency" },
+ *     "expenses": [ { "id", "date", "amount", "cardId", "merchant", "category",
+ *                     "note", "source", "createdAt", "updatedAt" } ],
+ *     "expenseCards": [ { "id", "name", "last4", "kind", "archived",
+ *                         "createdAt", "updatedAt" } ],
+ *     "expenseBudgets": [ { "id", "scope", "target", "monthlyLimit",
+ *                           "createdAt", "updatedAt" } ]
  *   }
+ *
+ * The three expense lists and `settings.expenseCurrency` came later (the
+ * expenses, migration 008) and are optional: a file from before has none,
+ * and an app from before ignores them, so `version` stays 1. This version
+ * reads and counts them but can't restore them yet (only the currency, which
+ * is a setting like the others): the restore says so, and never counts them
+ * as restored. A malformed expense list is treated as absent, never as a
+ * damaged file, so it can't keep the bets and moves from being restored.
  *
  * A later version that adds fields keeps `version` 1 as long as an older app
  * can ignore them; one an older app would misread raises it, and an older
@@ -40,11 +67,32 @@ export interface Backup {
   bets: Bet[]
   moves: BankrollMove[]
   settings: BackupSettings
+  /** Kept in the file, read and counted, not restored by this version. */
+  expenses?: Expense[]
+  expenseCards?: ExpenseCard[]
+  expenseBudgets?: ExpenseBudget[]
 }
 
-export function makeBackup(bets: readonly Bet[], moves: readonly BankrollMove[], settings: Settings, account: { id: string; email: string | null }, now = new Date()): Backup {
-  // The expenses' currency joins the file together with the expenses themselves.
-  const { updatedAt: _ignored, expenseCurrency: _notYet, ...rest } = settings
+/** The expenses, cards and budgets a backup also holds (see makeBackup). */
+export interface BackupExtras {
+  expenses: readonly Expense[]
+  expenseCards: readonly ExpenseCard[]
+  expenseBudgets: readonly ExpenseBudget[]
+}
+
+/** Oldest first by `createdAt`, then by id: the same file from the same data. */
+const byCreated = <T extends { id: string; createdAt: string }>(a: T, b: T): number =>
+  a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+
+export function makeBackup(
+  bets: readonly Bet[],
+  moves: readonly BankrollMove[],
+  settings: Settings,
+  account: { id: string; email: string | null },
+  now = new Date(),
+  extra?: BackupExtras
+): Backup {
+  const { updatedAt: _ignored, ...rest } = settings
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
@@ -52,8 +100,20 @@ export function makeBackup(bets: readonly Bet[], moves: readonly BankrollMove[],
     account,
     bets: [...bets].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.createdAt < b.createdAt ? -1 : 1)),
     moves: [...moves].sort((a, b) => (a.date < b.date ? -1 : 1)),
-    settings: rest
+    settings: rest,
+    ...(extra
+      ? {
+          expenses: [...extra.expenses].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : byCreated(a, b))),
+          expenseCards: [...extra.expenseCards].sort(byCreated),
+          expenseBudgets: [...extra.expenseBudgets].sort(byCreated)
+        }
+      : {})
   }
+}
+
+/** How many expenses, cards and budgets a backup holds (none, for one from before them). */
+export function expensesHeld(backup: Backup): { expenses: number; cards: number; budgets: number } {
+  return { expenses: backup.expenses?.length ?? 0, cards: backup.expenseCards?.length ?? 0, budgets: backup.expenseBudgets?.length ?? 0 }
 }
 
 /** Download a backup as a .json file. Works in the PWA and Electron alike. */
@@ -173,12 +233,47 @@ export function readBackup(text: string): ReadBackup {
     }
   })
 
+  // The expenses, cards and budgets: optional, and only read and counted
+  // (this version can't restore them). A list that is missing or not a list
+  // is left out; an entry that fails the app's checks is dropped without a
+  // word, since nothing of them is restored anyway.
+  const expenses = optionalList(raw.expenses, (e, id, createdAt, updatedAt): Expense => {
+    const amount = typeof e.amount === 'number' ? e.amount : NaN
+    const clean = normalizeExpense({
+      date: str(e.date),
+      amount,
+      cardId: typeof e.cardId === 'string' ? e.cardId : null,
+      merchant: str(e.merchant),
+      category: str(e.category),
+      note: str(e.note),
+      source: e.source === 'ai' ? 'ai' : 'manual'
+    })
+    return { id, ...clean, createdAt, updatedAt }
+  })
+  const expenseCards = optionalList(raw.expenseCards, (c, id, createdAt, updatedAt): ExpenseCard => {
+    const clean = normalizeCard({ name: str(c.name), last4: str(c.last4), kind: c.kind as CardKind, archived: c.archived === true })
+    return { id, ...clean, createdAt, updatedAt }
+  })
+  const expenseBudgets = optionalList(raw.expenseBudgets, (b, id, createdAt, updatedAt): ExpenseBudget => {
+    const clean = normalizeBudget({ scope: b.scope as BudgetScope, target: str(b.target), monthlyLimit: typeof b.monthlyLimit === 'number' ? b.monthlyLimit : NaN })
+    return { id, ...clean, createdAt, updatedAt }
+  })
+
   const s = raw.settings
   const unitSize = money(s.unitSize, true)
   const startingBankroll = money(s.startingBankroll, false)
   const defaultStake = money(s.defaultStake, false)
   const lossLimit = money(s.lossLimit, true)
-  if (!isOddsFormat(s.oddsFormat) || typeof s.showUnits !== 'boolean' || [unitSize, startingBankroll, defaultStake, lossLimit].includes('bad')) {
+  // Missing (a backup from before expenses): left out, so a restore never
+  // changes the currency. Present, it must be a currency code like any other
+  // setting must make sense.
+  const expenseCurrency = s.expenseCurrency === undefined ? undefined : typeof s.expenseCurrency === 'string' ? s.expenseCurrency.trim().toUpperCase() : null
+  if (
+    !isOddsFormat(s.oddsFormat) ||
+    typeof s.showUnits !== 'boolean' ||
+    [unitSize, startingBankroll, defaultStake, lossLimit].includes('bad') ||
+    (expenseCurrency !== undefined && !isCurrencyCode(expenseCurrency))
+  ) {
     return { ok: false, key: 'backup.badSettings' }
   }
   const account = isObject(raw.account) ? { id: str(raw.account.id), email: typeof raw.account.email === 'string' ? raw.account.email : null } : { id: '', email: null }
@@ -199,10 +294,37 @@ export function readBackup(text: string): ReadBackup {
         unitSize: unitSize as number | null,
         startingBankroll: startingBankroll as number | null,
         defaultStake: defaultStake as number | null,
-        lossLimit: lossLimit as number | null
-      }
+        lossLimit: lossLimit as number | null,
+        ...(expenseCurrency !== undefined ? { expenseCurrency: expenseCurrency as string } : {})
+      },
+      ...(expenses ? { expenses } : {}),
+      ...(expenseCards ? { expenseCards } : {}),
+      ...(expenseBudgets ? { expenseBudgets } : {})
     }
   }
+}
+
+/**
+ * One of the backup's optional lists (expenses, cards, budgets): undefined
+ * when the file has none or it is not a list. Each entry needs a UUID id not
+ * seen before and must pass `make` (the app's own checks, which throw);
+ * anything else is dropped.
+ */
+function optionalList<T>(list: unknown, make: (entry: Record<string, unknown>, id: string, createdAt: string, updatedAt: string) => T): T[] | undefined {
+  if (!Array.isArray(list)) return undefined
+  const out: T[] = []
+  const seen = new Set<string>()
+  for (const entry of list) {
+    if (!isObject(entry) || typeof entry.id !== 'string' || !UUID.test(entry.id) || seen.has(entry.id)) continue
+    const createdAt = str(entry.createdAt, new Date(0).toISOString())
+    try {
+      out.push(make(entry, entry.id, createdAt, str(entry.updatedAt, createdAt)))
+      seen.add(entry.id)
+    } catch {
+      // Not a valid entry: dropped (see above).
+    }
+  }
+  return out
 }
 
 /**
@@ -218,6 +340,8 @@ export function readBackup(text: string): ReadBackup {
  *    duplicate, skipped unless the user keeps it.
  *  - The settings replace these only when the user asks (`settingsDiffer`
  *    says whether there is anything to replace).
+ *  - The expenses, cards and budgets in the file are never restored by this
+ *    version (the review says how many there are; see expensesHeld).
  */
 export interface RestorePlan {
   otherAccount: boolean
@@ -253,9 +377,25 @@ const sameMove = (a: BankrollMove, b: BankrollMove): boolean => a.date === b.dat
 
 export function planRestore(
   backup: Backup,
-  here: { userId: string; bets: readonly Bet[]; moves: readonly BankrollMove[]; settings: Settings },
+  here: {
+    userId: string
+    bets: readonly Bet[]
+    moves: readonly BankrollMove[]
+    settings: Settings
+    /**
+     * Whether this device has seen the expenses' tables (migration 008) work
+     * (default true). Without that proof the backup's expenses currency is
+     * left out, as if the file had none: a patch naming it could be refused
+     * by a database from before 008, and hold the other settings with it.
+     */
+    currencyWritable?: boolean
+  },
   newId: () => string
 ): RestorePlan {
+  if (here.currencyWritable === false && backup.settings.expenseCurrency !== undefined) {
+    const { expenseCurrency: _unwritable, ...settings } = backup.settings
+    backup = { ...backup, settings }
+  }
   const otherAccount = backup.account.id !== here.userId
   const betsById = new Map(here.bets.map((b) => [b.id, b]))
   const movesById = new Map(here.moves.map((m) => [m.id, m]))
@@ -337,7 +477,8 @@ export function planRestore(
     s.showUnits !== b.showUnits ||
     s.startingBankroll !== b.startingBankroll ||
     s.defaultStake !== b.defaultStake ||
-    s.lossLimit !== b.lossLimit
+    s.lossLimit !== b.lossLimit ||
+    (b.expenseCurrency !== undefined && s.expenseCurrency !== b.expenseCurrency)
   plan.signature = JSON.stringify([
     otherAccount,
     sources.newBets,
@@ -354,8 +495,8 @@ export function planRestore(
   return plan
 }
 
-/** The settings a backup holds, in a fixed order. */
-export const SETTING_FIELDS = ['oddsFormat', 'unitSize', 'showUnits', 'startingBankroll', 'defaultStake', 'lossLimit'] as const
+/** The settings a backup holds, in a fixed order (`expenseCurrency` only in one made since the expenses). */
+export const SETTING_FIELDS = ['oddsFormat', 'unitSize', 'showUnits', 'startingBankroll', 'defaultStake', 'lossLimit', 'expenseCurrency'] as const
 
 /**
  * The settings a restore replaces: each field where the backup differs from

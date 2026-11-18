@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import type { BankrollMove, Bet, BetInput, OddsFormat, Settings } from '../../../shared/types'
 import type { ImportBatch } from '../data/imports'
-import { readBackup, planRestore, type Backup, type BadEntry, type RestorePlan } from '../lib/backup'
+import { expensesHeld, readBackup, planRestore, type Backup, type BadEntry, type RestorePlan } from '../lib/backup'
 import { batchStatus, type BatchLive, type BatchStatus, type PartStatus, type RecoveryAction, type SettingsStatus } from '../lib/batchStatus'
 import { refusalText } from '../lib/betForm'
 import { parseBetsCsv, type ImportResult, type Rejection } from '../lib/csv'
@@ -57,6 +57,11 @@ interface Props {
   backupReady: boolean
   /** The deposits and withdrawals and the settings have loaded: a restore can tell what is here already. */
   restoreReady: boolean
+  /**
+   * The expenses' tables (migration 008) are known to work on this device, so
+   * a restore may set the expenses currency (see planRestore).
+   */
+  currencyWritable: boolean
   batches: ImportBatch[]
   /** Imports still on their way, by their batch. */
   importing: ReadonlyMap<string, { done: number; total: number }>
@@ -207,6 +212,7 @@ export default function DataDialog(props: Props) {
     oddsFormat,
     backupReady,
     restoreReady,
+    currencyWritable,
     batches,
     importing,
     live,
@@ -288,12 +294,12 @@ export default function DataDialog(props: Props) {
         return plan.signature === cur.plan.signature ? cur : withImportPlan(cur, plan)
       }
       if (cur.kind === 'restore') {
-        const plan = planRestore(cur.backup, { userId: account.id, bets, moves, settings: settingsRef.current }, newId)
+        const plan = planRestore(cur.backup, { userId: account.id, bets, moves, settings: settingsRef.current, currencyWritable }, newId)
         return plan.signature === cur.plan.signature ? cur : withRestorePlan(cur, plan)
       }
       return cur
     })
-  }, [bets, moves, settingsText, account.id])
+  }, [bets, moves, settingsText, account.id, currencyWritable])
 
   const pickCsv = async (file: File): Promise<void> => {
     const text = await file.text()
@@ -317,7 +323,7 @@ export default function DataDialog(props: Props) {
       go({ kind: 'restoreProblem', file: file.name, key: read.key, vars: read.vars })
       return
     }
-    const plan = planRestore(read.backup, { userId: account.id, bets, moves, settings }, newId)
+    const plan = planRestore(read.backup, { userId: account.id, bets, moves, settings, currencyWritable }, newId)
     // The settings are offered, not imposed: replaced only when asked (see planRestore).
     go({ kind: 'restore', file: file.name, fingerprint: fingerprint(text), backup: read.backup, bad: read.bad, plan, keep: new Set(), changed: false })
   }
@@ -500,6 +506,7 @@ export default function DataDialog(props: Props) {
     )
   } else if (step.kind === 'restore') {
     const { plan, backup } = step
+    const held = expensesHeld(backup)
     const keptDups = plan.duplicateSources.filter((src) => step.keep.has(src)).length
     const addBets = plan.newBets.length + keptDups
     const nothing = addBets === 0 && plan.newMoves.length === 0 && !(replaceSettings && plan.settingsDiffer)
@@ -541,6 +548,12 @@ export default function DataDialog(props: Props) {
           {plan.sameMoves > 0 && <li>{t('backup.movesSame', { n: plan.sameMoves })}</li>}
           {plan.changedMoves > 0 && <li>{t('backup.movesChanged', { n: plan.changedMoves })}</li>}
         </ul>
+        {held.expenses + held.cards + held.budgets > 0 && (
+          // Read and counted, never restored (nor counted as restored) by this version.
+          <p className="draft-note restore-expenses" role="note">
+            {t('backup.expensesHeld', { expenses: tn('expense', held.expenses), cards: tn('card', held.cards), budgets: tn('budget', held.budgets) })}
+          </p>
+        )}
 
         {plan.duplicateBets.length > 0 && (
           <section className="imp-section imp-dups">
@@ -567,6 +580,7 @@ export default function DataDialog(props: Props) {
                 bankroll: backup.settings.startingBankroll === null ? '—' : money.bankroll(backup.settings.startingBankroll),
                 unit: backup.settings.unitSize === null ? '—' : String(backup.settings.unitSize)
               })}
+              {plan.settings.expenseCurrency !== undefined && ` ${t('backup.settingsCurrency', { code: plan.settings.expenseCurrency })}`}
             </p>
           </section>
         )}
@@ -660,6 +674,7 @@ export default function DataDialog(props: Props) {
               {t('header.exportEmpty')}
             </p>
           )}
+          <p className="hint data-expenses-csv">{t('data.expensesCsvHint')}</p>
         </section>
 
         <section className="data-section">

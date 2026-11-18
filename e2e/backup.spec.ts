@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
-import { boot, entry, menu, move, reload } from './harness'
+import { boot, budget, card, entry, expense, menu, move, reload } from './harness'
 
 // Ids as the database gives them: a backup refuses anything else.
 const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -44,6 +44,53 @@ test.describe('full backup', () => {
     expect((backup.bets as { id: string }[]).map((b) => b.id)).toEqual([id(1), id(2), id(3)])
     expect((backup.moves as { note: string }[])[0].note).toBe('opening deposit')
     expect(backup.settings).toMatchObject({ startingBankroll: 1000, oddsFormat: 'decimal', unitSize: 10 })
+  })
+
+  test('also holds the expenses, their cards, budgets and currency, which this version reads back but can’t restore yet', async ({ page }) => {
+    const cardId = '6f9619ff-8b86-4011-b42d-00cf4fc964ff'
+    await boot(page, {
+      entries: BETS,
+      moves: MOVES,
+      settings: SETTINGS,
+      cards: [card({ id: cardId, name: 'Visa', last4: '1234' })],
+      expenses: [
+        expense({ id: id(301), date: '2026-08-02', amount: 4.5, cardId, category: 'coffee', merchant: 'Café' }),
+        expense({ id: id(302), date: '2026-08-01', amount: -12, category: 'shopping', source: 'ai' })
+      ],
+      budgets: [budget({ scope: 'total', monthlyLimit: 600 })]
+    })
+    const backup = await download(page)
+    expect(backup.version).toBe(1)
+    expect(backup.settings).toMatchObject({ expenseCurrency: 'USD' })
+    expect((backup.expenses as { id: string }[]).map((e) => e.id)).toEqual([id(302), id(301)])
+    expect(backup.expenses).toEqual([
+      expect.objectContaining({ id: id(302), amount: -12, cardId: null, category: 'shopping', source: 'ai' }),
+      expect.objectContaining({ id: id(301), amount: 4.5, cardId, merchant: 'Café', category: 'coffee', source: 'manual' })
+    ])
+    expect(backup.expenseCards).toEqual([expect.objectContaining({ id: cardId, name: 'Visa', last4: '1234', kind: 'credit', archived: false })])
+    expect(backup.expenseBudgets).toEqual([expect.objectContaining({ scope: 'total', target: '', monthlyLimit: 600 })])
+
+    // Restored: the review says what else the file holds, and never counts it.
+    // Nor is the file's currency offered: nothing here has shown the expense
+    // tables exist (migration 008), so the database might refuse it.
+    const dialog = await pickBackup(page, JSON.stringify({ ...backup, settings: { ...(backup.settings as object), expenseCurrency: 'EUR' } }))
+    await expect(dialog.locator('.restore-expenses')).toHaveText('This backup also holds 2 expenses, 1 card and 1 budget. This version can’t restore them yet; they stay in the file.')
+    await expect(dialog.locator('.restore-settings')).toHaveCount(0)
+    await expect(dialog.locator('.imp-nothing')).toHaveText('Nothing to restore: everything in it is already here.')
+  })
+
+  test('once the expense tables are known to work, the backup’s expenses currency is offered like any setting', async ({ page }) => {
+    await boot(page, { backend: 'live', entries: BETS, moves: MOVES, settings: SETTINGS })
+    await expect(page.locator('.sync-badge')).toHaveText('Synced')
+    const backup = await download(page)
+    const dialog = await pickBackup(page, JSON.stringify({ ...backup, settings: { ...(backup.settings as object), expenseCurrency: 'EUR' } }))
+    await expect(dialog.locator('.imp-section')).toContainText('Expenses in EUR.')
+    await dialog.locator('.restore-settings').check()
+    await dialog.locator('.restore-go').click()
+    await expect(dialog.locator('.result-settings')).toContainText('expenses currency')
+    await expect
+      .poll(() => page.evaluate(() => (JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { expense_currency?: string }).expense_currency))
+      .toBe('EUR')
   })
 
   test('restoring brings back what was deleted, changes nothing else, and adds nothing the second time', async ({ page }) => {

@@ -20,6 +20,13 @@ withdrawal**, so the current bankroll adds up to the cent, a chart view of it
 over time, and a quiet warning when a stake is more than **5%** of it. And if
 you think in **units**, set what one is worth and every amount reads in units.
 
+And your **everyday expenses**, in a tab of their own: a coffee logged in a
+couple of taps, each **card** kept apart, **monthly budgets** (for the month,
+per card and per category) and one chart of what all the cards spent. Type an
+expense, or let **AI** read it from a photo of a receipt or an Apple Wallet
+screenshot (optional, see [AI reading of receipts](#ai-reading-of-receipts-optional)).
+Expenses are shown in the **currency** you choose; bets stay in dollars.
+
 One React UI runs two ways:
 
 - **Phone** — an installable **PWA** (Add to Home Screen). Works on Wi-Fi or
@@ -46,8 +53,9 @@ moment you're back online. The header badge tells you where you stand:
 | 🔴 **Signed out · n queued** | Your session ended (signing out on another device ends it everywhere) — changes are safe on this device; **Sign in again** sends them |
 | 🟠 **Update needed · n queued** | Your database is missing a migration — changes are safe on this device and sync as soon as you run it (see [setup](#1-create-the-supabase-project)) |
 
-The count covers every queued change: bets, deposits and withdrawals. A
-settings change waiting to sync shows on the badge too (without a count).
+The count covers every queued change: bets, deposits and withdrawals,
+expenses, cards and budgets. A settings change waiting to sync shows on the
+badge too (without a count).
 A request the server never answers is given up after 30 seconds, as if the
 connection had dropped, and tried again later.
 Signing out removes that device's local copy (cache, queued changes and
@@ -92,10 +100,12 @@ with paging, a balance chart you can flip between **all time and the selected
 month**, the interface in **English or Spanish** (the menu switches it;
 it follows your browser until you pick one, then stays put; validation and
 sync error messages stay in English), and
-keyboard shortcuts — `←`/`→` to change month, `T` to log today, `Esc` to
-close a dialog.
+keyboard shortcuts — `←`/`→` to change month, `T` to log today (an expense,
+in the Expenses view), `Esc` to close a dialog.
 
-The top bar holds only **Add bet**, next to the sync badge. Everything else
+The **Bets | Expenses** tabs under the header switch between the two views
+(each device remembers the last one). The top bar holds only **Add bet**
+(**Add expense** in the Expenses view), next to the sync badge. Everything else
 is in the menu (☰): the account, **Import & export**, **Pending bets**,
 **Settings**, the theme, the language and **Sign out**. The menu button
 shows how many bets are waiting for a result; the menu works from the
@@ -115,8 +125,9 @@ keyboard (arrows, Home/End, Escape back to the button).
    (the free tier is plenty).
 2. Open **SQL Editor → New query**, paste the contents of
    [`supabase/schema.sql`](supabase/schema.sql), and **Run**. That creates the
-   `entries`, `user_settings` and `bankroll_moves` tables, locks them to each
-   user with row-level security, and enables realtime sync.
+   `entries`, `user_settings` and `bankroll_moves` tables and the expenses'
+   `expenses`, `expense_cards` and `expense_budgets`, locks them to each user
+   with row-level security, and enables realtime sync.
    - *Already set up an earlier version?* Re-run `schema.sql` (it's safe to run
      again) or apply just the migrations you're missing, in order:
      [`001_multiple_sessions_per_day.sql`](supabase/migrations/001_multiple_sessions_per_day.sql)
@@ -136,14 +147,21 @@ keyboard (arrows, Home/End, Escape back to the button).
      [`007_deleted_rows.sql`](supabase/migrations/007_deleted_rows.sql)
      (a deleted bet, deposit or withdrawal stays deleted: an insert sent
      again after its answer was lost can no longer bring it back; it runs
-     after 005). Your existing bets are untouched —
+     after 005) and
+     [`008_expenses.sql`](supabase/migrations/008_expenses.sql)
+     (the Expenses view: expenses, cards, monthly budgets and the currency
+     expenses are shown in; it runs after 007 and 004, and stops with a
+     message if either is missing). Your existing bets are untouched —
      old ones simply have no stake or odds recorded, and 003 gives each the
      status its result implies. Without 006 everything works, except that
      editing a lost free bet ($0 stake, $0 result) turns it into a push (its
      P/L stays $0). Without 007 everything works too, except that a bet
      deleted on one device can come back when another device sends again an
      insert of it whose answer was lost (an import, a restore, a quick add on
-     a bad connection).
+     a bad connection). Without 008 the bets and the bankroll work as before;
+     the Expenses view says the database needs it, what you add there waits
+     on the device as **Update needed**, and budgets and the currency can't
+     be set until it has run.
    - *Upgrading an install people are using?* Run the migrations **before**
      you deploy the new version. Devices still on the old version keep
      working in between: their writes carry no status, and 003 gives them the
@@ -454,6 +472,169 @@ click on the card) opens a panel listing them, oldest first. Each settles in one
 and a bet whose date has passed is flagged so it is not forgotten. Settling
 works offline like any other edit.
 
+## Expenses
+
+The **Expenses** tab (next to **Bets**, under the header) is for everyday
+spending: a coffee, a taxi, the groceries. It needs migration 008 (see
+[setup](#1-create-the-supabase-project)); until it has run, the view says so
+and what you add waits on the device.
+
+- **An expense** has a date, an amount, a card (or none), a merchant, a
+  category (coffee, food & restaurants, groceries, transport, shopping,
+  entertainment, health, home & bills, subscriptions, travel, other) and a
+  note. **Add expense** (or `T`, or the `+` button on a phone) opens a sheet
+  that starts on the amount and remembers the last card and category on that
+  device. Amounts read the way you type them: `4,50`, `4.50`, `1.234,50` and,
+  in a currency without cents, `12.500`. A **refund** (or credit) is an
+  expense below zero: it shows in green and lowers that month's spending.
+  Edit and delete from the list; each comes with an **Undo**. It all works
+  offline and syncs like the bets.
+- **Cards** — as many as you like (name, last 4 digits, credit or debit),
+  under **Expense settings**. Deleting a card that has expenses archives it:
+  it leaves the pickers and its expenses keep its name. An expense whose card
+  isn't there shows under **No card**.
+- **Budgets** — monthly, the same every month: one for the whole month, one
+  per card and one per category, all optional. They show as bars (amber from
+  80%, red once over) and never block anything. Two devices that set the same
+  budget meet on one row.
+- **Currency** — expenses are shown in the currency picked in **Expense
+  settings** (USD by default; EUR, MXN, COP, ARS, CLP, PEN and more). Changing
+  it converts nothing: the same numbers are shown with the new symbol. Bets
+  stay in dollars, and units never apply to expenses.
+- **The month** — what was spent, what is left of the budget, each card's
+  share, the daily average and where the month is heading; one chart of every
+  card's spending (running total against the budget, or per day), the
+  categories, and the list (a table on a computer, cards on a phone; search,
+  and filter by card and category). The arrows and `←`/`→` change the month,
+  shared with the bets' calendar.
+- **Scan receipt** — the AI reads a receipt photo or an Apple Wallet
+  screenshot and fills in the expenses for you to check before anything is
+  saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).
+- **Export CSV** (in the list) writes every expense, with the columns `date,
+  amount, currency, card, card_last4, merchant, category, note, source`. The
+  bets' CSV is unchanged.
+
+## AI reading of receipts (optional)
+
+**Scan receipt** in the Expenses view reads a photo of a receipt or an Apple
+Wallet screenshot with Claude (Anthropic) and fills in the expenses: one per
+receipt (its total, tip included), one per visible Wallet transaction
+(declined ones left out, refunds as refunds). Nothing is saved until you
+check them: each row can be edited or unticked, its card is matched by the
+last 4 digits (or the name) the image shows, and one that looks like an
+expense you already have (same date, amount and card, a similar merchant) is
+unticked and shown next to it. Everything works without it: until it is set
+up, scanning says so and you type the expense instead.
+
+It runs in a Supabase **Edge Function**, `extract-expenses`
+(`supabase/functions/extract-expenses/`), with **your own Anthropic API key**,
+which lives only in that function's secrets: never in `.env`, never in a
+`VITE_` variable (the build refuses one, since it would be published in the
+app). The function checks that the caller is signed in and on its allow list,
+sends the image to Claude (`claude-opus-5-5`) with a fixed prompt and a JSON
+schema (`src/shared/expenseExtraction.ts`, shared with the app, which checks
+the answer again) and returns the expenses it read. It stores nothing.
+
+### Set it up
+
+In this order: (1) run migration `008_expenses.sql` in the SQL editor
+(after 007); (2) deploy the function and set its secrets; (3) deploy the
+app. In any other order nothing is lost: expenses wait as **Update needed**
+until 008 runs, and scanning says AI reading isn't set up until the function
+is there, while typing an expense works.
+
+You need the [Supabase CLI](https://supabase.com/docs/guides/cli), run here
+through `npx` at the version these steps were last checked with, **3.2.0**
+(a newer one may name its flags differently; check `--help`), and the
+project's **reference id** (the `<ref>` of `https://<ref>.supabase.co`).
+
+```bash
+# From the repository root: the function imports src/shared/expenseExtraction.ts.
+npx supabase@3.2.0 login
+
+# The secrets go in a file, not on the command line (it would stay in the shell
+# history). supabase/functions/.env is git-ignored (the .env rule). It holds:
+#   ANTHROPIC_API_KEY=<a key from a dedicated Anthropic workspace, see below>
+#   EXTRACT_ALLOWED_USERS=<your user id>
+npx supabase@3.2.0 secrets set --remote=<ref> --env-file supabase/functions/.env
+rm supabase/functions/.env
+
+npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-jwt
+```
+
+- **`--no-verify-jwt`**: the function checks the user itself, and the
+  browser's CORS preflight (which carries no token) must reach it. The same
+  setting is in [`supabase/config.toml`](supabase/config.toml)
+  (`[functions.extract-expenses] verify_jwt = false`), so a plain `functions
+  deploy` can't turn the gateway's check back on.
+- **Docker**: the CLI bundles the function with Docker when it's running;
+  without it, add `--use-api` to bundle on Supabase's side.
+- **The Dashboard's editor can't deploy it** (it imports a second file): use
+  the CLI. If a CLI version refuses the import from outside `supabase/`
+  ("Module not found … src/shared"), copy `src/shared/expenseExtraction.ts`
+  to `supabase/functions/_shared/expenseExtraction.ts`, point the one import
+  in `index.ts` at it, and keep the two files identical (a unit test that
+  compares them byte for byte is the safe way).
+- **`EXTRACT_ALLOWED_USERS`**: who may scan, comma-separated user ids
+  (recommended; **Authentication → Users** shows yours) or confirmed emails.
+  Unset, every scan is refused ("This account isn't allowed"). `*` lets every
+  signed-in user scan: never use it while **Allow new users to sign up** is on
+  (**Authentication → Sign In / Providers**), or anyone could sign up and
+  spend your key.
+- **The key**: make a **dedicated Anthropic workspace** for this function in
+  the [Anthropic Console](https://console.anthropic.com), give it a **monthly
+  spend limit**, and create the key there. That limit is the only hard cap:
+  the function's own throttle (one scan at a time and 20 per 10 minutes per
+  user, per server instance) is best effort. When the limit or the credit
+  runs out, the app says so and typing still works.
+- **Time**: a scan usually takes 10 to 60 seconds. The app gives up after
+  115 s and the function stops by 108 s, retrying at most once and only after
+  a quick connection or server failure, so a scan the app gave up on is never
+  still running, nor billed twice.
+  Check in Supabase's docs (Edge Functions → Limits) that your plan lets a
+  function run that long.
+- **Checking it compiles** (optional, needs Deno; `npx` fetches it):
+  `npx --yes deno@2.9.6 check --config supabase/functions/extract-expenses/deno.json supabase/functions/extract-expenses/index.ts`.
+  Behind a proxy with its own certificate, set `DENO_CERT` to that
+  certificate. `deno.json` sets `"lock": false` so the check doesn't write a
+  `deno.lock` into the repository: the direct dependencies are pinned in the
+  import lines themselves.
+- **The SDK version** is pinned in the import (`npm:@anthropic-ai/sdk@1.8.0`).
+  When you move it, take the newest release that is **at least 7 days old**
+  (not one published the day before), and run the check above: it fails if a
+  field the function uses (`fallbacks`, `output_config.format`,
+  `stop_details`, the error codes) isn't typed in that version.
+- **Undo**: `npx supabase@3.2.0 functions delete extract-expenses --remote=<ref>`
+  (the app goes back to "not set up"). 008 is additive and needs no undoing
+  for the app to keep working.
+
+### What it costs
+
+Claude Opus 5.5 costs $4 per million input tokens and $20 per million output
+tokens. The app sends the image at most 1600 px on its long side: a 1600×1200
+photo is about 2,600 input tokens (width × height / 750; a 739×1600 Wallet
+screenshot about 1,600), plus about 1,500 for the instructions, so about
+**$0.017** of input. The answer and the model's thinking (effort medium) take
+about 1,000 to 4,000 output tokens, **$0.02 to $0.08**. All in, about **3 to
+10 US cents per scan**. If Claude declines an image and the request falls
+back to another model (the function asks for that fallback), that attempt is
+billed at that model's rates; the function logs it (`fallback: true`).
+
+### What leaves the device
+
+From the device, through the function, to Anthropic under your API key: the
+image (re-encoded as a JPEG, which drops the location and camera details),
+your cards' names and last 4 digits (to match the card; never their ids),
+today's date, your time zone, the expenses' currency and the app's language.
+The function stores nothing and logs only codes, sizes, timings and token
+counts, never the image, an amount or a merchant. The app keeps nothing of
+the image either (not on the device, in a draft, in a backup or on the
+server); only the expenses you confirm are saved. Anthropic handles what it
+receives under its commercial terms; how long it keeps API data is in its
+[Privacy Center](https://privacy.anthropic.com).
+In the demo (`npm run demo`) nothing is sent anywhere: the image stays in the
+browser and a sample result is shown.
+
 ## How it's put together
 
 ```
@@ -465,15 +646,18 @@ Bettracker/
 ├── .github/workflows/ci.yml    # CI: secrets scan, tests, build, schema, e2e
 ├── supabase/
 │   ├── schema.sql              # run once in your Supabase project
-│   ├── migrations/             # 001–007, for installs made before each change
-│   └── tests/                  # runs the two above against a real Postgres
+│   ├── migrations/             # 001–008, for installs made before each change
+│   ├── functions/extract-expenses/  # the Edge Function that reads receipts with Claude (optional)
+│   ├── config.toml             # Supabase CLI settings: that function's gateway JWT check off
+│   └── tests/                  # runs schema.sql and the migrations against a real Postgres
 ├── build/make-icon.mjs         # regenerates all app/PWA icons
 ├── e2e/                        # Playwright specs + the harness that boots the app on a fake Supabase
 └── src/
     ├── main/index.ts           # Electron: a native window around the web UI
     ├── preload/index.ts        # minimal (data goes over the network, not IPC)
-    ├── shared/types.ts         # Bet, BetInput, Settings, OddsFormat, BankrollMove
-    ├── shared/supabaseEnv.ts   # checks VITE_SUPABASE_URL / _ANON_KEY (the build and the app)
+    ├── shared/types.ts         # Bet, BetInput, Settings, OddsFormat, BankrollMove, Expense, ExpenseCard, ExpenseBudget
+    ├── shared/supabaseEnv.ts   # checks VITE_SUPABASE_URL / _ANON_KEY (the build and the app); refuses an Anthropic key
+    ├── shared/expenseExtraction.ts  # the AI reading's prompt, schema and checks, shared by the app and the Edge Function
     └── renderer/src/
         ├── App.tsx             # auth gate + dashboard + live sync wiring
         ├── auth/               # AuthProvider + Login screen (+ authErrors.ts, Supabase's refusals in words)
@@ -487,9 +671,11 @@ Bettracker/
         ├── data/useOpQueue.ts  # a queue of ops as the bets and the moves keep it (storage, drain lock, refused)
         ├── data/settings.ts    # per-user settings (+ useSettings.ts, the same in small)
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
+        ├── data/rowTable.ts    # expenses, cards and budgets on the server (+ rowStorage.ts, useRowSync.ts: one sync for the three)
+        ├── data/extract.ts     # calls the extract-expenses function
         ├── lib/                # supabase client (requests time out after 30 s), validation, csv, odds, dates, stats, bankroll, format, strings, …
         ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e) and its entry
-        └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, …
+        └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, … (expenses/: the Expenses view)
 ```
 
 **Stats.** One grouping pass per render feeds the calendar, the stat cards and
@@ -588,6 +774,29 @@ Deposits and withdrawals live in `bankroll_moves` (migration 005): `id`
 conflict key, as for bets). The starting bankroll and the unit size are
 settings (`user_settings`, migration 004).
 
+The expenses (migration 008) live in three tables, each row with an `id`
+generated on the device, its `user_id`, `created_at` and `updated_at` (the
+conflict key, as for bets). Each table is locked to its user by row-level
+security, and a deleted row stays deleted (007):
+
+- `expenses`: `date`, `amount` (`> 0` spent, `< 0` a refund or credit, never
+  `0`, in the expenses' currency), `card_id` (a card's id or `null`, with
+  **no** foreign key: an expense can reach the server before its card, and
+  one whose card isn't there shows as "No card"), `merchant`, `category` (one
+  of the fixed keys: `coffee`, `food`, `groceries`, `transport`, `shopping`,
+  `entertainment`, `health`, `home`, `subscriptions`, `travel`, `other`),
+  `note` and `source` (`manual` or `ai`).
+- `expense_cards`: `name` (1 to 40 characters), `last4` (4 digits or empty),
+  `kind` (`credit` or `debit`) and `archived`.
+- `expense_budgets`: `scope` (`total`, `card` or `category`), `target` (empty
+  for the total, the card's id or the category's key) and `monthly_limit`
+  (`> 0`), one row per scope and target; its `id` is made from the user, the
+  scope and the target, so two devices setting the same budget meet on one
+  row.
+
+`user_settings.expense_currency` (008) is the ISO 4217 code the expenses are
+shown in (`USD` by default); changing it converts nothing.
+
 Each row is one bet. A day can hold any number of them, and the app sums a
 day's settled rows into its net total; a pending bet stays out of P/L, ROI
 and streaks until you settle it (one tap from the day dialog or the history).
@@ -609,9 +818,15 @@ bet almost always costs exactly what was risked.
 Everything that goes in or out is under **Import & export** in the menu (☰).
 
 **Full backup** downloads one JSON file with every bet, deposit and
-withdrawal, and the settings:
+withdrawal, the settings, and the expenses with their cards and budgets:
 `{ "format": "bettracker-backup", "version": 1, "exportedAt", "account",
-"bets", "moves", "settings" }`. **Restore** checks the whole file first (a
+"bets", "moves", "settings", "expenses", "expenseCards", "expenseBudgets" }`
+(the expenses' currency is one of the settings, `expenseCurrency`). It is
+offered once all of that has loaded on the device. The expense lists came
+later and are optional, so a backup from before them still restores, and an
+older version of the app reads a new backup and ignores them. **This version
+can't restore expenses, cards or budgets yet**: the restore says how many the
+file holds and leaves them there. **Restore** checks the whole file first (a
 file that isn't a backup, or comes from a newer version, is refused; an
 entry that fails the app's checks is left out and listed) and then shows
 what it would do. A restore only adds: a bet or deposit already here (same
@@ -619,8 +834,9 @@ id) stays as it is now, even if the backup has it differently, so restoring
 the same file twice adds nothing the second time, and one deleted since
 comes back. A backup of another account gets new ids, and its bets that
 look like bets here are offered as possible duplicates, skipped unless kept.
-The settings are replaced only when asked. A restore can be undone like an
-import.
+The settings are replaced only when asked (the expenses' currency only
+once the device has seen migration 008 working, since a database without it
+would refuse the whole change). A restore can be undone like an import.
 
 **Export bets CSV** writes one row per bet, sorted by date, with the columns
 `date, status, stake, odds, closing_odds, amount, sport, book, bet_type, note`
