@@ -129,3 +129,19 @@ export const SparkIcon = ({ size = 20 }: IconProps) => (
     <path d="M17 7h4v4" />
   </svg>
 )
+
+/** A receipt with a torn foot: scanning one with AI. */
+export const ReceiptIcon = ({ size = 14 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M5 3h14v18l-2.5-1.5L14 21l-2-1.5L10 21l-2.5-1.5L5 21Z" />
+    <path d="M9 8h6M9 12h6M9 16h3" />
+  </svg>
+)
+
+/** A payment card. */
+export const CardIcon = ({ size = 14 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <rect x="2.5" y="5" width="19" height="14" rx="2" />
+    <path d="M2.5 10h19M6.5 15h4" />
+  </svg>
+)

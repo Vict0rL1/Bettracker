@@ -1,5 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { DEFAULT_SETTINGS, type BankrollMove, type Bet, type BetInput, type BetStatus, type MoveInput } from '../../shared/types'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  DEFAULT_SETTINGS,
+  type BankrollMove,
+  type Bet,
+  type BetInput,
+  type BetStatus,
+  type BudgetScope,
+  type Expense,
+  type ExpenseCard,
+  type ExpenseCardInput,
+  type ExpenseInput,
+  type MoveInput
+} from '../../shared/types'
 import BalanceChart from './components/BalanceChart'
 import BankrollDialog from './components/BankrollDialog'
 import Breakdown from './components/Breakdown'
@@ -8,6 +20,8 @@ import DataDialog, { type ImportChoice, type ImportOutcome, type RestoreChoice, 
 import FirstRun from './components/FirstRun'
 import DayModal, { type DayDrafts, type TagSuggestions } from './components/DayModal'
 import Header from './components/Header'
+import ViewTabs from './components/ViewTabs'
+import type { ExpenseSettingsSection } from './components/expenses/ExpensesView'
 import HeroStats, { AdvancedSection, AdvancedStats, KeyStats } from './components/HeroStats'
 import HistoryTable from './components/HistoryTable'
 import LossBanner from './components/LossBanner'
@@ -27,8 +41,11 @@ import { StorageWriteError } from './data/store'
 import { hasStoredSession } from './lib/supabase'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
-import { useRowSync } from './data/useRowSync'
+import { migration008, useRowSync } from './data/useRowSync'
 import { budgetsTable, cardsTable, expensesTable } from './data/expenses'
+import { CARDS_SPEC } from './data/expenseSpecs'
+import { loadExpenseLast, saveExpenseLast } from './data/expenseLast'
+import type { ExtractOutcome } from './data/extract'
 import { dayDraftId, loadDayDraft, loadQuickDraft, saveDayDraft, saveQuickDraft, type QuickDraft } from './data/drafts'
 import {
   batchOf,
@@ -69,7 +86,7 @@ import { bankrollNow, firstBetDate } from './lib/bankroll'
 import { retagPlan, settlePlan, toInput, type TagPatch } from './lib/bulk'
 import { downloadCsv } from './lib/csv'
 import { moneyFormat } from './lib/format'
-import { useLang } from './lib/i18n'
+import { getLang, useLang } from './lib/i18n'
 import { dismissKey, loadLossDismissed, lossState, saveLossDismissed } from './lib/lossLimit'
 import { MoneyContext } from './lib/money'
 import { openBets } from './lib/pending'
@@ -79,6 +96,23 @@ import { useTheme } from './lib/theme'
 import { addMonths, currentMonth, humanDate, todayStr, type MonthKey } from './lib/dates'
 import { effectiveUnit } from './lib/validate'
 import { PlusIcon } from './components/icons'
+import { toCategory } from './lib/categories'
+import { currencyFormat } from './lib/currency'
+import { downloadExpensesCsv } from './lib/expenseCsv'
+import { cardDeleteMode, type ExpenseDraft } from './lib/expenseForm'
+import type { PreparedImage } from './lib/scanImageDom'
+import { monthSpend } from './lib/spend'
+import { budgetId } from './lib/stableId'
+import { loadView, saveView, type AppView } from './lib/view'
+
+// The expenses' screens, Recharts with them, load only when the Expenses view
+// (or one of its sheets) opens: the bets' first paint never waits for them.
+const ExpensesView = lazy(() => import('./components/expenses/ExpensesView'))
+const ExpenseSheet = lazy(() => import('./components/expenses/ExpenseSheet'))
+const ExpenseSettings = lazy(() => import('./components/expenses/ExpenseSettings'))
+
+/** The expense sheet: adding (by hand, or starting with a scan; a draft handed back from Expense settings), or editing one. */
+type ExpenseSheetState = { kind: 'add'; scan?: boolean; draft?: ExpenseDraft; preferCardId?: string } | { kind: 'edit'; id: string }
 
 const kindOf = (amount: number): 'deposit' | 'withdrawal' => (amount > 0 ? 'deposit' : 'withdrawal')
 
@@ -128,6 +162,21 @@ export default function App() {
   const [pendingOpen, setPendingOpen] = useState(false)
   const [bankrollOpen, setBankrollOpen] = useState(false)
   const [dataOpen, setDataOpen] = useState(false)
+  // Bets or Expenses: remembered on this device (see lib/view.ts).
+  const [view, setViewState] = useState<AppView>(loadView)
+  // Set on the first switch: the bets sections' first-paint stagger runs once per page load, not on every return.
+  const [revisit, setRevisit] = useState(false)
+  const changeView = useCallback((v: AppView) => {
+    setViewState(v)
+    saveView(v)
+    setRevisit(true)
+  }, [])
+  const [expenseSheet, setExpenseSheet] = useState<ExpenseSheetState | null>(null)
+  const [expenseSettings, setExpenseSettings] = useState<ExpenseSettingsSection | null>(null)
+  // The draft of an add sheet handed over to "Add card" (memory only, never storage), and the card added meanwhile.
+  const resumeRef = useRef<{ draft: ExpenseDraft; addedCardId: string | null } | null>(null)
+  // The newest updatedAt seen per budget id, so a budget set again after it was cleared is stamped past its tombstone.
+  const budgetSeen = useRef(new Map<string, string>())
   // The imports made on this device (see data/imports.ts), as last read.
   const [batches, setBatches] = useState<ImportBatch[]>([])
   // Each message is its own element (keyed by its seq): its entrance plays
@@ -214,6 +263,8 @@ export default function App() {
   const cards = useRowSync({ table: cardsTable, ...rowOpts })
   const budgets = useRowSync({ table: budgetsTable, ...rowOpts })
   const rowQueues = [expenses, cards, budgets]
+  // 008 is known only from positive evidence: a read or a write of its tables went through (see useRowSync).
+  const { has008, needs008 } = migration008(rowQueues)
   // One badge for every queue. A settings change, a deposit or an expense is
   // a queued change too: the badge says what holds it back (or that it is on
   // its way) even when no bet is queued. An empty queue has no say.
@@ -244,6 +295,8 @@ export default function App() {
   // Amounts show in units when the user has a unit size and asked for them.
   const unit = effectiveUnit(settings)
   const money = useMemo(() => moneyFormat(unit), [unit])
+  // The expenses have their own currency (never units, never the bets' dollars): their subtree gets this instead.
+  const expenseMoney = useMemo(() => currencyFormat(settings.expenseCurrency), [settings.expenseCurrency])
 
   // The bankroll is a balance over every bet, whatever the range. Until both
   // the settings (for the starting bankroll) and the deposits and withdrawals
@@ -321,23 +374,30 @@ export default function App() {
     setLossDismissed(lossKey)
   }, [lossKey])
 
+  const openExpense = useCallback(() => setExpenseSheet({ kind: 'add' }), [])
+  const openScan = useCallback(() => setExpenseSheet({ kind: 'add', scan: true }), [])
+  // Every dialog, bets' and expenses': the keys and the + button stand aside while one is open (dialogs never stack).
+  const anyDialogOpen = day !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen || dataOpen || expenseSheet !== null || expenseSettings !== null
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (day !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen || dataOpen) return
+      if (anyDialogOpen) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      // The month is shared by both views.
       if (e.key === 'ArrowLeft') setYm((m) => addMonths(m, -1))
       if (e.key === 'ArrowRight') setYm((m) => addMonths(m, 1))
       if (e.key === 't' || e.key === 'T') {
         // The sheet focuses and selects the stake box as it opens; without this
         // the same keystroke's character would land there and wipe the default.
         e.preventDefault()
-        openQuick()
+        if (view === 'expenses') openExpense()
+        else openQuick()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [day, quickOpen, settingsOpen, pendingOpen, bankrollOpen, dataOpen, openQuick])
+  }, [anyDialogOpen, view, openQuick, openExpense])
 
   // With the session ended the queue waits for a sign-in, not the connection.
   const savedNote = useCallback(
@@ -540,6 +600,187 @@ export default function App() {
       }
     },
     [moves, savedNote, showError, done, t]
+  )
+
+  // ---- Expenses (each queued like a move; the sheets say why one is refused) ----
+
+  const handleAddExpense = useCallback(
+    async (input: ExpenseInput): Promise<void> => {
+      const { saved, id } = await expenses.add(input)
+      if (activeUserId) saveExpenseLast(activeUserId, { cardId: input.cardId ?? null, category: toCategory(input.category) })
+      done(saved, savedNote(t(input.amount < 0 ? 'toast.refundAdded' : 'toast.expenseAdded'), input.date), () => expenses.remove(id))
+    },
+    [expenses, activeUserId, done, savedNote, t]
+  )
+
+  const handleAddExpenses = useCallback(
+    async (inputs: ExpenseInput[]): Promise<void> => {
+      const { saved, ids } = await expenses.addMany(inputs)
+      const message = ids.length === 1 ? t('toast.expenseAdded') : t('toast.expensesAdded', { expenses: tn('expense', ids.length) })
+      done(saved, savedNote(message), () => expenses.removeMany(ids))
+    },
+    [expenses, done, savedNote, t, tn]
+  )
+
+  const handleUpdateExpense = useCallback(
+    async (id: string, input: ExpenseInput): Promise<void> => {
+      done(await expenses.update(id, input), savedNote(t('toast.expenseUpdated'), input.date))
+    },
+    [expenses, done, savedNote, t]
+  )
+
+  const handleDeleteExpense = useCallback(
+    async (e: Expense): Promise<void> => {
+      try {
+        done(await expenses.remove(e.id), savedNote(t('toast.expenseDeleted')), () => expenses.restore(e))
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [expenses, done, savedNote, showError, t]
+  )
+
+  const handleSaveCard = useCallback(
+    async (input: ExpenseCardInput, id?: string): Promise<void> => {
+      if (id) {
+        await cards.update(id, input)
+        return
+      }
+      const added = await cards.add(input)
+      // Handed over from the expense sheet: the card added comes back chosen.
+      if (resumeRef.current) resumeRef.current.addedCardId = added.id
+    },
+    [cards]
+  )
+
+  const handleDeleteCard = useCallback(
+    async (card: ExpenseCard): Promise<void> => {
+      try {
+        const mode = cardDeleteMode(card, expenses.rows, { loaded: expenses.loaded, readThisSession: expenses.tableReady })
+        // Its budget goes with it, and comes back with an Undo.
+        const budget = budgets.rows.find((b) => b.scope === 'card' && b.target.toLowerCase() === card.id.toLowerCase()) ?? null
+        if (budget) {
+          budgetSeen.current.set(budget.id, budget.updatedAt)
+          await budgets.remove(budget.id)
+        }
+        const undoBudget = budget ? () => budgets.restore(budget) : null
+        const back = (archived: boolean) => ({ ...CARDS_SPEC.toInput(card), archived })
+        if (mode === 'archive') {
+          done(await cards.update(card.id, back(true)), savedNote(t('toast.cardArchived', { name: card.name })), () =>
+            Promise.all([cards.update(card.id, back(false)), undoBudget?.()]).then((r) => r.every((x) => x !== false))
+          )
+        } else {
+          done(await cards.remove(card.id), savedNote(t('toast.cardDeleted', { name: card.name })), () =>
+            Promise.all([cards.restore(card), undoBudget?.()]).then((r) => r.every((x) => x !== false))
+          )
+        }
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [cards, budgets, expenses.rows, expenses.loaded, expenses.tableReady, done, savedNote, showError, t]
+  )
+
+  const handleRestoreCard = useCallback(
+    async (card: ExpenseCard): Promise<void> => {
+      try {
+        await cards.update(card.id, { ...CARDS_SPEC.toInput(card), archived: false })
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [cards, showError]
+  )
+
+  // The newest stamp seen of each budget: a budget cleared and set again is stamped after it (see useRowSync's `after`).
+  useEffect(() => {
+    for (const b of budgets.rows) {
+      const seen = budgetSeen.current.get(b.id)
+      if (!seen || seen < b.updatedAt) budgetSeen.current.set(b.id, b.updatedAt)
+    }
+  }, [budgets.rows])
+  // The expense being edited went away (deleted on another device): its sheet closes.
+  const editGone = expenseSheet?.kind === 'edit' && expenses.loaded && !expenses.rows.some((e) => e.id === expenseSheet.id)
+  useEffect(() => {
+    if (editGone) setExpenseSheet(null)
+  }, [editGone])
+  // Another account here: nothing of the last one's handover or stamps carries over.
+  useEffect(() => {
+    resumeRef.current = null
+    budgetSeen.current = new Map()
+  }, [activeUserId])
+
+  /** A monthly budget set (a number) or cleared (null). Only once the budgets have loaded and 008 is proven. */
+  const handleSetBudget = useCallback(
+    async (scope: BudgetScope, target: string, limit: number | null): Promise<void> => {
+      const uid = activeUserId
+      if (!uid || !budgets.loaded || !has008) return
+      try {
+        // By (scope, target), not by budgetId: a row adopted under another id is still this budget.
+        const row = budgets.rows.find((b) => b.scope === scope && b.target === target) ?? null
+        if (limit === null) {
+          if (!row) return
+          budgetSeen.current.set(row.id, row.updatedAt)
+          await budgets.remove(row.id)
+          return
+        }
+        // Unchanged: never re-stamp a value.
+        if (row && Math.round(row.monthlyLimit * 100) === Math.round(limit * 100)) return
+        const input = { scope, target, monthlyLimit: limit }
+        if (row) await budgets.update(row.id, input)
+        else {
+          const id = budgetId(uid, scope, target)
+          await budgets.add(input, { id, after: budgetSeen.current.get(id) })
+        }
+      } catch (err) {
+        showError(err)
+      }
+    },
+    [activeUserId, budgets, has008, showError]
+  )
+
+  const handleSetCurrency = useCallback(
+    (code: string): void => {
+      const before = settings.expenseCurrency
+      if (code === before || !settingsLoaded || !has008) return
+      void updateSettings({ expenseCurrency: code })
+      setToast({
+        kind: 'ok',
+        text: t('toast.currencyChanged', { currency: code }),
+        action: { label: t('toast.undo'), onClick: () => void updateSettings({ expenseCurrency: before }) }
+      })
+    },
+    [settings.expenseCurrency, settingsLoaded, has008, updateSettings, setToast, t]
+  )
+
+  const handleExportExpenses = useCallback(() => {
+    if (!expenses.loaded || !cards.loaded || !settingsLoaded || expenses.rows.length === 0) return
+    const n = downloadExpensesCsv(expenses.rows, cards.rows, settings.expenseCurrency)
+    setToast({ kind: 'ok', text: t('toast.expensesExported', { expenses: tn('expense', n) }) })
+  }, [expenses.loaded, expenses.rows, cards.loaded, cards.rows, settingsLoaded, settings.expenseCurrency, setToast, t, tn])
+
+  /** One AI reading: the image, today, the language, the currency and the active cards' names and last digits (never their ids). */
+  const runExtract = useCallback(
+    // Loaded with the first scan: the reading's checks stay out of the boot bundle.
+    (image: PreparedImage, signal: AbortSignal): Promise<ExtractOutcome> =>
+      import('./data/extract').then(
+        ({ extractExpenses }) =>
+          extractExpenses(
+            {
+              v: 1,
+              image: { mediaType: image.mediaType, data: image.base64 },
+              today: todayStr(),
+              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? null,
+              lang: getLang(),
+              currency: settingsLoaded ? settings.expenseCurrency : null,
+              cards: cards.rows.filter((c) => !c.archived).map((c) => ({ name: c.name, last4: c.last4, kind: c.kind }))
+            },
+            { signal, asUser: activeUserId ?? undefined }
+          ),
+        // The code itself didn't load (offline before it was ever cached).
+        (): ExtractOutcome => ({ ok: false, code: 'network' })
+      ),
+    [settingsLoaded, settings.expenseCurrency, cards.rows, activeUserId]
   )
 
   // What the Bankroll dialog's changes wait for, judged per queue: a
@@ -1047,9 +1288,28 @@ export default function App() {
   const shownBets = bets ?? (isOffline ? [] : null)
   if (shownBets === null) return <Boot />
 
+  // Why the AI reading can't start: it needs the server, and both lists (card matching, duplicates).
+  const scanBlocked: 'offline' | 'signed_out' | 'loading' | null = sessionEnded
+    ? 'signed_out'
+    : !session || isOffline
+      ? 'offline'
+      : !cards.loaded || !expenses.loaded
+        ? 'loading'
+        : null
+  const editingExpense = expenseSheet?.kind === 'edit' ? (expenses.rows.find((e) => e.id === expenseSheet.id) ?? null) : null
+  const closeExpenseSettings = (): void => {
+    setExpenseSettings(null)
+    // Back to the sheet the card was added from, with what was typed and the new card chosen.
+    const r = resumeRef.current
+    if (r) {
+      resumeRef.current = null
+      setExpenseSheet({ kind: 'add', draft: r.draft, preferCardId: r.addedCardId ?? undefined })
+    }
+  }
+
   return (
     <MoneyContext.Provider value={money}>
-      <div className="app">
+      <div className="app" data-revisit={revisit ? '' : undefined}>
         <Header
           email={activeEmail}
           status={sessionEnded ? 'signedout' : badgeStatus}
@@ -1064,9 +1324,13 @@ export default function App() {
           onToggleTheme={toggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenPending={() => setPendingOpen(true)}
+          view={view}
           onAddBet={openQuick}
+          onAddExpense={openExpense}
           onSignOut={signOut}
         />
+
+        <ViewTabs view={view} onChange={changeView} />
 
         <SyncNotices
           signedOut={sessionEnded ? badgeQueued + (settingsDirty ? 1 : 0) : null}
@@ -1091,75 +1355,114 @@ export default function App() {
           }}
         />
 
-        {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}
+        {view === 'bets' ? (
+          <div className="view-panel bets-view" role="tabpanel" id="view-panel-bets" aria-labelledby="view-tab-bets" tabIndex={-1}>
+            {loss.level !== 'none' && lossDismissed !== lossKey && <LossBanner state={loss} onChangeLimit={() => setSettingsOpen(true)} onDismiss={dismissLoss} />}
 
-        {settingsLoaded && (
-          <FirstRun
-            key={activeUserId}
-            userId={activeUserId}
-            bankrollSet={bankroll.known || settings.startingBankroll !== null || moves.moves.length > 0}
-            oddsFormat={settings.oddsFormat}
-            oddsSettled={settings.updatedAt !== '' || shownBets.length > 0}
-            hasBets={shownBets.length > 0}
-            onSetBankroll={openBankroll}
-            onPickOdds={(oddsFormat) => updateSettings({ oddsFormat })}
-            onAddBet={openQuick}
-          />
+            {settingsLoaded && (
+              <FirstRun
+                key={activeUserId}
+                userId={activeUserId}
+                bankrollSet={bankroll.known || settings.startingBankroll !== null || moves.moves.length > 0}
+                oddsFormat={settings.oddsFormat}
+                oddsSettled={settings.updatedAt !== '' || shownBets.length > 0}
+                hasBets={shownBets.length > 0}
+                onSetBankroll={openBankroll}
+                onPickOdds={(oddsFormat) => updateSettings({ oddsFormat })}
+                onAddBet={openQuick}
+              />
+            )}
+
+            <RangeBar range={range} onChange={changeRange} />
+
+            <KeyStats
+              lifetime={scoped}
+              rangeName={rangeName}
+              bankroll={bankroll}
+              offline={isOffline}
+              open={openList}
+              onOpenBankroll={openBankroll}
+              onOpenPending={() => setPendingOpen(true)}
+            />
+
+            <HeroStats
+              bets={shownBets}
+              lifetime={scoped}
+              rangeName={rangeName}
+              ym={ym}
+              onPrev={() => setYm((m) => addMonths(m, -1))}
+              onNext={() => setYm((m) => addMonths(m, 1))}
+              onResetMonth={() => setYm(currentMonth())}
+            />
+
+            <div className="grid-mid">
+              <CalendarView ym={ym} dayMap={dayMap} onDayClick={openDay} />
+              <BalanceChart
+                bets={shownBets}
+                lifetime={scoped}
+                rangeName={rangeName}
+                range={range}
+                ym={ym}
+                bankroll={bankroll}
+                moves={moves.moves}
+                onSetUpBankroll={openBankroll}
+              />
+            </div>
+
+            <AdvancedSection rangeName={rangeName}>
+              <AdvancedStats lifetime={scoped} />
+              <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
+            </AdvancedSection>
+
+            <HistoryTable
+              bets={shownBets}
+              oddsFormat={settings.oddsFormat}
+              range={historyRange}
+              onEdit={(b) => setDay({ date: b.date, edit: { id: b.id } })}
+              onOpenDay={openDay}
+              onDelete={handleDelete}
+              onSettle={handleSettle}
+              onBulkRetag={handleBulkRetag}
+              onBulkSettle={handleBulkSettle}
+              onBulkDelete={handleBulkDelete}
+            />
+          </div>
+        ) : (
+          <MoneyContext.Provider value={expenseMoney}>
+            {/* The fallback never carries .expenses-view or .exp-bar: tests and the harness wait for the real view. */}
+            <Suspense
+              fallback={
+                <div className="view-panel expenses-loading" role="tabpanel" id="view-panel-expenses" aria-labelledby="view-tab-expenses" aria-busy="true">
+                  <p className="empty-state">{t('exp.loading')}</p>
+                </div>
+              }
+            >
+              <ExpensesView
+                ym={ym}
+                onPrevMonth={() => setYm((m) => addMonths(m, -1))}
+                onNextMonth={() => setYm((m) => addMonths(m, 1))}
+                onThisMonth={() => setYm(currentMonth())}
+                expenses={expenses.rows}
+                cards={cards.rows}
+                budgets={budgets.rows}
+                expensesLoaded={expenses.loaded}
+                cardsLoaded={cards.loaded}
+                budgetsLoaded={budgets.loaded}
+                settingsLoaded={settingsLoaded}
+                offline={isOffline || sessionEnded}
+                needs008={needs008}
+                currency={settings.expenseCurrency}
+                scanBlocked={scanBlocked}
+                onAdd={openExpense}
+                onScan={openScan}
+                onEdit={(e) => setExpenseSheet({ kind: 'edit', id: e.id })}
+                onDelete={(e) => void handleDeleteExpense(e)}
+                onManage={setExpenseSettings}
+                onExport={handleExportExpenses}
+              />
+            </Suspense>
+          </MoneyContext.Provider>
         )}
-
-        <RangeBar range={range} onChange={changeRange} />
-
-        <KeyStats
-          lifetime={scoped}
-          rangeName={rangeName}
-          bankroll={bankroll}
-          offline={isOffline}
-          open={openList}
-          onOpenBankroll={openBankroll}
-          onOpenPending={() => setPendingOpen(true)}
-        />
-
-        <HeroStats
-          bets={shownBets}
-          lifetime={scoped}
-          rangeName={rangeName}
-          ym={ym}
-          onPrev={() => setYm((m) => addMonths(m, -1))}
-          onNext={() => setYm((m) => addMonths(m, 1))}
-          onResetMonth={() => setYm(currentMonth())}
-        />
-
-        <div className="grid-mid">
-          <CalendarView ym={ym} dayMap={dayMap} onDayClick={openDay} />
-          <BalanceChart
-            bets={shownBets}
-            lifetime={scoped}
-            rangeName={rangeName}
-            range={range}
-            ym={ym}
-            bankroll={bankroll}
-            moves={moves.moves}
-            onSetUpBankroll={openBankroll}
-          />
-        </div>
-
-        <AdvancedSection rangeName={rangeName}>
-          <AdvancedStats lifetime={scoped} />
-          <Breakdown bets={ranged} oddsFormat={settings.oddsFormat} />
-        </AdvancedSection>
-
-        <HistoryTable
-          bets={shownBets}
-          oddsFormat={settings.oddsFormat}
-          range={historyRange}
-          onEdit={(b) => setDay({ date: b.date, edit: { id: b.id } })}
-          onOpenDay={openDay}
-          onDelete={handleDelete}
-          onSettle={handleSettle}
-          onBulkRetag={handleBulkRetag}
-          onBulkSettle={handleBulkSettle}
-          onBulkDelete={handleBulkDelete}
-        />
 
         {day !== null && (
           <DayModal
@@ -1296,9 +1599,76 @@ export default function App() {
           />
         )}
 
+        {expenseSheet && !editGone && (
+          <MoneyContext.Provider value={expenseMoney}>
+            <Suspense fallback={null}>
+              <ExpenseSheet
+                // A new sheet for each thing it opens on: fresh boxes, fresh stage.
+                key={expenseSheet.kind === 'edit' ? `edit|${expenseSheet.id}` : `add|${expenseSheet.scan ? 'scan' : ''}`}
+                editing={editingExpense}
+                startWithScan={expenseSheet.kind === 'add' && expenseSheet.scan === true}
+                draft={expenseSheet.kind === 'add' ? (expenseSheet.draft ?? null) : null}
+                preferCardId={expenseSheet.kind === 'add' ? (expenseSheet.preferCardId ?? null) : null}
+                cards={cards.rows}
+                cardsLoaded={cards.loaded}
+                existing={expenses.rows}
+                last={activeUserId ? loadExpenseLast(activeUserId) : null}
+                currency={settings.expenseCurrency}
+                demo={import.meta.env.MODE === 'demo'}
+                scanBlocked={scanBlocked}
+                extract={runExtract}
+                onAdd={handleAddExpense}
+                onUpdate={handleUpdateExpense}
+                onDelete={handleDeleteExpense}
+                onAddMany={handleAddExpenses}
+                onManageCards={(draft) => {
+                  resumeRef.current = { draft, addedCardId: null }
+                  setExpenseSheet(null)
+                  setExpenseSettings('cards')
+                }}
+                onClose={() => setExpenseSheet(null)}
+              />
+            </Suspense>
+          </MoneyContext.Provider>
+        )}
+
+        {expenseSettings && (
+          <MoneyContext.Provider value={expenseMoney}>
+            <Suspense fallback={null}>
+              <ExpenseSettings
+                section={expenseSettings}
+                cards={cards.rows}
+                budgets={budgets.rows}
+                expenses={expenses.rows}
+                month={monthSpend(expenses.rows, ym, cards.rows)}
+                ym={ym}
+                cardsLoaded={cards.loaded}
+                budgetsLoaded={budgets.loaded}
+                settingsLoaded={settingsLoaded}
+                expensesSure={expenses.loaded && expenses.tableReady}
+                currency={settings.expenseCurrency}
+                has008={has008}
+                needs008={needs008}
+                onSaveCard={handleSaveCard}
+                onDeleteCard={handleDeleteCard}
+                onRestoreCard={handleRestoreCard}
+                onSetBudget={handleSetBudget}
+                onSetCurrency={handleSetCurrency}
+                onClose={closeExpenseSettings}
+              />
+            </Suspense>
+          </MoneyContext.Provider>
+        )}
+
         {/* Out of the way while a dialog is open: it sits above them, and would open another on top. */}
-        {day === null && !quickOpen && !settingsOpen && !pendingOpen && !bankrollOpen && !dataOpen && (
-          <button type="button" className="fab" aria-label={t('header.addBet')} title={t('header.addBetTitle')} onClick={openQuick}>
+        {!anyDialogOpen && (
+          <button
+            type="button"
+            className="fab"
+            aria-label={t(view === 'bets' ? 'header.addBet' : 'header.addExpense')}
+            title={t(view === 'bets' ? 'header.addBetTitle' : 'header.addExpenseTitle')}
+            onClick={view === 'bets' ? openQuick : openExpense}
+          >
             <PlusIcon size={22} />
           </button>
         )}

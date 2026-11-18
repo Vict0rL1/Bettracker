@@ -76,6 +76,16 @@
   --heat-1: 8%;
   --heat-2: 14%;
   --heat-3: 22%;
+  /* The cards' inks in the spending chart: opaque steps of the ink toward the
+     card, apart in both themes (they resolve per theme: the light theme
+     redefines --text and --card-solid on the same element). "No card" is the
+     card colour with a dashed outline. Never a money colour. */
+  --series-1: var(--text);
+  --series-2: color-mix(in srgb, var(--text) 62%, var(--card-solid));
+  --series-3: color-mix(in srgb, var(--text) 40%, var(--card-solid));
+  --series-4: color-mix(in srgb, var(--text) 24%, var(--card-solid));
+  --series-none: var(--card-solid);
+  --series-gap: var(--card-solid);
 
   --tip-bg: #1c1d21;
   --backdrop: rgba(0, 0, 0, 0.6);
@@ -441,6 +451,7 @@ h2 {
 
 /* First paint: the dashboard's sections fade in one after another. Opacity
    only, so nothing moves under a click. */
+.app-views,
 .range-bar,
 .key-stats,
 .hero-2,
@@ -468,6 +479,11 @@ h2 {
 
 .history-card {
   animation-delay: 200ms;
+}
+
+/* Once per page load: back on the bets from the expenses, they are simply there. */
+.app[data-revisit] :is(.range-bar, .key-stats, .hero-2, .grid-mid, .advanced, .history-card) {
+  animation: none;
 }
 
 /* ---------- app frame ---------- */
@@ -2248,7 +2264,7 @@ tbody tr:last-child td {
   }
 
   /* Tonal here, so the + button is the one solid primary on a phone. */
-  .topbar-actions .add-bet-btn {
+  .topbar-actions :is(.add-bet-btn, .add-expense-btn) {
     order: 3;
     flex: 1 1 100%;
     min-height: 44px;
@@ -2258,7 +2274,7 @@ tbody tr:last-child td {
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .topbar-actions .add-bet-btn:hover:not(:disabled) {
+    .topbar-actions :is(.add-bet-btn, .add-expense-btn):hover:not(:disabled) {
       background: var(--tint-3);
     }
   }
@@ -5041,6 +5057,1452 @@ tr.is-pending td:first-child {
 @media (max-width: 1120px) {
   .first-run-steps {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- views: Bets | Expenses ---------- */
+/* A segmented control under the top bar; the panel below is the only one
+   mounted. The panel passes the frame's gap on (16px, 12px on a phone), so
+   the bets view is spaced exactly as before it had a panel. */
+.app-views {
+  display: flex;
+}
+
+.view-toggle .scope-btn {
+  height: 32px;
+  padding: 0 16px;
+}
+
+.view-panel {
+  display: flex;
+  flex-direction: column;
+  gap: inherit;
+  min-width: 0;
+}
+
+/* The last place focus goes when a sheet closes (tabindex -1): no ring. */
+.view-panel:focus {
+  outline: none;
+}
+
+.expenses-loading {
+  min-height: 240px;
+}
+
+/* ---------- expenses: bar, banner, first run, summary, chart, budgets, categories ---------- */
+/* The month and its currency at the left; the arrows, then the view's own
+   actions, at the right (the top bar keeps its two buttons). */
+.exp-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.exp-month-title {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.017em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag.exp-currency-code {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.month-nav.exp-month-nav {
+  margin: 0 0 0 auto;
+  align-self: center;
+}
+
+.exp-bar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.exp-bar > .exp-scan-off {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: right;
+}
+
+.draft-note.exp-migration {
+  padding: 10px 12px;
+  line-height: 20px;
+}
+
+.exp-first {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 24px;
+}
+
+.exp-first h2 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.exp-first .hint {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 18px;
+}
+
+.exp-first-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* The month's figures: one strip like the bets' key numbers. */
+.hero.spend-strip {
+  gap: 0;
+  background: var(--card-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  overflow: clip;
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+}
+
+.spend-total-card .life-value {
+  font-size: var(--fs-display);
+  line-height: 1.05;
+  letter-spacing: -0.022em;
+}
+
+/* A budget near its limit; over it is the result red (.loss). */
+.life-value.near {
+  color: var(--amber);
+}
+
+.spend-refunded::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+/* The budget cell is a button (it opens the budgets): its sub holds the words and the bar. */
+.key-card .key-sub.spend-budget-sub {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+
+.spend-budget-sub .bd-bar {
+  display: block;
+}
+
+.spend-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-md);
+  line-height: 18px;
+}
+
+.spend-card-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.spend-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.spend-card-amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.spend-card-more {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+/* A card's ink (set inline as --swatch): neutral greys, never a money colour.
+   "No card" is an outline. */
+.legend-swatch {
+  flex: none;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--swatch, var(--text));
+}
+
+.legend-swatch.is-dashed {
+  background: var(--card-solid);
+  border: 1px dashed var(--text-3);
+}
+
+.spend-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.spend-chart-card,
+.budgets-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.spend-chart-card .card-head {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.spend-chart-card .chart-empty {
+  flex: 1;
+  min-height: 272px;
+}
+
+.spend-chart-card .recharts-cartesian-axis-tick text {
+  font-variant-numeric: tabular-nums;
+}
+
+.spend-legend {
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.spend-legend-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spend-tip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  line-height: 16px;
+}
+
+.spend-tip-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.spend-tip-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.spend-tip-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small actions in a card's head stay as tall as the head. */
+:is(.budgets-card, .expense-list-card) .card-head .btn {
+  flex: none;
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.budget-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.budget-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name figures'
+    'bar bar'
+    'left left';
+  align-items: baseline;
+  gap: 6px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider);
+  min-width: 0;
+}
+
+.budget-row:first-child {
+  padding-top: 0;
+}
+
+.budget-row:last-child {
+  border-bottom: 0;
+}
+
+.budget-name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+
+.budget-figures {
+  grid-area: figures;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.budget-row .bd-bar {
+  grid-area: bar;
+}
+
+.budget-left {
+  grid-area: left;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.bd-fill.ink {
+  background: var(--text-2);
+}
+
+.bd-fill.near {
+  background: var(--amber);
+}
+
+.bd-fill.over {
+  background: var(--red);
+}
+
+.budget-row.is-near .budget-left {
+  color: var(--amber);
+}
+
+.budget-row.is-over .budget-left {
+  color: var(--red-text);
+}
+
+/* Where the money went: each row is a toggle that filters the list. */
+.spend-cat-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.spend-cat-row {
+  min-width: 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.spend-cat-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .spend-cat-btn:hover {
+    background: var(--row-hover);
+  }
+}
+
+/* Pressed, and the category the list is narrowed to: a background, never a scale. */
+.spend-cat-btn:active,
+.spend-cat-btn[aria-pressed='true'] {
+  background: var(--row-selected);
+}
+
+.spend-cat-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.spend-cat-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.spend-cat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.spend-cat-amount {
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.spend-cat-amount.refund {
+  color: var(--green);
+}
+
+.spend-cat-btn .bd-bar {
+  display: block;
+}
+
+.spend-cat-share {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- expenses: list ---------- */
+.expense-list-card .card-head h2 .scope-tag {
+  margin-left: 6px;
+  font-weight: 400;
+}
+
+.exp-filters select {
+  max-width: 220px;
+  text-overflow: ellipsis;
+}
+
+.exp-table tbody tr.exp-row {
+  animation: fade-in var(--dur-sm) var(--ease-out);
+}
+
+.exp-table tbody td {
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .exp-table tbody tr.exp-row:hover > td {
+    background: var(--row-hover);
+  }
+}
+
+/* Each day is its own tbody, headed by its date and total. The rows' last
+   line is dropped per tbody, so the header draws the line above itself. */
+.exp-day-row th {
+  height: 32px;
+  padding: 0 12px;
+  background: var(--tint-1);
+  border-top: 1px solid var(--divider);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-table tbody:first-of-type .exp-day-row th {
+  border-top: 0;
+}
+
+.exp-day-total {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-day-row .exp-day-total::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+.exp-table .exp-merchant {
+  max-width: 280px;
+  white-space: nowrap;
+}
+
+.exp-merchant-text {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  font-weight: 500;
+}
+
+.exp-merchant-text.is-none,
+.exp-item-merchant.is-none {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.tag.exp-ai {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.tag.exp-ai::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+.exp-table :is(.exp-cat, .exp-col-card) {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.exp-table .exp-note {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.exp-table .exp-amount {
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Amounts are ink; money coming back is green. Never the bets' result tones. */
+.exp-table .exp-amount.refund,
+.exp-item .refund {
+  color: var(--green);
+}
+
+.exp-days {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.exp-day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 0 4px 6px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.exp-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.exp-item {
+  border-bottom: 1px solid var(--divider);
+  min-width: 0;
+  animation: fade-in var(--dur-sm) var(--ease-out);
+}
+
+.exp-item:last-child {
+  border-bottom: 0;
+}
+
+/* The whole row is one target: it opens the expense (Delete is in its sheet). */
+.exp-item-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+
+.exp-item-open:active {
+  background: var(--row-selected);
+}
+
+.exp-item-open:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.exp-item-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  min-width: 0;
+}
+
+.exp-item-merchant {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.exp-item-top .exp-ai {
+  flex: none;
+}
+
+.exp-item-amount {
+  flex: none;
+  margin-left: auto;
+  padding-left: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.exp-item-sub {
+  display: flex;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.exp-item-sub > span {
+  flex: none;
+}
+
+.exp-item-sub > span + span::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+.exp-item-sub > .exp-item-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.exp-more {
+  display: flex;
+  margin: 12px auto 0;
+}
+
+/* ---------- expenses: the sheet (manual, scan, review) ---------- */
+.expense-modal {
+  width: 480px;
+}
+
+.expense-modal.is-wide {
+  width: 560px;
+}
+
+.expense-modal .modal-head h2:focus {
+  outline: none;
+}
+
+.exp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* One field per row: "optional" stays beside its label. */
+.expense-modal .field-opt {
+  display: inline;
+}
+
+.exp-scan-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.exp-scan-row .hint {
+  margin: 0;
+}
+
+.exp-amount-field .exp-amount {
+  font-size: var(--fs-lg);
+}
+
+/* The symbol is "$" or up to three letters ("COP", "MX$"): the digits start
+   after it, however wide it is (--cur-ch, set inline). */
+.exp-amount-wrap input,
+.field .exp-amount-wrap input {
+  padding-left: calc(11px + var(--cur-ch, 1) * 0.66em + 6px);
+}
+
+.exp-amount-reads {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-kind,
+.paycard-kind {
+  align-self: flex-start;
+}
+
+.exp-kind .scope-btn,
+.paycard-kind .scope-btn {
+  height: calc(var(--control-h) - 4px);
+  padding: 0 14px;
+  font-size: var(--fs-md);
+}
+
+.exp-kind-field .hint {
+  margin: 2px 0 0;
+}
+
+/* The cards as equal segments, each name cut short rather than widening the sheet. */
+.exp-paycard-seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  width: 100%;
+}
+
+.exp-paycard-seg .scope-btn {
+  min-width: 0;
+  min-height: 32px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exp-add-card-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.exp-add-card {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+/* The categories: one track, the chosen chip as its raised thumb (the
+   .chip[aria-pressed] rule), like Today / Yesterday. */
+.cat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  background: var(--tint-2);
+  border-radius: var(--r-md);
+}
+
+.cat-chip {
+  border: 0;
+}
+
+.cat-chip:not([aria-pressed='true']):hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.cat-chips > :focus-visible {
+  outline-offset: -2px;
+}
+
+.exp-form-actions {
+  flex-wrap: wrap;
+}
+
+.exp-form-actions .hint,
+.exp-currency-note {
+  margin: 0;
+}
+
+/* Delete in the edit sheet, like a history card's: red words, a tint while it asks. */
+.btn.exp-sheet-delete {
+  color: var(--red-text);
+}
+
+.btn.exp-sheet-delete.confirming {
+  border-color: var(--red);
+  background: var(--red-dim);
+}
+
+.exp-scan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.exp-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  text-align: center;
+  transition:
+    background-color var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out);
+}
+
+.exp-drop.is-over {
+  background: var(--tint-2);
+  border-color: var(--border-hover);
+}
+
+.exp-drop-text {
+  max-width: 36ch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 18px;
+}
+
+.exp-drop .exp-scan-off {
+  margin: 0;
+}
+
+.exp-privacy {
+  margin: 0;
+}
+
+.exp-scan-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  margin: 0 auto;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.exp-reading-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+}
+
+.exp-reading {
+  margin: 0;
+  font-size: var(--fs-base);
+}
+
+.exp-reading-time {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.exp-review > .hint,
+.exp-review-problem,
+.exp-review-discard {
+  margin: 0;
+}
+
+.exp-review-problem,
+.exp-review-discard {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.exp-warnings h3 {
+  margin: 0 0 4px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.exp-warnings ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 18px;
+}
+
+.exp-review-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.exp-review-bulk .btn {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.exp-review-count {
+  margin: 0 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.exp-review-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--divider);
+}
+
+.exp-review-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0 8px;
+  border-bottom: 1px solid var(--divider);
+  min-width: 0;
+}
+
+/* Tick | merchant (date · category · card under it) | amount | edit. */
+.exp-review-sum {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0 8px;
+}
+
+/* A 44px target around the 20px box. */
+.exp-review-pick {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-left: -12px;
+  cursor: pointer;
+}
+
+.exp-review-include {
+  width: 20px;
+  height: 20px;
+}
+
+.exp-review-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.exp-review-merchant-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.exp-review-line {
+  display: flex;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.exp-review-date-text {
+  flex: none;
+}
+
+.exp-review-meta {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.exp-review-meta::before,
+.exp-review-meta > span + span::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+.exp-review-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.exp-review-amount-text {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.exp-review-amount-text.refund {
+  color: var(--green);
+}
+
+/* Unticked: the summary goes quiet, with full contrast kept elsewhere (no opacity). */
+.exp-review-row.is-off :is(.exp-review-merchant-text, .exp-review-amount-text, .exp-review-line) {
+  color: var(--text-3);
+}
+
+.exp-review-notes {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-left: 40px;
+  font-size: var(--fs-sm);
+  line-height: 16px;
+}
+
+.exp-review-match {
+  padding-left: 8px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-2);
+}
+
+.exp-review-check {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.exp-review-pending {
+  color: var(--amber);
+  font-weight: 500;
+}
+
+.exp-review-notes .hint {
+  margin: 0;
+}
+
+.exp-review-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px 12px;
+  padding: 6px 0 4px 40px;
+}
+
+.exp-review-amount-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.exp-review-amount-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.scope-btn.exp-review-refund {
+  flex: none;
+  height: var(--control-h);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  font-size: var(--fs-md);
+}
+
+.exp-review-cardall {
+  max-width: 320px;
+}
+
+/* ---------- expenses: settings (cards, budgets, currency) ---------- */
+.expense-settings-modal {
+  width: 520px;
+}
+
+.expense-settings-modal .hint {
+  margin: 0;
+}
+
+.expset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--divider);
+}
+
+.expset-section h3 {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.paycard-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paycard-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 48px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.paycard-row:last-child {
+  border-bottom: 0;
+}
+
+.paycard-row.is-editing {
+  display: block;
+  padding: 10px 0;
+}
+
+.paycard-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.paycard-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.paycard-meta {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.paycard-meta > span + span::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+/* Name and last digits on one row, the kind and the button under them. */
+.paycard-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: end;
+  gap: 10px 12px;
+}
+
+.paycard-form .paycard-name-field,
+.paycard-form .paycard-last4-field {
+  align-self: start;
+}
+
+.paycard-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.paycard-form .form-error {
+  grid-column: 1 / -1;
+}
+
+.paycard-archived summary {
+  padding: 4px 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.paycard-archived-count {
+  margin-left: 4px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.paycard-restore {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.budget-boxes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.budget-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px;
+  grid-template-areas:
+    'label input'
+    'spent spent'
+    'err err';
+  align-items: center;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.budget-box:last-child {
+  border-bottom: 0;
+}
+
+.budget-box-label {
+  grid-area: label;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+
+.budget-amount {
+  grid-area: input;
+}
+
+.budget-box .budget-spent {
+  grid-area: spent;
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-box .field-error {
+  grid-area: err;
+}
+
+/* A field like the others (it sits outside a .field). */
+.budget-input {
+  width: 100%;
+  height: var(--control-h);
+  padding-right: 12px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.budget-input::placeholder {
+  font-weight: 400;
+}
+
+.budget-input:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.budget-input:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  border-color: var(--focus);
+  box-shadow:
+    0 0 0 1px var(--focus),
+    0 0 0 4px var(--focus-ring);
+}
+
+.budget-input[aria-invalid='true'] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px var(--red-dim);
+}
+
+.budget-input:disabled,
+.currency-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.currency-select {
+  width: 100%;
+}
+
+@media (max-width: 1120px) {
+  .spend-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* What was spent across the top, the other three under it. */
+  .hero.spend-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .hero.spend-strip > .spend-total-card {
+    grid-column: 1 / -1;
+  }
+
+  .hero.spend-strip > .spend-total-card::after {
+    content: '';
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 0;
+    height: 1px;
+    background: var(--divider);
+  }
+
+  .hero.spend-strip > .spend-budget-card::before {
+    content: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .view-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .view-toggle .scope-btn {
+    height: 36px;
+    padding: 0 4px;
+  }
+
+  /* One column: every tile after the first under an inset hairline. */
+  .hero.spend-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero.spend-strip > .stat-card + .stat-card::before {
+    content: '';
+    top: 0;
+    bottom: auto;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    height: 1px;
+  }
+
+  .hero.spend-strip > .spend-total-card::after {
+    content: none;
+  }
+
+  .hero.spend-strip .spend-total-card .life-value {
+    font-size: 32px;
+  }
+
+  .exp-bar > .exp-scan-off {
+    text-align: left;
+  }
+
+  .exp-bar-actions {
+    flex-basis: 100%;
+  }
+
+  .exp-filters select {
+    max-width: none;
+  }
+
+  .exp-paycard-seg {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .exp-kind,
+  .paycard-kind {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .exp-kind .scope-btn,
+  .paycard-kind .scope-btn {
+    height: 36px;
+    padding: 0 4px;
+  }
+
+  .exp-scan-row {
+    align-items: stretch;
+  }
+
+  .exp-currency-note {
+    flex-basis: 100%;
+    order: -1;
+  }
+
+  .cat-chip {
+    min-height: 32px;
+  }
+
+  .exp-review-count {
+    flex-basis: 100%;
+    margin: 0;
+  }
+
+  .exp-review-notes {
+    padding-left: 40px;
+  }
+
+  /* Opened on a phone: one field per line, the date and amount side by side. */
+  .exp-review-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    padding-left: 0;
+  }
+
+  .exp-review-fields > .field:not(.exp-review-field-date):not(.exp-review-field-amount) {
+    grid-column: 1 / -1;
+  }
+
+  .exp-review-cardall {
+    max-width: none;
+  }
+
+  .paycard-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .budget-box {
+    grid-template-columns: minmax(0, 1fr) 120px;
   }
 }
 

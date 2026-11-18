@@ -14,6 +14,7 @@ import type { StringKey } from '../lib/strings'
 import { newId } from '../lib/uuid'
 import { toneOf } from './DayModal'
 import { ArchiveIcon, CloseIcon, DownloadIcon, UploadIcon } from './icons'
+import Paged from './Paged'
 
 /** A file as parsed, to plan it again against the bets as they are when it is imported. */
 export type ParsedFile = Pick<ImportResult, 'rows' | 'lines' | 'rejected' | 'noStake'>
@@ -94,26 +95,6 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]):not([tabindex="
  * first, which says what will be added, what looks like a bet already here,
  * and what can't go in, and why.
  */
-/** A long list, shown `first` at a time, with the rest one "Show more" away. */
-function Paged<T>({ items, first, step, render, className }: { items: readonly T[]; first: number; step: number; render: (item: T) => ReactNode; className: string }) {
-  const { t } = useLang()
-  const [shown, setShown] = useState(first)
-  const visible = items.slice(0, shown)
-  return (
-    <>
-      <ul className={className}>{visible.map(render)}</ul>
-      {items.length > shown && (
-        <p className="imp-more">
-          <span className="hint">{t('imp.showing', { shown: visible.length, total: items.length })}</span>{' '}
-          <button type="button" className="btn btn-ghost imp-show-more" onClick={() => setShown((n) => n + step)}>
-            {t('imp.showMore', { n: Math.min(step, items.length - shown) })}
-          </button>
-        </p>
-      )}
-    </>
-  )
-}
-
 /** A possible duplicate as the review compares it: the row of the file against the bet here. */
 interface DupItem {
   key: string
