@@ -9,7 +9,9 @@ test.describe('history filters', () => {
     await expect(rows(page)).toHaveCount(3)
     await page.fill('.filter-search', 'live')
     await expect(rows(page)).toHaveCount(1)
-    await expect(page.locator('.history-card .card-note')).toHaveText('1 of 3 bets')
+    await expect(page.locator('.history-card .hist-count')).toHaveText('1 of 3 bets')
+    // The stats' date range does not narrow the history unless asked: it says so.
+    await expect(page.locator('.history-card .scope-tag')).toHaveText('All dates')
     await page.locator('.history-card .chip', { hasText: 'Clear' }).click()
     await expect(rows(page)).toHaveCount(3)
   })

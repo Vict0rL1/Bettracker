@@ -6,7 +6,9 @@ import { fmtMoney, fmtMoneyPlain } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
 import { useBox } from '../lib/useBox'
-import { isValidDate, MAX_AMOUNT, parseMoneyBox, roundCents } from '../lib/validate'
+import { resultProblem, type Problem } from '../lib/betForm'
+import { isValidDate, parseMoneyBox, roundCents } from '../lib/validate'
+import FieldError, { describedBy } from './FieldError'
 import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 
 interface Props {
@@ -80,16 +82,25 @@ export default function BankrollDialog({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The move form's problems show on Add (not as a box is left: a problem
+  // appearing then would move the button under the click), then as they change.
+  const [shown, setShown] = useState<ReadonlySet<'amount' | 'date'>>(new Set())
+  const dateRef = useRef<HTMLInputElement>(null)
+  const errId = useId()
+  // What was typed in the start box and refused, said under it.
+  const [refusedStart, setRefusedStart] = useState<string | null>(null)
 
-  /** The start box commits on blur, Enter or close; nonsense reverts to the saved value. */
+  /** The start box commits on blur, Enter or close; nonsense reverts to the saved value, and says so. */
   const commitStart = (): void => {
     const text = start.pending()
     if (text === null) return
     const parsed = parseMoneyBox(text, { allowZero: true })
     if (parsed === 'invalid') {
+      setRefusedStart(text.trim())
       start.settle(startingBankroll)
       return
     }
+    setRefusedStart(null)
     start.settle(parsed)
     if (parsed !== startingBankroll) onSetStart(parsed)
   }
@@ -111,10 +122,10 @@ export default function BankrollDialog({
     return () => {
       if (timer.current) clearTimeout(timer.current)
       // Opened from Settings, the button that opened it was gone by the time
-      // this mounted (focus had fallen to the page): land on the settings
-      // button instead.
+      // this mounted (focus had fallen to the page): land on the menu button,
+      // where Settings is, instead.
       if (previouslyFocused && previouslyFocused !== document.body && previouslyFocused.isConnected) previouslyFocused.focus()
-      else document.querySelector<HTMLElement>('.settings-btn')?.focus()
+      else document.querySelector<HTMLElement>('.menu-btn')?.focus()
     }
   }, [])
 
@@ -148,9 +159,14 @@ export default function BankrollDialog({
   }, [])
 
   const amount = parseFloat(amountStr)
-  const amountValid = Number.isFinite(amount) && amount > 0 && roundCents(amount) > 0 && amount <= MAX_AMOUNT
-  const dateValid = isValidDate(date) && date <= today
+  const problems: Record<'amount' | 'date', Problem | null> = {
+    amount: resultProblem(amountStr),
+    date: !isValidDate(date) ? { key: 'field.dateInvalid' } : date > today ? { key: 'field.dateFuture' } : null
+  }
+  const amountValid = problems.amount === null
+  const dateValid = problems.date === null
   const canSave = amountValid && dateValid
+  const showing = (box: 'amount' | 'date'): Problem | null => (shown.has(box) ? problems[box] : null)
   const signed = amountValid ? roundCents(kind === 'deposit' ? amount : -amount) : 0
   const hints = canSave ? moveHints({ date, amount: signed }, moves, bankroll, editingId ?? undefined) : []
 
@@ -174,12 +190,16 @@ export default function BankrollDialog({
 
   const submit = (e: React.FormEvent): void => {
     e.preventDefault()
-    if (!canSave) return
+    if (!canSave) {
+      setShown(new Set(['amount', 'date']))
+      ;(amountValid ? dateRef : amountRef).current?.focus()
+      return
+    }
+    setShown(new Set())
     const input: MoveInput = { date, amount: signed, note: note.trim() }
     if (editingId) onUpdate(editingId, input)
     else onAdd(input)
     resetForm()
-    // The Add button disables itself as the form empties, which would drop focus to the page.
     amountRef.current?.focus()
   }
 
@@ -249,8 +269,12 @@ export default function BankrollDialog({
                   step="0.01"
                   placeholder="0.00"
                   value={start.text}
-                  aria-describedby={`${startId}-hint`}
-                  onChange={(e) => start.edit(e.target.value)}
+                  aria-invalid={refusedStart !== null}
+                  aria-describedby={describedBy(refusedStart !== null && `${startId}-err`, `${startId}-hint`)}
+                  onChange={(e) => {
+                    setRefusedStart(null)
+                    start.edit(e.target.value)
+                  }}
                   onBlur={commitStart}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -262,6 +286,7 @@ export default function BankrollDialog({
               </div>
             </div>
           </div>
+          <FieldError id={`${startId}-err`} problem={refusedStart === null ? null : { key: 'field.boxRefused', vars: { value: refusedStart } }} />
           <p className="hint" id={`${startId}-hint`}>
             {firstBetDate ? t('bank.startHint', { date: humanDate(firstBetDate) }) : t('bank.startHintNoBets')}
             {known && !known.startSet ? ` ${t('bank.countsAsZero')}` : ''}
@@ -288,7 +313,7 @@ export default function BankrollDialog({
           )}
         </div>
 
-        <form className="bank-form" onSubmit={submit}>
+        <form className="bank-form" onSubmit={submit} noValidate>
           <div className="bet-form-head">
             <span>{editingId ? t(kind === 'deposit' ? 'bank.editDeposit' : 'bank.editWithdrawal') : t('bank.addTitle')}</span>
             {editingId && (
@@ -318,13 +343,27 @@ export default function BankrollDialog({
                   step="0.01"
                   placeholder="0.00"
                   value={amountStr}
+                  aria-invalid={showing('amount') !== null}
+                  aria-describedby={describedBy(showing('amount') && `${errId}-amount`)}
                   onChange={(e) => setAmountStr(e.target.value)}
                 />
               </div>
+              <FieldError id={`${errId}-amount`} problem={showing('amount')} />
             </label>
             <label className="field">
               <span className="field-label">{t('bank.date')}</span>
-              <input className="move-date" type="date" max={today} value={date} aria-invalid={!dateValid} onChange={(e) => setDate(e.target.value)} />
+              <input
+                ref={dateRef}
+                className="move-date"
+                type="date"
+                max={today}
+                value={date}
+                aria-invalid={!dateValid}
+                aria-describedby={describedBy(!dateValid && `${errId}-date`)}
+                onChange={(e) => setDate(e.target.value)}
+              />
+              {/* A date is never empty on its own: its problem shows as soon as there is one. */}
+              <FieldError id={`${errId}-date`} problem={problems.date} />
             </label>
             <label className="field field-wide">
               <span className="field-label">
@@ -348,7 +387,7 @@ export default function BankrollDialog({
           )}
           <div className="bet-submit">
             <span className="spacer" />
-            <button type="submit" className="btn btn-primary move-save" disabled={!canSave}>
+            <button type="submit" className="btn btn-primary move-save">
               {editingId ? t('common.save') : (<><PlusIcon /> {t(kind === 'deposit' ? 'bank.addDeposit' : 'bank.addWithdrawal')}</>)}
             </button>
           </div>

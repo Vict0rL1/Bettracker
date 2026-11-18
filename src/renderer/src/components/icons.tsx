@@ -52,6 +52,39 @@ export const ChevronRightIcon = ({ size = 16 }: IconProps) => (
   </svg>
 )
 
+export const ChevronDownIcon = ({ size = 16 }: IconProps) => (
+  <svg {...svgProps(size)} className="chevron-down">
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+)
+
+/** A box with an arrow out of it: backups and files. */
+export const ArchiveIcon = ({ size = 14 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M4 3h16v4H4zM10 11h4" />
+  </svg>
+)
+
+/** Three lines: the header's menu. */
+export const MenuIcon = ({ size = 18 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+)
+
+export const GlobeIcon = ({ size = 15 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+  </svg>
+)
+
+export const SignOutIcon = ({ size = 15 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+  </svg>
+)
+
 export const CloseIcon = ({ size = 16 }: IconProps) => (
   <svg {...svgProps(size)}>
     <path d="M18 6 6 18M6 6l12 12" />
@@ -94,5 +127,21 @@ export const SparkIcon = ({ size = 20 }: IconProps) => (
   <svg {...svgProps(size)} strokeWidth={2.4}>
     <path d="M3 17l6-6 4 4 8-8" />
     <path d="M17 7h4v4" />
+  </svg>
+)
+
+/** A receipt with a torn foot: scanning one with AI. */
+export const ReceiptIcon = ({ size = 14 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <path d="M5 3h14v18l-2.5-1.5L14 21l-2-1.5L10 21l-2.5-1.5L5 21Z" />
+    <path d="M9 8h6M9 12h6M9 16h3" />
+  </svg>
+)
+
+/** A payment card. */
+export const CardIcon = ({ size = 14 }: IconProps) => (
+  <svg {...svgProps(size)}>
+    <rect x="2.5" y="5" width="19" height="14" rx="2" />
+    <path d="M2.5 10h19M6.5 15h4" />
   </svg>
 )

@@ -24,7 +24,8 @@ export default function Toast({ msg, onDone }: Props) {
   }, [msg, onDone])
 
   return (
-    <div className={`toast ${msg.kind}`} role="status">
+    // Announced by the live region it sits in (App.tsx), which outlives it.
+    <div className={`toast ${msg.kind}`}>
       <span className="toast-text">{msg.text}</span>
       {msg.action && (
         <button type="button" className="toast-action" onClick={msg.action.onClick}>

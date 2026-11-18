@@ -31,14 +31,16 @@ test.describe('bulk editing and undo', () => {
     await page.locator('.history-card thead .td-sel input').check()
     await expect(page.locator('.bulk-bar .bulk-count')).toHaveText('3 selected')
     const del = page.locator('.bulk-delete')
+    // How many it acts on, said before and again when it asks.
+    await expect(del).toHaveText('Delete 3')
     await del.click()
-    await expect(del).toHaveText('Click again to confirm')
+    await expect(del).toHaveText('Delete 3 bets? Click again')
     await del.click()
     await expect(rows(page)).toHaveCount(0)
     await expect(page.locator('.toast')).toContainText('Deleted 3 bets')
     await page.locator('.toast-action').click()
     await expect(rows(page)).toHaveCount(3)
-    await expect(page.locator('.stat-card').nth(1).locator('.life-value')).toHaveText('+$180.00')
+    await expect(page.locator('.pl-card').locator('.life-value')).toHaveText('+$180.00')
     // Three deletes, then three re-adds, all waiting for the connection.
     await expect(page.locator('.sync-badge')).toHaveText('Offline · 6 queued')
 

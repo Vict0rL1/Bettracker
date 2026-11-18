@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, SEED } from './harness'
+import { boot, entry, menu, SEED } from './harness'
 
 // Two open bets on top of the usual seed: one with odds (settles in one tap)
 // and one without (the result can't be worked out, so the day opens instead).
@@ -16,8 +16,8 @@ test.describe('pending bets', () => {
     await expect(page.locator('.history-card tbody tr.is-pending')).toHaveCount(2)
     await expect(page.locator('.history-card tbody tr.is-pending .pill').first()).toHaveText('PENDING')
     // Lifetime P/L and ROI are what the three settled bets alone give.
-    await expect(page.locator('.stat-card').nth(1).locator('.life-value')).toHaveText('+$180.00')
-    await expect(page.locator('.stat-card').nth(1).locator('.stat-sub')).toContainText('2 pending, $70.00 riding')
+    await expect(page.locator('.pl-card').locator('.life-value')).toHaveText('+$180.00')
+    await expect(page.locator('.pl-card').locator('.stat-sub')).toContainText('2 pending, $70.00 riding')
     await expect(page.locator('.roi-card .life-value')).toHaveText('-18.2%')
     // The calendar marks the open days rather than scoring them. The seed is
     // in August 2026; walk back to it from whatever month the test runs in.
@@ -57,9 +57,11 @@ test.describe('pending bets', () => {
   test('the header counts open bets and the panel settles them in one tap, flagging past dates', async ({ page }) => {
     const soon = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)
     await boot(page, { entries: [...WITH_PENDING, entry({ id: 'p3', date: soon, amount: 0, status: 'pending', stake: 10, odds: 3 })] })
-    const btn = page.locator('.pending-btn')
+    // The menu button carries the count, closed; the menu's item opens the panel.
+    const btn = page.locator('.menu-btn')
     await expect(btn.locator('.pending-badge')).toHaveText('3')
-    await btn.click()
+    await expect(btn).toHaveAttribute('aria-label', 'Menu · 3 pending bets')
+    await menu(page, '.pending-btn')
     const panel = page.locator('.pending-modal')
     await expect(panel.locator('.pend-item')).toHaveCount(3)
     // Oldest first; the two August bets are past due, the one three days out is not.
@@ -82,13 +84,19 @@ test.describe('pending bets', () => {
 
   test('the form can log a pending bet, and requires a stake for a new one', async ({ page }) => {
     await boot(page)
-    await page.click('text=Log today')
+    // The whole day: today on the calendar.
+    await page.locator('.cal-cell.is-today').click()
     const dialog = page.locator('.day-modal')
     await dialog.locator('.seg-btn.pending').click()
     const add = dialog.locator('button[type=submit]')
-    await expect(add).toBeDisabled()
-    await dialog.locator('.field').nth(0).locator('input').fill('35')
-    await expect(add).toBeEnabled()
+    // Not a dead button: a sentence next to the stake, which gets the focus.
+    await add.click()
+    const stake = dialog.locator('.field').nth(0).locator('input')
+    await expect(stake).toBeFocused()
+    await expect(stake).toHaveAttribute('aria-invalid', 'true')
+    await expect(dialog.locator('.field-error')).toHaveText('Enter the stake (0 for a free bet).')
+    expect(await stake.evaluate((el) => document.getElementById(el.getAttribute('aria-describedby')?.split(' ')[0] ?? '')?.textContent)).toBe('Enter the stake (0 for a free bet).')
+    await stake.fill('35')
     await add.click()
     await expect(page.locator('.toast')).toContainText('Logged a pending bet')
     await expect(dialog.locator('.bet-item .bet-amt')).toHaveText('PENDING')

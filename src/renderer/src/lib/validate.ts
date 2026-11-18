@@ -1,4 +1,21 @@
-import { isBetStatus, statusForAmount, type BetInput, type BetStatus, type MoveInput, type Settings, type SettingsPatch } from '../../../shared/types'
+import {
+  BUDGET_SCOPES,
+  isBetStatus,
+  statusForAmount,
+  type BetInput,
+  type BetStatus,
+  type BudgetScope,
+  type CardKind,
+  type ExpenseBudgetInput,
+  type ExpenseCardInput,
+  type ExpenseCategory,
+  type ExpenseInput,
+  type ExpenseSource,
+  type MoveInput,
+  type Settings,
+  type SettingsPatch
+} from '../../../shared/types'
+import { isExpenseCategory, toCategory } from './categories'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -18,16 +35,59 @@ export function isValidDate(date: string): boolean {
 
 export const round2 = (n: number): number => Math.round(n * 100) / 100
 
+/** Why a bet or a deposit was refused, as a code the forms put in the user's language. */
+export type InputCode =
+  | 'date'
+  | 'status'
+  | 'amountNumber'
+  | 'amountRange'
+  | 'wonNeedsResult'
+  | 'wonPositive'
+  | 'lostNeedsResult'
+  | 'lostNegative'
+  | 'zeroResult'
+  | 'stakeNumber'
+  | 'stakeNegative'
+  | 'stakeRange'
+  | 'oddsNumber'
+  | 'oddsLow'
+  | 'oddsRange'
+  | 'closingNumber'
+  | 'closingLow'
+  | 'closingRange'
+  | 'moveZero'
+  | 'expenseCard'
+  | 'cardName'
+  | 'cardLast4'
+  | 'cardKind'
+  | 'budgetScope'
+  | 'budgetLimit'
+
+/**
+ * Bad input, refused before anything is queued. The message stays English
+ * (the CSV import quotes it per line); `code` and `vars` are for the forms.
+ */
+export class InputError extends Error {
+  readonly code: InputCode
+  readonly vars: Record<string, string | number>
+  constructor(code: InputCode, message: string, vars: Record<string, string | number> = {}) {
+    super(message)
+    this.name = 'InputError'
+    this.code = code
+    this.vars = vars
+  }
+}
+
 /** Tags are free text: collapse whitespace, cap the length, keep the user's casing. */
 function cleanTag(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH)
 }
 
-function cleanMoney(value: number | null | undefined, what: string, min: number): number | null {
+function cleanStake(value: number | null | undefined): number | null {
   if (value === undefined || value === null) return null
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
-  if (value < min) throw new Error(`${what} cannot be ${min === 0 ? 'negative' : `below ${min}`}`)
-  if (value > MAX_AMOUNT) throw new Error(`${what} is out of range`)
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new InputError('stakeNumber', 'Stake must be a finite number')
+  if (value < 0) throw new InputError('stakeNegative', 'Stake cannot be negative')
+  if (value > MAX_AMOUNT) throw new InputError('stakeRange', 'Stake is out of range')
   return round2(value)
 }
 
@@ -44,14 +104,15 @@ export const storableOdds = (value: number): boolean => {
   return rounded > 1 && rounded <= MAX_ODDS
 }
 
-function cleanOdds(value: number | null | undefined, what: string): number | null {
+function cleanOdds(value: number | null | undefined, which: 'odds' | 'closing'): number | null {
   if (value === undefined || value === null) return null
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${what} must be a finite number`)
+  const what = which === 'odds' ? 'Odds' : 'Closing odds'
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new InputError(`${which}Number`, `${what} must be a finite number`)
   // Checked after rounding to what the database stores: 1.0004 would
   // otherwise pass here and be refused there as 1.000.
   const rounded = roundOdds(value)
-  if (rounded <= 1) throw new Error(`${what} must be greater than 1 (decimal)`)
-  if (rounded > MAX_ODDS) throw new Error(`${what} are out of range`)
+  if (rounded <= 1) throw new InputError(`${which}Low`, `${what} must be greater than 1 (decimal)`)
+  if (rounded > MAX_ODDS) throw new InputError(`${which}Range`, `${what} are out of range`)
   return rounded
 }
 
@@ -69,33 +130,40 @@ export interface CleanBet {
 }
 
 /**
- * Validate and clean a raw bet before it is written anywhere. Throws on bad
- * input, so nothing half-valid reaches the outbox or the backend.
+ * Validate and clean a raw bet before it is written anywhere. Throws an
+ * InputError on bad input, so nothing half-valid reaches the outbox or the
+ * backend.
  *
  * Status and amount are checked against each other: a pending bet has no
  * amount, a won bet nets positive, a lost one negative, and a push or void is
- * exactly 0. The same rule the 003 migration used to backfill status.
+ * exactly 0. The same rule the 003 migration used to backfill status. One
+ * exception: a free bet (a stake of 0) that loses costs nothing, so its
+ * result is 0 (migration 006 keeps the database from reading it as a push).
  */
 export function normalizeInput(input: BetInput): CleanBet {
   if (!isValidDate(input.date)) {
-    throw new Error(`"${input.date}" is not a valid calendar date`)
+    throw new InputError('date', `"${input.date}" is not a valid calendar date`)
   }
 
   if (input.status !== undefined && !isBetStatus(input.status)) {
-    throw new Error(`"${String(input.status)}" is not a bet status`)
+    throw new InputError('status', `"${String(input.status)}" is not a bet status`)
   }
 
   const rawAmount = input.amount === undefined ? null : input.amount
   if (rawAmount !== null && (typeof rawAmount !== 'number' || !Number.isFinite(rawAmount))) {
-    throw new Error('Amount must be a finite number')
+    throw new InputError('amountNumber', 'Amount must be a finite number')
   }
   if (rawAmount !== null && Math.abs(rawAmount) > MAX_AMOUNT) {
-    throw new Error('Amount is out of range')
+    throw new InputError('amountRange', 'Amount is out of range')
   }
   // The sign is read off what gets stored, in cents: a 0.004 result is 0.00,
   // a push, not a win. Checking before rounding would store a "won" 0.00,
   // which the database's status trigger would later read as a push.
   const cents = rawAmount === null ? null : round2(rawAmount)
+
+  // Undefined/null both mean "not recorded" and stay null — only a real number
+  // becomes a stake, so ROI is never computed against a value nobody entered.
+  const stake = cleanStake(input.stake)
 
   // No status given: it is whatever the result says, which is what every bet
   // logged before statuses existed relies on.
@@ -110,28 +178,25 @@ export function normalizeInput(input: BetInput): CleanBet {
       amount = null
       break
     case 'won':
-      if (cents === null) throw new Error('A won bet needs its result')
-      if (cents <= 0) throw new Error('A won bet nets a positive amount')
+      if (cents === null) throw new InputError('wonNeedsResult', 'A won bet needs its result')
+      if (cents <= 0) throw new InputError('wonPositive', 'A won bet nets a positive amount')
       amount = cents
       break
     case 'lost':
-      if (cents === null) throw new Error('A lost bet needs its result')
-      if (cents >= 0) throw new Error('A lost bet nets a negative amount')
-      amount = cents
+      if (cents === null) throw new InputError('lostNeedsResult', 'A lost bet needs its result')
+      if (cents > 0 || (cents === 0 && stake !== 0)) throw new InputError('lostNegative', 'A lost bet nets a negative amount')
+      // 0, never -0 (a free bet's stake, negated): it would show as "-$0.00".
+      amount = cents === 0 ? 0 : cents
       break
     case 'push':
     case 'void':
-      if (cents !== null && cents !== 0) throw new Error(`A ${status} returns the stake — its result is 0`)
+      if (cents !== null && cents !== 0) throw new InputError('zeroResult', `A ${status} returns the stake — its result is 0`, { status })
       amount = 0
       break
   }
 
-  // Undefined/null both mean "not recorded" and stay null — only a real number
-  // becomes a stake, so ROI is never computed against a value nobody entered.
-  const stake = cleanMoney(input.stake, 'Stake', 0)
-
-  const odds = cleanOdds(input.odds, 'Odds')
-  const closingOdds = cleanOdds(input.closingOdds, 'Closing odds')
+  const odds = cleanOdds(input.odds, 'odds')
+  const closingOdds = cleanOdds(input.closingOdds, 'closing')
 
   return {
     date: input.date,
@@ -185,12 +250,120 @@ export interface CleanMove {
  * is 0, which the database refuses.
  */
 export function normalizeMove(input: MoveInput): CleanMove {
-  if (!isValidDate(input.date)) throw new Error(`"${input.date}" is not a valid calendar date`)
-  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new Error('Amount must be a finite number')
+  if (!isValidDate(input.date)) throw new InputError('date', `"${input.date}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new InputError('amountNumber', 'Amount must be a finite number')
   const amount = roundCents(input.amount)
-  if (amount === 0) throw new Error('Amount cannot be zero')
-  if (Math.abs(amount) > MAX_AMOUNT) throw new Error('Amount is out of range')
+  if (amount === 0) throw new InputError('moveZero', 'Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new InputError('amountRange', 'Amount is out of range')
   return { date: input.date, amount, note: (input.note ?? '').trim().slice(0, MAX_NOTE_LENGTH) }
+}
+
+export const MAX_MERCHANT_LENGTH = 80
+export const MAX_CARD_NAME_LENGTH = 40
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Free text typed or read from a picture: control characters out (as spaces,
+ * so "Café\nCentral" keeps its two words), whitespace collapsed, trimmed,
+ * capped. The cap never splits an emoji in half (the database would refuse
+ * the broken character).
+ */
+function cleanText(value: unknown, max: number): string {
+  const text = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : ''
+  if (text.length <= max) return text
+  let cut = text.slice(0, max)
+  if (/[\ud800-\udbff]$/.test(cut)) cut = cut.slice(0, -1)
+  return cut.trimEnd()
+}
+
+export interface CleanExpense {
+  date: string
+  amount: number
+  cardId: string | null
+  merchant: string
+  category: ExpenseCategory
+  note: string
+  source: ExpenseSource
+}
+
+export interface CleanCard {
+  name: string
+  last4: string
+  kind: CardKind
+  archived: boolean
+}
+
+export interface CleanBudget {
+  scope: BudgetScope
+  target: string
+  monthlyLimit: number
+}
+
+/**
+ * Validate and clean an expense before it is queued (table `expenses`,
+ * migration 008). Throws on bad input. The amount is signed (− a refund or a
+ * credit) and judged once rounded to cents, as stored: 0.004 is 0, which the
+ * database refuses. A category the app doesn't know is filed as 'other'.
+ */
+export function normalizeExpense(input: ExpenseInput): CleanExpense {
+  if (typeof input.date !== 'string' || !isValidDate(input.date)) throw new InputError('date', `"${String(input.date)}" is not a valid calendar date`)
+  if (typeof input.amount !== 'number' || !Number.isFinite(input.amount)) throw new InputError('amountNumber', 'Amount must be a finite number')
+  const amount = roundCents(input.amount)
+  if (amount === 0) throw new InputError('moveZero', 'Amount cannot be zero')
+  if (Math.abs(amount) > MAX_AMOUNT) throw new InputError('amountRange', 'Amount is out of range')
+  let cardId: string | null = null
+  if (input.cardId !== undefined && input.cardId !== null && input.cardId !== '') {
+    if (typeof input.cardId !== 'string' || !UUID_RE.test(input.cardId)) throw new InputError('expenseCard', 'Not a card id')
+    cardId = input.cardId.toLowerCase()
+  }
+  return {
+    date: input.date,
+    amount,
+    cardId,
+    merchant: cleanText(input.merchant, MAX_MERCHANT_LENGTH),
+    category: toCategory(input.category),
+    note: cleanText(input.note, MAX_NOTE_LENGTH),
+    source: input.source === 'ai' ? 'ai' : 'manual'
+  }
+}
+
+/** Validate and clean a card (table `expense_cards`). Throws on bad input. */
+export function normalizeCard(input: ExpenseCardInput): CleanCard {
+  const name = cleanText(input.name, Number.POSITIVE_INFINITY)
+  if (name.length < 1 || name.length > MAX_CARD_NAME_LENGTH) throw new InputError('cardName', `A card name has 1 to ${MAX_CARD_NAME_LENGTH} characters`)
+  const last4 = input.last4 === undefined || input.last4 === null ? '' : input.last4
+  if (typeof last4 !== 'string' || (last4 !== '' && !/^\d{4}$/.test(last4))) throw new InputError('cardLast4', 'The last digits are 4 numbers or nothing')
+  const kind = input.kind === undefined ? 'credit' : input.kind
+  if (kind !== 'credit' && kind !== 'debit') throw new InputError('cardKind', 'A card is credit or debit')
+  return { name, last4, kind, archived: input.archived === true }
+}
+
+/**
+ * Validate and clean a monthly budget (table `expense_budgets`): the whole
+ * month (target ''), a card (target = its id, lowercased) or a category
+ * (target = its key). Throws on bad input.
+ */
+export function normalizeBudget(input: ExpenseBudgetInput): CleanBudget {
+  const scope = input.scope
+  if (!BUDGET_SCOPES.includes(scope)) throw new InputError('budgetScope', `"${String(scope)}" is not a budget scope`)
+  const raw = typeof input.target === 'string' ? input.target : null
+  let target: string
+  if (scope === 'total') {
+    if (raw !== '') throw new InputError('budgetScope', 'A total budget has no target')
+    target = ''
+  } else if (scope === 'card') {
+    if (raw === null || !UUID_RE.test(raw)) throw new InputError('budgetScope', 'A card budget names a card id')
+    target = raw.toLowerCase()
+  } else {
+    if (!isExpenseCategory(raw)) throw new InputError('budgetScope', 'A category budget names a category')
+    target = raw
+  }
+  const limit = input.monthlyLimit
+  if (typeof limit !== 'number' || !Number.isFinite(limit)) throw new InputError('budgetLimit', 'A budget must be a number')
+  const monthlyLimit = round2(limit)
+  if (monthlyLimit <= 0 || monthlyLimit > MAX_AMOUNT) throw new InputError('budgetLimit', 'A budget must be more than 0')
+  return { scope, target, monthlyLimit }
 }
 
 /**

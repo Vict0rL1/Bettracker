@@ -6,15 +6,22 @@ import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
 import { formatOdds } from '../lib/odds'
+import { inBounds, type Bounds } from '../lib/range'
 import { clvOf, tagValues } from '../lib/stats'
+import { NARROW, useMedia } from '../lib/useMedia'
 import { suggestedAmount } from '../lib/validate'
 import { toneOf } from './DayModal'
-import { ChevronLeftIcon, ChevronRightIcon, PencilIcon, TrashIcon } from './icons'
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon, TrashIcon } from './icons'
 
 interface Props {
   bets: Bet[]
   oddsFormat: OddsFormat
-  onEdit: (date: string) => void
+  /** The date range the stats follow, when one is chosen: the history can be narrowed to it. */
+  range: { name: string; bounds: Bounds } | null
+  /** Open this bet, in its day, ready to edit. */
+  onEdit: (bet: Bet) => void
+  /** Open a whole day. */
+  onOpenDay: (date: string) => void
   onDelete: (id: string) => void
   /** Settle a pending bet with the result its stake and odds imply, or open it when they can't. */
   onSettle: (bet: Bet, status: BetStatus, amount: number | null) => void
@@ -40,10 +47,16 @@ function compareNullable(a: number | null, b: number | null, dir: number): numbe
   return (a - b) * dir
 }
 
-export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSettle, onBulkRetag, onBulkSettle, onBulkDelete }: Props) {
+export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDay, onDelete, onSettle, onBulkRetag, onBulkSettle, onBulkDelete }: Props) {
   const { t, tn } = useLang()
   const money = useMoney()
   const listId = useId()
+  // On a phone: a list of compact cards instead of the wide table.
+  const narrow = useMedia(NARROW)
+  const [open, setOpen] = useState<string | null>(null)
+  // The stats' date range, applied here too only when asked: the history shows every date by default.
+  const [inRange, setInRange] = useState(false)
+  const onlyRange = inRange && range !== null
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -75,13 +88,14 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return bets.filter((b) => {
+      if (onlyRange && !inBounds(b.date, range.bounds)) return false
       if (result !== 'all' && b.status !== result) return false
       if (sport && b.sport !== sport) return false
       if (book && b.book !== book) return false
       if (q && !`${b.note} ${b.sport} ${b.book} ${b.betType} ${b.date}`.toLowerCase().includes(q)) return false
       return true
     })
-  }, [bets, query, result, sport, book])
+  }, [bets, query, result, sport, book, onlyRange, range])
 
   const sorted = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1
@@ -140,6 +154,9 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
   const selectedBets = useMemo(() => bets.filter((b) => selected.has(b.id)), [bets, selected])
   const selectedIds = selectedBets.map((b) => b.id)
   const pendingSelected = selectedBets.filter((b) => b.status === 'pending').length
+  // Selected, but not shown: a filter or a page hides them. The bulk bar says so before acting on them.
+  const shownIds = useMemo(() => new Set(filtered.map((b) => b.id)), [filtered])
+  const hiddenSelected = selectedBets.filter((b) => !shownIds.has(b.id)).length
   const allVisibleSelected = visible.length > 0 && visible.every((b) => selected.has(b.id))
 
   const toggleOne = (id: string): void =>
@@ -180,12 +197,13 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
     bulkTimer.current = setTimeout(() => setConfirmBulk(false), 3000)
   }
 
-  const hasFilters = query !== '' || result !== 'all' || sport !== '' || book !== ''
+  const hasFilters = query !== '' || result !== 'all' || sport !== '' || book !== '' || onlyRange
   const clearFilters = (): void => {
     setQuery('')
     setResult('all')
     setSport('')
     setBook('')
+    setInRange(false)
     setPage(0)
   }
 
@@ -202,7 +220,10 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
     <article className="card history-card">
       <header className="card-head">
         <h2>{t('hist.title')}</h2>
-        <span className="card-note">{hasFilters ? t('hist.countOf', { m: filtered.length, bets: tn('bet', bets.length) }) : tn('bet', bets.length)}</span>
+        <span className="card-note">
+          <span className="scope-tag">{onlyRange ? range.name : t('scope.allDates')}</span>{' '}
+          <span className="hist-count">{hasFilters ? t('hist.countOf', { m: filtered.length, bets: tn('bet', bets.length) }) : tn('bet', bets.length)}</span>
+        </span>
       </header>
 
       {bets.length === 0 ? (
@@ -218,6 +239,12 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
               value={query}
               onChange={(e) => resetPage(setQuery)(e.target.value)}
             />
+            {range !== null && (
+              <select aria-label={t('hist.filterDates')} value={onlyRange ? 'range' : 'all'} onChange={(e) => resetPage(setInRange)(e.target.value === 'range')}>
+                <option value="all">{t('scope.allDates')}</option>
+                <option value="range">{t('hist.onlyRange', { range: range.name })}</option>
+              </select>
+            )}
             <select aria-label={t('hist.filterResult')} value={result} onChange={(e) => resetPage(setResult)(e.target.value as ResultFilter)}>
               <option value="all">{t('hist.allResults')}</option>
               <option value="won">{t('statusName.won')}</option>
@@ -255,13 +282,16 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
 
           {selectedIds.length > 0 && (
             <div className="bulk-bar" role="region" aria-label={t('hist.selected', { n: selectedIds.length })}>
-              <span className="bulk-count">{t('hist.selected', { n: selectedIds.length })}</span>
+              <span className="bulk-count" aria-live="polite">
+                {t('hist.selected', { n: selectedIds.length })}
+                {hiddenSelected > 0 && <span className="bulk-hidden"> · {t('hist.hiddenSelected', { n: hiddenSelected })}</span>}
+              </span>
               <span className="bulk-group" title={t('hist.retagHint')}>
                 <input type="text" list={`${listId}-sport`} maxLength={40} placeholder={t('modal.sport')} aria-label={t('modal.sport')} value={retag.sport} onChange={(e) => setRetag({ ...retag, sport: e.target.value })} />
                 <input type="text" list={`${listId}-book`} maxLength={40} placeholder={t('modal.book')} aria-label={t('modal.book')} value={retag.book} onChange={(e) => setRetag({ ...retag, book: e.target.value })} />
                 <input type="text" maxLength={40} placeholder={t('modal.betType')} aria-label={t('modal.betType')} value={retag.betType} onChange={(e) => setRetag({ ...retag, betType: e.target.value })} />
                 <button type="button" className="btn btn-ghost bulk-apply" disabled={Object.keys(retagPatch).length === 0} onClick={applyRetag}>
-                  {t('hist.retag')}
+                  {t('hist.retagN', { n: selectedIds.length })}
                 </button>
                 <datalist id={`${listId}-sport`}>
                   {sports.map((v) => (
@@ -276,7 +306,7 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
               </span>
               {pendingSelected > 0 && (
                 <span className="bulk-group settle" role="group" aria-label={t('hist.settleAs')}>
-                  <span className="bulk-label">{t('hist.settleAs')}</span>
+                  <span className="bulk-label">{t('hist.settleAsN', { n: pendingSelected })}</span>
                   {SETTLE.map((s) => (
                     <button key={s} type="button" className={`settle-btn ${toneOf(s)}`} onClick={() => onBulkSettle(selectedIds, s as Exclude<BetStatus, 'pending'>)}>
                       {t(`status.${s}`)}
@@ -285,8 +315,13 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                 </span>
               )}
               <button type="button" className={`btn btn-ghost bulk-delete ${confirmBulk ? 'confirming' : ''}`} onClick={bulkDeleteClick}>
-                {confirmBulk ? t('common.clickAgain') : t('hist.deleteSel')}
+                {confirmBulk ? t('hist.deleteConfirm', { bets: tn('bet', selectedIds.length) }) : t('hist.deleteN', { n: selectedIds.length })}
               </button>
+              {confirmBulk && (
+                <span className="visually-hidden" role="alert">
+                  {t('hist.deleteConfirm', { bets: tn('bet', selectedIds.length) })}
+                </span>
+              )}
               <button type="button" className="chip" onClick={clearSelection}>
                 {t('hist.clearSel')}
               </button>
@@ -297,6 +332,141 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
             <div className="empty-state">{t('hist.noMatch')}</div>
           ) : (
             <>
+              {narrow ? (
+                <>
+                  <div className="hcards-head">
+                    <label className="hcards-all">
+                      <input type="checkbox" checked={allVisibleSelected} onChange={togglePage} />
+                      <span>{t('hist.selectPageShort')}</span>
+                    </label>
+                    <select
+                      aria-label={t('hist.sortBy')}
+                      value={`${sortKey}-${sortDir}`}
+                      onChange={(e) => {
+                        const [key, dir] = e.target.value.split('-') as [SortKey, SortDir]
+                        setSortKey(key)
+                        setSortDir(dir)
+                        setPage(0)
+                      }}
+                    >
+                      <option value="date-desc">{t('hist.sortNewest')}</option>
+                      <option value="date-asc">{t('hist.sortOldest')}</option>
+                      <option value="amount-desc">{t('hist.sortBest')}</option>
+                      <option value="amount-asc">{t('hist.sortWorst')}</option>
+                      <option value="stake-desc">{t('hist.sortStake')}</option>
+                    </select>
+                  </div>
+                  <ul className="hcards">
+                    {visible.map((b) => {
+                      const tone = toneOf(b.status)
+                      const when = humanDate(b.date)
+                      const expanded = open === b.id
+                      const decided = b.status === 'won' || b.status === 'lost'
+                      const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
+                      const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
+                      const tags = [b.sport, b.book, b.betType].filter(Boolean)
+                      const desc = b.note || tags.join(' · ')
+                      const detailsId = `${listId}-card-${b.id}`
+                      const cardClass = ['hcard', b.status === 'pending' ? 'is-pending' : '', selected.has(b.id) ? 'is-selected' : '', expanded ? 'is-open' : '']
+                        .filter(Boolean)
+                        .join(' ')
+                      return (
+                        <li key={b.id} className={cardClass}>
+                          <div className="hcard-main">
+                            <input type="checkbox" className="hcard-sel" aria-label={t('hist.selectRow', { date: when })} checked={selected.has(b.id)} onChange={() => toggleOne(b.id)} />
+                            <button type="button" className="hcard-toggle" aria-expanded={expanded} aria-controls={detailsId} onClick={() => setOpen(expanded ? null : b.id)}>
+                              <span className="hcard-top">
+                                <span className="hcard-date">{when}</span>
+                                <span className={`pill ${tone}`}>{t(`status.${b.status}`)}</span>
+                                <span className={`hcard-amt td-amt ${tone}`}>{b.amount === null ? t('hist.open') : money.signed(b.amount)}</span>
+                              </span>
+                              <span className="hcard-sub">
+                                <span className="hcard-desc">{desc || <span className="td-none">{t('hist.noDetails')}</span>}</span>
+                                <span className="hcard-stake">
+                                  {b.stake === null ? t('hist.noStake') : b.stake === 0 ? t('modal.freeBet') : t('hist.staked', { amount: money.stake(b.stake) })}
+                                </span>
+                              </span>
+                              <ChevronDownIcon />
+                            </button>
+                          </div>
+                          {b.status === 'pending' && (
+                            <span className="settle hcard-settle" role="group" aria-label={t('hist.settleAria', { date: when })}>
+                              {SETTLE.map((s) => (
+                                <button
+                                  key={s}
+                                  type="button"
+                                  className={`settle-btn ${toneOf(s)}`}
+                                  title={t('hist.markAs', { status: t(`statusWord.${s}`) })}
+                                  onClick={() => onSettle(b, s, suggestedAmount(s, b.stake, b.odds))}
+                                >
+                                  {t(`status.${s}`)}
+                                </button>
+                              ))}
+                            </span>
+                          )}
+                          {expanded && (
+                            <div className="hcard-details" id={detailsId}>
+                              <dl>
+                                <div>
+                                  <dt>{t('hist.odds')}</dt>
+                                  <dd>{b.odds === null ? '—' : formatOdds(b.odds, oddsFormat)}</dd>
+                                </div>
+                                <div>
+                                  <dt>{t('modal.closingOdds')}</dt>
+                                  <dd>{b.closingOdds === null ? '—' : formatOdds(b.closingOdds, oddsFormat)}</dd>
+                                </div>
+                                {clv !== null && (
+                                  <div>
+                                    <dt>{t('hist.clv')}</dt>
+                                    <dd className={clv > 0 ? 'win' : clv < 0 ? 'loss' : ''}>{fmtPctSigned(clv)}</dd>
+                                  </div>
+                                )}
+                                <div>
+                                  <dt>{t('hist.return')}</dt>
+                                  <dd className={ret === null ? '' : ret > 0 ? 'win' : ret < 0 ? 'loss' : ''}>{ret === null ? '—' : fmtPctSigned(ret)}</dd>
+                                </div>
+                                <div className="hcard-wide">
+                                  <dt>{t('hist.tags')}</dt>
+                                  <dd>
+                                    {tags.length === 0
+                                      ? '—'
+                                      : tags.map((x) => (
+                                          <span key={x} className="tag">
+                                            {x}
+                                          </span>
+                                        ))}
+                                  </dd>
+                                </div>
+                                <div className="hcard-wide">
+                                  <dt>{t('hist.note')}</dt>
+                                  <dd className="hcard-note">{b.note || '—'}</dd>
+                                </div>
+                              </dl>
+                              <div className="hcard-actions">
+                                {/* Short words to fit a phone; the names say which bet and which day. */}
+                                <button type="button" className="btn btn-ghost hcard-edit" aria-label={t('hist.editAria', { date: when })} onClick={() => onEdit(b)}>
+                                  <PencilIcon /> {t('hist.editShort')}
+                                </button>
+                                <button type="button" className="btn btn-ghost hcard-day" aria-label={t('hist.openDayAria', { date: when })} onClick={() => onOpenDay(b.date)}>
+                                  {t('hist.viewDay')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`btn btn-ghost danger hcard-delete ${confirming === b.id ? 'confirming' : ''}`}
+                                  aria-label={confirming === b.id ? t('common.clickAgain') : t('hist.deleteAria', { date: when })}
+                                  onClick={() => handleDeleteClick(b.id)}
+                                >
+                                  <TrashIcon /> {confirming === b.id ? t('common.sure') : t('common.delete')}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </>
+              ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -330,7 +500,11 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                           <td className="td-sel">
                             <input type="checkbox" aria-label={t('hist.selectRow', { date: when })} checked={selected.has(b.id)} onChange={() => toggleOne(b.id)} />
                           </td>
-                          <td className="td-date">{when}</td>
+                          <td className="td-date">
+                            <button type="button" className="td-day" title={t('hist.openDay')} aria-label={t('hist.openDayAria', { date: when })} onClick={() => onOpenDay(b.date)}>
+                              {when}
+                            </button>
+                          </td>
                           <td>
                             <span className={`pill ${tone}`}>{t(`status.${b.status}`)}</span>
                           </td>
@@ -372,11 +546,11 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                                 ))}
                               </span>
                             ) : (
-                              b.note || <span className="td-none">—</span>
+                              b.note ? <span className="td-note-text">{b.note}</span> : <span className="td-none">—</span>
                             )}
                           </td>
                           <td className="td-actions">
-                            <button type="button" className="btn-icon" aria-label={t('hist.editAria', { date: b.date })} title={t('hist.editDay')} onClick={() => onEdit(b.date)}>
+                            <button type="button" className="btn-icon td-edit" aria-label={t('hist.editAria', { date: when })} title={t('hist.editBet')} onClick={() => onEdit(b)}>
                               <PencilIcon />
                             </button>
                             <button
@@ -395,6 +569,7 @@ export default function HistoryTable({ bets, oddsFormat, onEdit, onDelete, onSet
                   </tbody>
                 </table>
               </div>
+              )}
 
               {pageCount > 1 && (
                 <footer className="pager">

@@ -7,7 +7,7 @@
       content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co ws://localhost:* http://localhost:*; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0a0f14" />
+    <meta name="theme-color" content="#0e0f11" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -33,9 +33,9 @@
               : 'dark'
         var root = document.documentElement
         root.dataset.theme = theme
-        root.style.background = theme === 'light' ? '#f6f7f9' : '#0a0f14'
+        root.style.background = theme === 'light' ? '#f7f7f8' : '#0e0f11'
         var meta = document.querySelector('meta[name="theme-color"]')
-        if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f7f9' : '#0a0f14')
+        if (meta) meta.setAttribute('content', theme === 'light' ? '#f7f7f8' : '#0e0f11')
       })()
     </script>
   </head>

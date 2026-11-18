@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, isBetStatus, statusForAmount, type BankrollMove, type Bet, type BetInput, type BetStatus, type MoveInput, type Settings, type SettingsPatch } from '../../../shared/types'
 import { isValidDate } from '../lib/validate'
+import { removeDurable, writeDurable, writeExpendable } from './store'
 
 /**
  * Device-local persistence for offline support.
@@ -13,16 +14,25 @@ import { isValidDate } from '../lib/validate'
  * Bet ids are client-generated UUIDs, so an optimistic row keeps the same id
  * after it syncs and a retried insert can be recognized as a duplicate instead
  * of creating a second row.
+ *
+ * The caches can be fetched again, so failing to store one is ignored; the
+ * queues exist nowhere else, so failing to store one throws (see store.ts).
  */
 
 /**
  * `sent` marks an op whose request has gone out at least once. Whether that
  * request failed or not, it may have reached the server, so the op is never
- * rewritten or cancelled from then on (see enqueueOp).
+ * rewritten or cancelled from then on (see enqueueOp). `sentBy` names the
+ * attempt that marked it, so that attempt alone takes the mark back (see
+ * drainOutbox); a version from before has none.
  */
-export type PendingOp<I = BetInput> =
-  /** `editedAt`, when present, is the last edit folded into a not-yet-sent add. */
-  | { opId: string; kind: 'add'; id: string; input: I; queuedAt: string; editedAt?: string; sent?: true }
+export type PendingOp<I = BetInput> = (
+  /**
+   * `editedAt`, when present, is the last edit folded into a not-yet-sent add.
+   * `batch` names the import or restore it belongs to (see data/imports.ts),
+   * which hears what the server made of it.
+   */
+  | { opId: string; kind: 'add'; id: string; input: I; queuedAt: string; editedAt?: string; batch?: string; sent?: true }
   /**
    * `editedAt` is when the user made the edit — the conflict key, see data/bets.ts.
    * `legacy` marks an edit queued by a version from before migration 003: its
@@ -30,9 +40,22 @@ export type PendingOp<I = BetInput> =
    * version sent it (see loadOutbox).
    */
   | { opId: string; kind: 'update'; id: string; input: I; editedAt: string; legacy?: true; sent?: true }
-  | { opId: string; kind: 'delete'; id: string; sent?: true }
-  /** A CSV import: many rows in one op so it syncs as a few chunked requests. */
-  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; sent?: true }
+  /**
+   * `ifStamp`: the Undo of an import or restore. It removes the row only if
+   * the server's `updated_at` is exactly that: the stamp the batch wrote, so
+   * a row the batch did not make (one that was there already, or another
+   * device's) or one edited since is never removed (see deleteBet). `batch`
+   * names the batch being undone.
+   */
+  | { opId: string; kind: 'delete'; id: string; ifStamp?: string; batch?: string; sent?: true }
+  /**
+   * A CSV import or a restored backup: many rows in one op so it syncs as a
+   * few chunked requests. `done` counts the leading entries the server has
+   * confirmed, so a retry after an interruption sends only the rest (see
+   * addBets). `batch` as for an add.
+   */
+  | { opId: string; kind: 'bulk-add'; entries: { id: string; input: I }[]; queuedAt: string; done?: number; batch?: string; sent?: true }
+) & { sentBy?: string }
 
 /**
  * A queued deposit or withdrawal: the same op shapes and rules as bets. Only
@@ -48,9 +71,63 @@ export type MoveOp = PendingOp<MoveInput>
 export const insertStamp = <I>(op: Extract<PendingOp<I>, { kind: 'add' | 'bulk-add' }>): string =>
   op.kind === 'add' ? (op.editedAt ?? op.queuedAt) : op.queuedAt
 
+/**
+ * Whether two `updated_at` values are the same moment. The server writes them
+ * back in its own format ("…+00:00", microseconds), the device in ISO ("…Z").
+ */
+export function sameStamp(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  const x = Date.parse(a)
+  return Number.isFinite(x) && x === Date.parse(b)
+}
+
+/**
+ * A stamp for a re-add (an Undo of a delete): now, or just after the newest
+ * of the rows it brings back when a clock has run ahead. The server keeps a
+ * deleted row's last stamp (migration 007) and takes no insert of that id
+ * that is not newer: an old insert sent again after its answer was lost must
+ * not bring a deleted row back, but an Undo must.
+ */
+export function readdStamp(rows: readonly { updatedAt: string }[], now: Date = new Date()): string {
+  const newest = rows.reduce((max, r) => Math.max(max, Date.parse(r.updatedAt) || 0), 0)
+  return new Date(Math.max(now.getTime(), newest + 1)).toISOString()
+}
+
 export interface OfflineUser {
   id: string
   email: string | null
+}
+
+/** Users signed out on this device (see clearUserData), until they sign in again here. */
+const signedOut = new Set<string>()
+export const markSignedIn = (userId: string): void => void signedOut.delete(userId)
+
+/** The user another window has just signed out (it removed the last user, see clearUserData), if this storage event says so. */
+export function signedOutElsewhere(e: Pick<StorageEvent, 'key' | 'newValue' | 'oldValue'>): string | null {
+  if (e.key !== LAST_USER_KEY || e.newValue !== null || !e.oldValue) return null
+  try {
+    const gone = JSON.parse(e.oldValue) as Partial<OfflineUser>
+    return typeof gone.id === 'string' ? gone.id : null
+  } catch {
+    // not a user this app stored
+    return null
+  }
+}
+// Signed out in another window: a sync of theirs still out in this one must
+// not write their copy back either (and the window leaves the account, see
+// AuthProvider).
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    const gone = signedOutElsewhere(e)
+    if (gone) signedOut.add(gone)
+  })
+}
+/** Store something of `userId`'s, unless they have signed out in this window since. */
+/** Whether this user's data may still be written on this device (not signed out). */
+export const writable = (userId: string): boolean => !signedOut.has(userId)
+
+const forUser = (userId: string, write: () => void): void => {
+  if (!signedOut.has(userId)) write()
 }
 
 const cacheKey = (userId: string): string => `bettracker:cache:${userId}`
@@ -59,22 +136,57 @@ const settingsKey = (userId: string): string => `bettracker:settings:${userId}`
 const settingsOutboxKey = (userId: string): string => `bettracker:settings-outbox:${userId}`
 const movesKey = (userId: string): string => `bettracker:moves:${userId}`
 const movesOutboxKey = (userId: string): string => `bettracker:moves-outbox:${userId}`
+const refusedKey = (userId: string): string => `bettracker:refused:${userId}`
+const movesRefusedKey = (userId: string): string => `bettracker:moves-refused:${userId}`
 const LAST_USER_KEY = 'bettracker:last-user'
+/** An unfinished form (see data/drafts.ts): the quick add, or the day's form. */
+export const draftKey = (userId: string, slot: 'quick' | 'day'): string => `bettracker:draft-${slot}:${userId}`
+/** The imports made on this device, for their Undo (see data/imports.ts). */
+export const importsKey = (userId: string): string => `bettracker:imports:${userId}`
+/** Changes the server confirmed lately, for reads in other windows to lay over what they got (see data/confirmed.ts). */
+export const confirmedKey = (userId: string, name: string): string => `bettracker:confirmed-${name}:${userId}`
+/** The simple user-owned tables synced by useRowSync (see data/rowTable.ts). */
+export const ROW_TABLE_NAMES = ['expenses', 'expense-cards', 'expense-budgets'] as const
+export type RowTableName = (typeof ROW_TABLE_NAMES)[number]
+/** A row table's cache, queue and refused list. The colon after the name keeps "-outbox"/"-refused" out of EXPENDABLE (store.ts). */
+export const rowKeys = (userId: string, name: RowTableName) => ({
+  cache: `bettracker:${name}:${userId}`,
+  outbox: `bettracker:${name}-outbox:${userId}`,
+  refused: `bettracker:${name}-refused:${userId}`
+})
+/** The card and category the expense sheet last used on this device (see data/expenseLast.ts). */
+export const expenseLastKey = (userId: string): string => `bettracker:expense-last:${userId}`
+/** Settings edits on their way into the queue, one list per window (see useSettings). */
+export const settingsJournalPrefix = (userId: string): string => `bettracker:settings-journal:${userId}:`
 
-function readJson<T>(key: string): T | null {
+/** The storage keys of a user's queues, which other windows watch for (see the hooks' storage listeners). */
+export const queueKeys = (userId: string) => ({
+  outbox: outboxKey(userId),
+  moves: movesOutboxKey(userId),
+  settings: settingsOutboxKey(userId),
+  refused: refusedKey(userId),
+  movesRefused: movesRefusedKey(userId),
+  cache: cacheKey(userId),
+  movesCache: movesKey(userId),
+  settingsCache: settingsKey(userId),
+  // The row tables (useRowSync reads rowKeys itself; listed so every queue key is in one place).
+  expenses: rowKeys(userId, 'expenses').outbox,
+  expensesRefused: rowKeys(userId, 'expenses').refused,
+  expensesCache: rowKeys(userId, 'expenses').cache,
+  expenseCards: rowKeys(userId, 'expense-cards').outbox,
+  expenseCardsRefused: rowKeys(userId, 'expense-cards').refused,
+  expenseCardsCache: rowKeys(userId, 'expense-cards').cache,
+  expenseBudgets: rowKeys(userId, 'expense-budgets').outbox,
+  expenseBudgetsRefused: rowKeys(userId, 'expense-budgets').refused,
+  expenseBudgetsCache: rowKeys(userId, 'expense-budgets').cache
+})
+
+export function readJson<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key)
     return raw ? (JSON.parse(raw) as T) : null
   } catch {
     return null
-  }
-}
-
-function writeJson(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Storage full or unavailable — the app still works, just without offline.
   }
 }
 
@@ -112,7 +224,7 @@ export function loadCache(userId: string): Bet[] | null {
   return raw === null ? null : raw.map(hydrateBet)
 }
 
-export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJson(cacheKey(userId), bets)
+export const saveCache = (userId: string, bets: readonly Bet[]): void => forUser(userId, () => writeExpendable(cacheKey(userId), bets))
 
 /**
  * The queue as stored. One written by a version from before migration 003
@@ -126,8 +238,13 @@ export const saveCache = (userId: string, bets: readonly Bet[]): void => writeJs
  * updateBetLegacy), which the 003 trigger treats like any write from it.
  */
 export function loadOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
+  return headAsSent(readOutbox(userId, loadedAt))
+}
+
+/** The queue exactly as stored (legacy edits stamped, see loadOutbox), for a change made under its lock. */
+export function readOutbox(userId: string, loadedAt: string = new Date().toISOString()): PendingOp[] {
   const ops = readJson<PendingOp[]>(outboxKey(userId)) ?? []
-  return headAsSent(ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true as const } : op)))
+  return ops.map((op) => (op.kind === 'update' && typeof op.editedAt !== 'string' ? { ...op, editedAt: loadedAt, legacy: true as const } : op))
 }
 
 /**
@@ -141,8 +258,24 @@ export function loadOutbox(userId: string, loadedAt: string = new Date().toISOSt
 export const headAsSent = <T extends { sent?: true }>(ops: readonly T[]): T[] =>
   ops.map((op, i) => (i === 0 && !op.sent ? { ...op, sent: true as const } : op))
 
-const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
-  status === 'pending' ? amount === null : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 : amount === 0)
+/**
+ * headAsSent as a change of the stored queue: the head is decided the first
+ * time it runs, so replayed later (see store.ts) it marks that same op, not
+ * whichever leads the queue by then.
+ */
+export function markHeadSent<T extends { opId: string; sent?: true }>(): (ops: T[]) => T[] {
+  let head: string | null = null
+  return (ops) => {
+    head ??= ops[0]?.opId ?? ''
+    return ops.map((op) => (op.opId === head && !op.sent ? { ...op, sent: true as const } : op))
+  }
+}
+
+// Migration 006's rule: a free bet (stake 0) that lost nets 0 and stays lost.
+const fitsStatus = (status: BetStatus, amount: number | null, stake: number | null): boolean =>
+  status === 'pending'
+    ? amount === null
+    : amount !== null && (status === 'won' ? amount > 0 : status === 'lost' ? amount < 0 || (amount === 0 && stake === 0) : amount === 0)
 
 /**
  * A legacy edit (see loadOutbox) laid over the row it edits, the way the
@@ -152,9 +285,10 @@ const fitsStatus = (status: BetStatus, amount: number | null): boolean =>
  */
 export function applyLegacyEdit(current: Bet, input: BetInput): Bet {
   let amount = typeof input.amount === 'number' ? input.amount : current.amount
+  const stake = 'stake' in input ? (input.stake ?? null) : current.stake
   let status = current.status
   if (status === 'pending' && amount === 0) amount = null
-  else if (!fitsStatus(status, amount)) status = amount === null ? 'pending' : statusForAmount(amount)
+  else if (!fitsStatus(status, amount, stake)) status = amount === null ? 'pending' : statusForAmount(amount)
   return {
     ...current,
     date: input.date,
@@ -167,35 +301,169 @@ export function applyLegacyEdit(current: Bet, input: BetInput): Bet {
     ...('betType' in input ? { betType: input.betType ?? '' } : {})
   }
 }
-export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => writeJson(outboxKey(userId), outbox)
+/** Throws StorageWriteError when the queue can't be stored. */
+export const saveOutbox = (userId: string, outbox: readonly PendingOp[]): void => forUser(userId, () => writeDurable(outboxKey(userId), outbox))
 
 /** Settings are one row; the cache holds the last-known row and the outbox at most one pending patch. */
 export const loadSettingsCache = (userId: string): Settings | null => {
   const raw = readJson<Partial<Settings>>(settingsKey(userId))
   return raw === null ? null : { ...DEFAULT_SETTINGS, ...raw }
 }
-export const saveSettingsCache = (userId: string, s: Settings): void => writeJson(settingsKey(userId), s)
+export const saveSettingsCache = (userId: string, s: Settings): void => forUser(userId, () => writeExpendable(settingsKey(userId), s))
 
 export interface PendingSettings {
   patch: SettingsPatch
   editedAt: string
+  /** When each field was last set. A patch stored by an older version has none. */
+  fieldEditedAt?: Partial<Record<keyof SettingsPatch, string>>
+  /**
+   * Fields that apply only where the server still holds this value (the
+   * Undo of a restore putting a setting back: a change made since, here or
+   * on another device, stays). See saveSettings. A later edit of a field
+   * here drops its guard: the user's own choice applies as it is.
+   */
+  guard?: SettingsPatch
+  /**
+   * The operation each field's pending value comes from: a restore (its id)
+   * or its Undo (`undo:<id>`, see data/imports.ts). The answer to that write
+   * is that operation's to hear (see useSettings' settingsOutcomes); a field
+   * the user set since has none.
+   */
+  fieldOrigin?: Partial<Record<keyof SettingsPatch, string>>
 }
 export const loadSettingsOutbox = (userId: string): PendingSettings | null => readJson<PendingSettings>(settingsOutboxKey(userId))
-export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): void => {
-  if (p === null) {
-    try {
-      localStorage.removeItem(settingsOutboxKey(userId))
-    } catch {
-      // best effort
-    }
-  } else writeJson(settingsOutboxKey(userId), p)
+/** Throws StorageWriteError when the patch can't be stored. */
+export const saveSettingsOutbox = (userId: string, p: PendingSettings | null): void =>
+  forUser(userId, () => (p === null ? removeDurable(settingsOutboxKey(userId)) : writeDurable(settingsOutboxKey(userId), p)))
+
+/**
+ * A settings edit made at `editedAt`, merged into what is pending, field by
+ * field: the newer edit of a field wins. Replayed later on a patch another
+ * window stored since (see store.ts), an older edit made here does not undo
+ * a newer one made there. A patch stored by an older version has no times
+ * per field: its fields count as edited when the patch was.
+ */
+export function editSettings(current: PendingSettings | null, patch: SettingsPatch, editedAt: string, guard?: SettingsPatch, origin?: string): PendingSettings {
+  const times = current?.fieldEditedAt as Record<string, string | undefined> | undefined
+  const at = (k: string): string => (times ? (times[k] ?? '') : current && k in current.patch ? current.editedAt : '')
+  const fresh = Object.entries(patch).filter(([k]) => at(k) <= editedAt)
+  const guards: Record<string, unknown> = { ...(current?.guard ?? {}) }
+  const origins: Record<string, string> = { ...((current?.fieldOrigin ?? {}) as Record<string, string>) }
+  for (const [k] of fresh) {
+    if (guard && k in guard) guards[k] = (guard as Record<string, unknown>)[k]
+    else delete guards[k]
+    if (origin) origins[k] = origin
+    else delete origins[k]
+  }
+  return {
+    patch: { ...(current?.patch ?? {}), ...Object.fromEntries(fresh) },
+    editedAt: current && current.editedAt > editedAt ? current.editedAt : editedAt,
+    fieldEditedAt: { ...(current?.fieldEditedAt ?? {}), ...Object.fromEntries(fresh.map(([k]) => [k, editedAt])) },
+    ...(Object.keys(guards).length > 0 ? { guard: guards as SettingsPatch } : {}),
+    ...(Object.keys(origins).length > 0 ? { fieldOrigin: origins as PendingSettings['fieldOrigin'] } : {})
+  }
+}
+
+/** When a field of a pending patch was set (a patch from an older version: when the patch was). */
+export const fieldTime = (p: PendingSettings, k: keyof SettingsPatch): string => p.fieldEditedAt?.[k] ?? p.editedAt
+
+/**
+ * The writes of operations (see fieldOrigin) that an edit at `editedAt`
+ * replaces before they were sent: by origin and the time they were made, the
+ * fields that will not be written by them. A later change won: theirs to hear.
+ */
+export function supersededBy(
+  current: PendingSettings | null,
+  patch: SettingsPatch,
+  editedAt: string,
+  origin?: string
+): { origin: string; editedAt: string; fields: (keyof SettingsPatch)[] }[] {
+  if (!current?.fieldOrigin) return []
+  const out = new Map<string, { origin: string; editedAt: string; fields: (keyof SettingsPatch)[] }>()
+  for (const k of Object.keys(patch) as (keyof SettingsPatch)[]) {
+    const was = current.fieldOrigin[k]
+    if (!was || was === origin || !(k in current.patch)) continue
+    const at = fieldTime(current, k)
+    if (at > editedAt) continue
+    const key = `${was}|${at}`
+    const cur = out.get(key) ?? { origin: was, editedAt: at, fields: [] }
+    out.set(key, { ...cur, fields: [...cur.fields, k] })
+  }
+  return [...out.values()]
+}
+
+/** Whether a write of `origin` made at `editedAt` is pending still, in some field at least. */
+export function pendingWrite(p: PendingSettings | null, origin: string, editedAt: string): boolean {
+  if (!p?.fieldOrigin) return false
+  return (Object.keys(p.patch) as (keyof SettingsPatch)[]).some((k) => p.fieldOrigin?.[k] === origin && fieldTime(p, k) === editedAt)
+}
+
+/**
+ * What is left pending once `sent` has had its answer — saved, refused, or
+ * beaten by a newer edit from another device: the edits made since it went
+ * out. A field still at the value that went has had its answer and goes; a
+ * field changed since stays, with the time of the newest edit. So does one
+ * set again after it went, even to the same value: the answer may have gone
+ * against it (a newer edit elsewhere), and this edit is newer still.
+ */
+export function afterSettingsAnswer(current: PendingSettings | null, sent: PendingSettings): PendingSettings | null {
+  if (!current) return null
+  const sentPatch = sent.patch as Record<string, unknown>
+  const times = (current.fieldEditedAt ?? {}) as Record<string, string | undefined>
+  const left = Object.fromEntries(
+    Object.entries(current.patch).filter(([k, v]) => !(k in sentPatch) || !Object.is(sentPatch[k], v) || (times[k] ?? '') > sent.editedAt)
+  )
+  if (Object.keys(left).length === 0) return null
+  const fieldEditedAt = current.fieldEditedAt ? { fieldEditedAt: Object.fromEntries(Object.entries(current.fieldEditedAt).filter(([k]) => k in left)) } : {}
+  const guards = Object.entries(current.guard ?? {}).filter(([k]) => k in left)
+  const origins = Object.entries(current.fieldOrigin ?? {}).filter(([k]) => k in left)
+  return {
+    patch: left as SettingsPatch,
+    editedAt: current.editedAt,
+    ...fieldEditedAt,
+    ...(guards.length > 0 ? { guard: Object.fromEntries(guards) as SettingsPatch } : {}),
+    ...(origins.length > 0 ? { fieldOrigin: Object.fromEntries(origins) as PendingSettings['fieldOrigin'] } : {})
+  }
 }
 
 export const loadLastUser = (): OfflineUser | null => readJson<OfflineUser>(LAST_USER_KEY)
-export const saveLastUser = (user: OfflineUser): void => writeJson(LAST_USER_KEY, user)
+export const saveLastUser = (user: OfflineUser): void => writeExpendable(LAST_USER_KEY, user)
 
-/** Wipe everything this device knows about a user (used on sign-out). */
+/**
+ * Changes the server refused for good, kept apart from the queue so they
+ * can't block it, until the user sends them again or lets them go. `ops` is
+ * the refused op with the edits queued for a bet it never made.
+ */
+export interface Refused<I = BetInput> {
+  ops: PendingOp<I>[]
+  reason: string
+  at: string
+}
+/**
+ * The refused list with `ops` kept apart: one entry per refused op (the
+ * first). `revised` (they changed before they left the queue, see
+ * drainOutbox): its entry is written again, if it is still there; one sent
+ * again or let go meanwhile does not come back.
+ */
+export function keepRefused<I>(list: readonly Refused<I>[], ops: PendingOp<I>[], reason: string, at: string, revised = false): Refused<I>[] {
+  const first = ops[0]?.opId
+  if (list.some((x) => x.ops[0]?.opId === first)) return list.map((x) => (x.ops[0]?.opId === first ? { ...x, ops } : x))
+  return revised ? [...list] : [...list, { ops, reason, at }]
+}
+export const loadRefused = (userId: string): Refused[] => readJson<Refused[]>(refusedKey(userId)) ?? []
+export const saveRefused = (userId: string, list: readonly Refused[]): void =>
+  forUser(userId, () => (list.length === 0 ? removeDurable(refusedKey(userId)) : writeDurable(refusedKey(userId), list)))
+export const loadMovesRefused = (userId: string): Refused<MoveInput>[] => readJson<Refused<MoveInput>[]>(movesRefusedKey(userId)) ?? []
+export const saveMovesRefused = (userId: string, list: readonly Refused<MoveInput>[]): void =>
+  forUser(userId, () => (list.length === 0 ? removeDurable(movesRefusedKey(userId)) : writeDurable(movesRefusedKey(userId), list)))
+
+/**
+ * Wipe everything this device knows about a user (used on sign-out). A sync
+ * of theirs still out then would write some of it back when it ends: until
+ * they sign in again (markSignedIn), nothing of theirs is stored.
+ */
 export function clearUserData(userId: string): void {
+  signedOut.add(userId)
   try {
     localStorage.removeItem(cacheKey(userId))
     localStorage.removeItem(outboxKey(userId))
@@ -203,6 +471,27 @@ export function clearUserData(userId: string): void {
     localStorage.removeItem(settingsOutboxKey(userId))
     localStorage.removeItem(movesKey(userId))
     localStorage.removeItem(movesOutboxKey(userId))
+    localStorage.removeItem(refusedKey(userId))
+    localStorage.removeItem(movesRefusedKey(userId))
+    localStorage.removeItem(draftKey(userId, 'quick'))
+    localStorage.removeItem(draftKey(userId, 'day'))
+    localStorage.removeItem(importsKey(userId))
+    localStorage.removeItem(confirmedKey(userId, 'bets'))
+    localStorage.removeItem(confirmedKey(userId, 'moves'))
+    for (const name of ROW_TABLE_NAMES) {
+      const k = rowKeys(userId, name)
+      localStorage.removeItem(k.cache)
+      localStorage.removeItem(k.outbox)
+      localStorage.removeItem(k.refused)
+      localStorage.removeItem(confirmedKey(userId, name))
+    }
+    localStorage.removeItem(expenseLastKey(userId))
+    const journals: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k?.startsWith(settingsJournalPrefix(userId))) journals.push(k)
+    }
+    for (const k of journals) localStorage.removeItem(k)
     localStorage.removeItem(LAST_USER_KEY)
   } catch {
     // best effort
@@ -250,16 +539,27 @@ export function applyOutbox(server: readonly Bet[], outbox: readonly PendingOp[]
     if (op.kind === 'add') {
       map.set(op.id, optimisticRow(op.id, op.input, op.queuedAt, insertStamp(op)))
     } else if (op.kind === 'bulk-add') {
-      for (const { id, input } of op.entries) map.set(id, optimisticRow(id, input, op.queuedAt))
+      // Only the rows the server has not confirmed yet show from the import,
+      // and only where it has no row: a confirmed row is the server's (see
+      // landImport), edited or deleted elsewhere since perhaps.
+      for (const { id, input } of op.entries.slice(op.done ?? 0)) if (!map.has(id)) map.set(id, optimisticRow(id, input, op.queuedAt))
     } else if (op.kind === 'update') {
       const current = map.get(op.id)
       if (current && op.legacy) map.set(op.id, { ...applyLegacyEdit(current, op.input), updatedAt: op.editedAt })
       else if (current) map.set(op.id, { ...current, ...fieldsFrom(op.input), updatedAt: op.editedAt })
-    } else {
+    } else if (removes(map.get(op.id), op)) {
       map.delete(op.id)
     }
   }
   return sortBets([...map.values()])
+}
+
+/**
+ * Whether a delete takes `row` away: always, unless it is an Undo's, which
+ * takes only the row its batch wrote and nobody changed since (see ifStamp).
+ */
+export function removes(row: { updatedAt: string } | undefined, op: Extract<PendingOp<unknown>, { kind: 'delete' }>): boolean {
+  return !op.ifStamp || (row !== undefined && sameStamp(row.updatedAt, op.ifStamp))
 }
 
 /**
@@ -296,15 +596,80 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
     return [...outbox, op]
   }
   if (op.kind === 'delete') {
-    const mine = outbox.filter((o) => forBet(o, op.id))
+    // An Undo's delete is about one generation of its batch (see generationStart):
+    // what an earlier one left in the queue is not its business.
+    const from = op.ifStamp ? generationStart(outbox, op.id, op.ifStamp, op.batch) : 0
+    const before = outbox.slice(0, from)
+    const after = outbox.slice(from)
+    const mine = after.filter((o) => forBet(o, op.id))
+    // An Undo's delete (ifStamp) takes only what its batch wrote, unchanged:
+    // anything else queued for the row since (an edit, a delete, a re-add)
+    // is a change the Undo leaves alone, and so is an add of its own that an
+    // edit was folded into. The server would refuse it the same way.
+    if (op.ifStamp && mine.some((o) => o.kind !== 'add' || insertStamp(o) !== op.ifStamp || o.batch !== op.batch)) return [...outbox]
     // Only an add that never went out can be cancelled outright, and only if
     // no delete is queued before it: then the row exists on the server and a
     // later add is an Undo re-adding it, so deleting again must reach it.
     const cancellable = mine.some((o) => !o.sent && o.kind === 'add') && !mine.some((o) => o.kind === 'delete')
-    const kept = outbox.filter((o) => !forBet(o, op.id) || o.sent)
+    const kept = [...before, ...after.filter((o) => !forBet(o, op.id) || o.sent)]
     return cancellable ? kept : [...kept, op]
   }
   return [...outbox, op]
+}
+
+/**
+ * Where the generation of a row that `stamp` names starts in the queue: its
+ * own add (or the batch's import holding it), when that is queued; else just
+ * past what an earlier generation of the batch left for the row (an earlier
+ * Undo's delete, an add with another stamp); else the start.
+ */
+export function generationStart<I>(outbox: readonly PendingOp<I>[], id: string, stamp: string, batch?: string): number {
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    const o = outbox[i]
+    if (o.kind === 'add' && o.id === id && o.queuedAt === stamp) return i
+    if (o.kind === 'bulk-add' && o.queuedAt === stamp && (!batch || (o.batch ?? o.opId) === batch) && o.entries.some((e) => e.id === id)) return i
+  }
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    const o = outbox[i]
+    if (o.kind === 'bulk-add' || o.id !== id || !batch) continue
+    if (o.kind === 'delete' && o.batch === batch && o.ifStamp && o.ifStamp !== stamp) return i + 1
+    if (o.kind === 'add' && o.batch === batch && o.queuedAt !== stamp) return i + 1
+  }
+  return 0
+}
+
+/**
+ * Put a change the server refused back in the queue, to be sent again. It
+ * was made before whatever has been queued for its bet since, so it must not
+ * override that: an edit adds nothing once a newer edit of the bet, a newer
+ * add of it (an Undo) or its delete is queued, as an edit carries the whole
+ * bet. Anything else is queued as a new change (see enqueueOp).
+ */
+export function requeueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: PendingOp<I>): PendingOp<I>[] {
+  if (op.kind === 'update') {
+    const newer = outbox.some(
+      (o) =>
+        o.kind !== 'bulk-add' &&
+        o.id === op.id &&
+        (o.kind === 'delete' || (o.kind === 'add' ? insertStamp(o) : o.editedAt) > op.editedAt)
+    )
+    if (newer) return [...outbox]
+  }
+  return enqueueOp(outbox, op)
+}
+
+/**
+ * Refused changes, sent again: each entry is the story of one bet (a refused
+ * add with what was queued for its bet after it, or a single change), given
+ * as new ops (new ids, never sent). It is folded together first, as it was
+ * queued, so an add the user then deleted comes to nothing again; what is
+ * left is queued without overriding what was queued since (see requeueOp).
+ */
+export function requeueRefused<I = BetInput>(outbox: readonly PendingOp<I>[], stories: readonly (readonly PendingOp<I>[])[]): PendingOp<I>[] {
+  return stories.reduce<PendingOp<I>[]>(
+    (queue, story) => story.reduce<PendingOp<I>[]>((told, op) => enqueueOp(told, op), []).reduce((q, op) => requeueOp(q, op), queue),
+    [...outbox]
+  )
 }
 
 /**
@@ -314,18 +679,33 @@ export function enqueueOp<I = BetInput>(outbox: readonly PendingOp<I>[], op: Pen
  * had it, and the refresh that follows a drain brings the winning version.
  */
 export function reconcile(server: readonly Bet[], op: PendingOp, result: Bet | null): Bet[] {
-  if (op.kind === 'delete') return server.filter((b) => b.id !== op.id)
-  if (op.kind === 'bulk-add') {
-    // The server stored exactly what we sent, so keep the local rows rather than
-    // blanking them; the refresh that follows a drain trues up the timestamps.
-    const ids = new Set(op.entries.map((e) => e.id))
-    const rest = server.filter((b) => !ids.has(b.id))
-    const added = op.entries.map(({ id, input }) => optimisticRow(id, input, op.queuedAt))
-    return sortBets([...rest, ...added])
-  }
+  // A delete the server answered with a row left it there (an Undo's, see
+  // ifStamp): the row as it is now.
+  if (op.kind === 'delete') return result ? sortBets([...server.filter((b) => b.id !== result.id), result]) : server.filter((b) => b.id !== op.id)
+  // What this attempt sent: the rows an earlier one had confirmed are
+  // already the server's (see landImport).
+  if (op.kind === 'bulk-add') return landImport(server, op, op.done ?? 0, op.entries.length)
   if (!result) return [...server]
   const rest = server.filter((b) => b.id !== result.id)
   return sortBets([...rest, result])
+}
+
+/**
+ * The rows of an import from `from` to `to`, which the server has just
+ * confirmed, into the cached server copy: the server stored them where it had
+ * no row yet, so they show as sent, and the import no longer shows them
+ * itself (see applyOutbox). From then on they are the server's: one deleted
+ * on another device goes with the next refresh instead of coming back from
+ * the import. A row the copy already has stays as it is there. The refresh
+ * that follows a drain trues up the timestamps.
+ */
+export function landImport(server: readonly Bet[], op: Extract<PendingOp, { kind: 'bulk-add' }>, from: number, to: number): Bet[] {
+  const have = new Set(server.map((b) => b.id))
+  const added = op.entries
+    .slice(from, to)
+    .filter(({ id }) => !have.has(id))
+    .map(({ id, input }) => optimisticRow(id, input, op.queuedAt))
+  return added.length > 0 ? sortBets([...server, ...added]) : [...server]
 }
 
 /**
@@ -359,12 +739,16 @@ export function loadMoveCache(userId: string): BankrollMove[] | null {
   return raw.map(hydrateMove).filter((m): m is BankrollMove => m !== null)
 }
 
-export const saveMoveCache = (userId: string, rows: readonly BankrollMove[]): void => writeJson(movesKey(userId), rows)
+export const saveMoveCache = (userId: string, rows: readonly BankrollMove[]): void => forUser(userId, () => writeExpendable(movesKey(userId), rows))
 
 /** The moves queue as stored. Its head may have gone out with its answer lost (see headAsSent). */
-export const loadMoveOutbox = (userId: string): MoveOp[] => headAsSent(readJson<MoveOp[]>(movesOutboxKey(userId)) ?? [])
+export const loadMoveOutbox = (userId: string): MoveOp[] => headAsSent(readMoveOutbox(userId))
 
-export const saveMoveOutbox = (userId: string, ops: readonly MoveOp[]): void => writeJson(movesOutboxKey(userId), ops)
+/** The moves queue exactly as stored, for a change made under its lock. */
+export const readMoveOutbox = (userId: string): MoveOp[] => readJson<MoveOp[]>(movesOutboxKey(userId)) ?? []
+
+/** Throws StorageWriteError when the queue can't be stored. */
+export const saveMoveOutbox = (userId: string, ops: readonly MoveOp[]): void => forUser(userId, () => writeDurable(movesOutboxKey(userId), ops))
 
 export const sortMoves = (rows: readonly BankrollMove[]): BankrollMove[] => [...rows].sort(byDateThenCreated)
 
@@ -382,7 +766,7 @@ export function applyMoveOutbox(server: readonly BankrollMove[], outbox: readonl
     } else if (op.kind === 'update') {
       const current = map.get(op.id)
       if (current) map.set(op.id, { ...current, date: op.input.date, amount: op.input.amount, note: op.input.note ?? '', updatedAt: op.editedAt })
-    } else if (op.kind === 'delete') {
+    } else if (op.kind === 'delete' && removes(map.get(op.id), op)) {
       map.delete(op.id)
     }
   }
@@ -396,7 +780,7 @@ export function applyMoveOutbox(server: readonly BankrollMove[], outbox: readonl
  * conflict check, or the row is gone) leaves the state as the server had it.
  */
 export function reconcileMove(server: readonly BankrollMove[], op: MoveOp, row: BankrollMove | null): BankrollMove[] {
-  if (op.kind === 'delete') return server.filter((m) => m.id !== op.id)
+  if (op.kind === 'delete') return row ? sortMoves([...server.filter((m) => m.id !== row.id), row]) : server.filter((m) => m.id !== op.id)
   if (!row) return [...server]
   return sortMoves([...server.filter((m) => m.id !== row.id), row])
 }

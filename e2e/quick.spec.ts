@@ -4,7 +4,7 @@ import { boot } from './harness'
 test.describe('quick add', () => {
   test('a pending bet is two taps when a default stake is set', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 25, oddsFormat: 'american' } })
-    await page.click('.fab')
+    await page.click('.add-bet-btn')
     const sheet = page.locator('.quick-modal')
     await expect(sheet.locator('.field input').first()).toHaveValue('25')
     // Tags come from the last bet logged (the NFL one in the seed).
@@ -31,7 +31,7 @@ test.describe('quick add', () => {
 
   test('a win without odds asks for the profit instead of guessing', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 50 } })
-    await page.click('.fab')
+    await page.click('.add-bet-btn')
     const sheet = page.locator('.quick-modal')
     await sheet.locator('.seg-btn.win').click()
     await expect(sheet.locator('.quick-profit')).toBeVisible()
@@ -39,4 +39,27 @@ test.describe('quick add', () => {
     await sheet.locator('.quick-save').click()
     await expect(page.locator('.history-card tbody tr').first().locator('.td-amt')).toHaveText('+$42.00')
   })
+})
+
+// The dev server's Network URL (plain http on the LAN, to try the app on a
+// phone) is not a secure context: the browser offers no crypto.randomUUID there.
+test('adding works where the browser offers no crypto.randomUUID', async ({ page }) => {
+  await page.addInitScript(() => {
+    delete (Crypto.prototype as { randomUUID?: unknown }).randomUUID
+  })
+  await boot(page, { backend: 'live', settings: { startingBankroll: 1000 }, moves: [] })
+  expect(await page.evaluate(() => typeof (crypto as { randomUUID?: unknown }).randomUUID)).toBe('undefined')
+
+  await page.click('.add-bet-btn')
+  const sheet = page.locator('.quick-modal')
+  await sheet.locator('.field input').first().fill('20')
+  await sheet.locator('.seg-btn.loss').click()
+  await expect(page.locator('.toast')).toContainText('Added a bet')
+
+  await page.locator('.bankroll-card').click()
+  const dialog = page.locator('.bank-modal')
+  await dialog.locator('.move-amount').fill('500')
+  await dialog.locator('.move-save').click()
+  await expect(page.locator('.toast')).toContainText('Added a deposit')
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
 })

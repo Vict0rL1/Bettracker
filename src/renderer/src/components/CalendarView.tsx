@@ -17,6 +17,25 @@ function kindOf(day: DaySummary | undefined): 'win' | 'loss' | 'push' | 'pending
   return day.total > 0 ? 'win' : day.total < 0 ? 'loss' : 'push'
 }
 
+/**
+ * How big a day's P/L is next to the month's other decided days, by thirds:
+ * 1 the smallest third, 3 the largest. The tint deepens with it, so the big
+ * days stand out at a glance. `sizes` is every decided day's |P/L| up to
+ * today. Ties share a bucket by their middle rank, so a month of one decided
+ * day, or of equal days, sits in the middle rather than reading as all big.
+ */
+function heatOf(sizes: readonly number[], total: number): 1 | 2 | 3 {
+  const size = Math.abs(total)
+  let below = 0
+  let upTo = 0
+  for (const s of sizes) {
+    if (s < size) below++
+    if (s <= size) upTo++
+  }
+  const p = (below + upTo) / 2 / sizes.length
+  return p <= 1 / 3 ? 1 : p <= 2 / 3 ? 2 : 3
+}
+
 export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
   const { t } = useLang()
   const money = useMoney()
@@ -27,6 +46,19 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
   }, [ym])
 
   const today = todayStr()
+
+  // The month's decided days so far (a result, not even), for heatOf. Days
+  // still to come are never tinted, so they don't count.
+  const sizes = useMemo(() => {
+    const out: number[] = []
+    for (let d = 1; d <= daysInMonth(ym); d++) {
+      const date = toDateStr(ym.year, ym.month, d)
+      if (date > today) break
+      const s = dayMap.get(date)
+      if (s && s.scored > 0 && s.total !== 0) out.push(Math.abs(s.total))
+    }
+    return out
+  }, [dayMap, ym, today])
   const weekdays = t('cal.weekdays').split(',')
 
   return (
@@ -57,8 +89,9 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
             parts.push(t('cal.emptyTip'))
           }
           const classes = ['cal-cell', kind, date === today ? 'is-today' : '', date > today ? 'is-future' : ''].filter(Boolean).join(' ')
+          const heat = summary && date <= today && (kind === 'win' || kind === 'loss') ? heatOf(sizes, summary.total) : undefined
           return (
-            <button type="button" key={date} className={classes} title={parts.join(' · ')} onClick={() => onDayClick(date)}>
+            <button type="button" key={date} className={classes} data-heat={heat} title={parts.join(' · ')} onClick={() => onDayClick(date)}>
               <span className="cal-top">
                 <span className="cal-day">{day}</span>
                 {summary && summary.count > 1 && (

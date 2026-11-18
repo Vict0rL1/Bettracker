@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, move, reload, SEED, USER } from './harness'
+import { boot, entry, menu, move, reload, SEED, USER } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const now = new Date()
@@ -13,8 +13,8 @@ test.describe('bankroll', () => {
     // A device that has loaded its settings (none changed yet) and its (empty)
     // list of deposits and withdrawals before going offline.
     await boot(page, { settings: {}, moves: [] })
-    const mini = page.locator('.mini-bankroll')
-    await expect(mini.locator('.mini-value')).toHaveText('—')
+    const mini = page.locator('.bankroll-card')
+    await expect(mini.locator('.key-value')).toHaveText('—')
     await mini.click()
     const dialog = page.locator('.bank-modal')
     await expect(dialog).toHaveAttribute('aria-modal', 'true')
@@ -48,11 +48,11 @@ test.describe('bankroll', () => {
     await expect(dialog.locator('.bank-total dd')).toHaveText('$1,559.50')
 
     await page.keyboard.press('Escape')
-    await expect(mini.locator('.mini-value')).toHaveText('$1,560')
+    await expect(mini.locator('.key-value')).toHaveText('$1,560')
 
     // Everything was kept on the device.
     await reload(page)
-    await expect(mini.locator('.mini-value')).toHaveText('$1,560')
+    await expect(mini.locator('.key-value')).toHaveText('$1,560')
     const queued = await page.evaluate((uid) => localStorage.getItem(`bettracker:moves-outbox:${uid}`), USER.id)
     expect(queued).toContain('"amount":500')
     expect(queued).toContain('"amount":-120.5')
@@ -60,7 +60,7 @@ test.describe('bankroll', () => {
 
   test('a stake above 5% of the bankroll is flagged, and never blocked', async ({ page }) => {
     await boot(page, { settings: START, moves: [] })
-    await page.click('.fab')
+    await page.click('.add-bet-btn')
     const sheet = page.locator('.quick-modal')
     const note = sheet.locator('.stake-note')
     const lost = sheet.locator('.seg-btn.loss')
@@ -86,7 +86,8 @@ test.describe('bankroll', () => {
 
   test('the day form measures a bet still riding, not one settled in the past', async ({ page }) => {
     await boot(page, { settings: START, moves: [] })
-    await page.locator('.history-card tbody tr').last().locator('.td-actions .btn-icon').first().click()
+    // The whole day (the date), with the form for a new bet.
+    await page.locator('.history-card tbody tr').last().locator('.td-day').click()
     const modal = page.locator('.day-modal')
     await modal.locator('.field input').first().fill('100')
     // Aug 1 is past and the form says WON: history, nothing to measure.
@@ -99,7 +100,7 @@ test.describe('bankroll', () => {
     // Lost $60 today: the bankroll is $1,120 after it, $1,180 before.
     const lost = entry({ id: 'x', date: today, amount: -60, stake: 60, sport: 'MLB' })
     await boot(page, { entries: [...SEED, lost], settings: START, moves: [] })
-    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,120')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('$1,120')
     await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
     const modal = page.locator('.day-modal')
     await modal.locator('.bet-item .btn-icon').first().click()
@@ -130,7 +131,7 @@ test.describe('bankroll', () => {
     await expect(page.locator('.bank-modal')).toHaveCount(1)
     await page.keyboard.press('Escape')
 
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await expect(page.locator('.settings-bankroll-value')).toHaveText('Not set')
     await page.locator('.settings-bankroll .btn').click()
     // One dialog at a time.
@@ -148,10 +149,10 @@ test.describe('bankroll', () => {
     await expect(badge).toHaveText('Synced')
     // The read found the table missing (the tile resolves from '…' once it
     // has), and that is not an error.
-    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,180')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('$1,180')
     expect(await page.locator('.toast').count()).toBe(0)
 
-    await page.locator('.mini-bankroll').click()
+    await page.locator('.bankroll-card').click()
     const dialog = page.locator('.bank-modal')
     await dialog.locator('.move-amount').fill('500')
     await dialog.locator('.move-save').click()
@@ -163,7 +164,7 @@ test.describe('bankroll', () => {
 
     // Signing out now would delete it from this device: the first click says so.
     const signOut = page.locator('.btn-signout')
-    await signOut.click()
+    await menu(page, '.btn-signout')
     await expect(signOut).toHaveText('Sign out anyway?')
     await expect(page.locator('.history-card')).toHaveCount(1)
 
@@ -182,33 +183,33 @@ test.describe('bankroll', () => {
   test('a bet logged today counts once it settles, not while it is riding', async ({ page }) => {
     const riding = entry({ id: 'r', date: today, amount: 0, status: 'pending', stake: 40 })
     await boot(page, { entries: [...SEED, riding], settings: START, moves: [] })
-    const mini = page.locator('.mini-bankroll')
-    await expect(mini.locator('.mini-value')).toHaveText('$1,180')
-    await expect(mini.locator('.mini-sub')).toHaveText('$40.00 riding')
+    const mini = page.locator('.bankroll-card')
+    await expect(mini.locator('.key-value')).toHaveText('$1,180')
+    await expect(mini.locator('.key-sub')).toHaveText('$40.00 riding')
     // Settled as a loss from the pending panel: now it counts.
-    await page.locator('.pending-btn').click()
+    await menu(page, '.pending-btn')
     await page.locator('.pend-item .settle-btn.loss').first().click()
-    await expect(mini.locator('.mini-value')).toHaveText('$1,140')
+    await expect(mini.locator('.key-value')).toHaveText('$1,140')
   })
 
   test('a device that has not loaded its data shows the bankroll as not known yet, not a wrong figure', async ({ page }) => {
     // Offline, never read its deposits and withdrawals.
     await boot(page, { settings: START })
-    const mini = page.locator('.mini-bankroll')
-    await expect(mini.locator('.mini-value')).toHaveText('…')
-    await expect(mini.locator('.mini-sub')).toHaveText('loads when online')
+    const mini = page.locator('.bankroll-card')
+    await expect(mini.locator('.key-value')).toHaveText('…')
+    await expect(mini.locator('.key-sub')).toHaveText('loads when online')
     await mini.click()
     await expect(page.locator('.bank-modal .move-section .hint')).toHaveText('Your deposits and withdrawals load the next time you’re online.')
   })
 
   test('nor before its settings have loaded (the starting bankroll is one)', async ({ page }) => {
     await boot(page, { moves: [] })
-    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('…')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('…')
   })
 
   test('closing the dialog never sends back a start nobody typed', async ({ page }) => {
     await boot(page, { backend: 'live', settings: START, moves: [] })
-    await page.locator('.mini-bankroll').click()
+    await page.locator('.bankroll-card').click()
     const start = page.locator('.bank-modal .bank-start input')
     await expect(start).toHaveValue('1000')
     // Another device sets the start to $1,500; this one hears about it while the dialog is open.
@@ -221,7 +222,7 @@ test.describe('bankroll', () => {
     const writes = await page.evaluate(() => Number(localStorage.getItem('e2e:writes') ?? 0))
     await page.keyboard.press('Escape')
     await expect(page.locator('.bank-modal')).toHaveCount(0)
-    await expect(page.locator('.mini-bankroll .mini-value')).toHaveText('$1,680')
+    await expect(page.locator('.bankroll-card .key-value')).toHaveText('$1,680')
     expect(await page.evaluate(() => Number(localStorage.getItem('e2e:writes') ?? 0))).toBe(writes)
     const row = await page.evaluate(() => JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { starting_bankroll: number })
     expect(row.starting_bankroll).toBe(1500)

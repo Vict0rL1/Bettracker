@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import { supabaseEnvCheck } from './src/shared/supabaseEnv'
 
 export default defineConfig({
   main: {
@@ -9,6 +10,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
   renderer: {
-    plugins: [react()]
+    // The installer carries .env too: the same check as the web build.
+    plugins: [supabaseEnvCheck(), react()]
   }
 })

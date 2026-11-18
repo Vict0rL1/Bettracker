@@ -1,19 +1,44 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from './AuthProvider'
 import { SparkIcon } from '../components/icons'
 import { useLang } from '../lib/i18n'
+import { authErrorKey, linkError, type AuthFailure } from './authErrors'
 
-type Mode = 'in' | 'up'
+/** Sign in, create an account, or ask for a link to set a new password. */
+type Mode = 'in' | 'up' | 'reset'
 
-export default function Login() {
+/**
+ * `onCancel`: shown again after a session ended, over this device's data;
+ * leaving goes back to it, changes still queued.
+ */
+export default function Login({ onCancel }: { onCancel?: () => void } = {}) {
   const { t } = useLang()
-  const { signIn, signUp } = useAuth()
+  const { signIn, signUp, resetPassword } = useAuth()
   const [mode, setMode] = useState<Mode>('in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Kept as Supabase gave it and put into words when shown, so it follows a
+  // change of language.
+  // An email link that didn't work opens the app with the reason in the address.
+  const [error, setError] = useState<AuthFailure | null>(() => linkError(window.location.hash))
   const [notice, setNotice] = useState<string | null>(null)
+
+  // Said once: a reload shouldn't say it again.
+  useEffect(() => {
+    if (linkError(window.location.hash)) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+  }, [])
+
+  const switchMode = (next: Mode): void => {
+    setMode(next)
+    setError(null)
+    setNotice(null)
+  }
+
+  const errorText = (e: AuthFailure): string => {
+    const key = authErrorKey(e)
+    return key ? t(key) : e.message || t('common.error')
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -23,6 +48,10 @@ export default function Login() {
     try {
       if (mode === 'in') {
         await signIn(email.trim(), password)
+      } else if (mode === 'reset') {
+        await resetPassword(email.trim())
+        // The same words whether or not there is such an account: nothing to learn from them.
+        setNotice(t('login.resetSent', { email: email.trim() }))
       } else {
         const { needsConfirmation } = await signUp(email.trim(), password)
         if (needsConfirmation) {
@@ -31,7 +60,7 @@ export default function Login() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.error'))
+      setError(err instanceof Error ? (err as Error & AuthFailure) : { message: '' })
     } finally {
       setBusy(false)
     }
@@ -48,44 +77,56 @@ export default function Login() {
             Bet<span>Tracker</span>
           </h1>
         </div>
-        <p className="auth-tag">{mode === 'in' ? t('login.tagIn') : t('login.tagUp')}</p>
+        <p className="auth-tag">{mode === 'in' ? t('login.tagIn') : mode === 'up' ? t('login.tagUp') : t('login.tagReset')}</p>
 
         <label className="field">
           <span className="field-label">{t('login.email')}</span>
           <input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
         </label>
 
-        <label className="field">
-          <span className="field-label">{t('login.password')}</span>
-          <input
-            type="password"
-            autoComplete={mode === 'in' ? 'current-password' : 'new-password'}
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder={mode === 'up' ? t('login.passwordHint') : '••••••••'}
-          />
-        </label>
+        {mode !== 'reset' && (
+          <label className="field">
+            <span className="field-label">{t('login.password')}</span>
+            <input
+              type="password"
+              autoComplete={mode === 'in' ? 'current-password' : 'new-password'}
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={mode === 'up' ? t('login.passwordHint') : '••••••••'}
+            />
+          </label>
+        )}
 
-        {error && <div className="auth-error">{error}</div>}
-        {notice && <div className="auth-notice">{notice}</div>}
+        {error && (
+          <div className="auth-error" role="alert">
+            {errorText(error)}
+          </div>
+        )}
+        {notice && (
+          <div className="auth-notice" role="status">
+            {notice}
+          </div>
+        )}
 
         <button type="submit" className="btn btn-primary auth-submit" disabled={busy}>
-          {busy ? t('login.working') : mode === 'in' ? t('login.signIn') : t('login.create')}
+          {busy ? t('login.working') : mode === 'in' ? t('login.signIn') : mode === 'up' ? t('login.create') : t('login.sendReset')}
         </button>
 
-        <button
-          type="button"
-          className="auth-toggle"
-          onClick={() => {
-            setMode(mode === 'in' ? 'up' : 'in')
-            setError(null)
-            setNotice(null)
-          }}
-        >
+        {mode === 'in' && (
+          <button type="button" className="auth-toggle login-forgot" onClick={() => switchMode('reset')}>
+            {t('login.forgot')}
+          </button>
+        )}
+        <button type="button" className="auth-toggle login-switch" onClick={() => switchMode(mode === 'in' ? 'up' : 'in')}>
           {mode === 'in' ? t('login.needAccount') : t('login.haveAccount')}
         </button>
+        {onCancel && (
+          <button type="button" className="auth-toggle login-back" onClick={onCancel}>
+            {t('login.back')}
+          </button>
+        )}
       </form>
     </div>
   )

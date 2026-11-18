@@ -94,10 +94,13 @@ export default function Breakdown({ bets, oddsFormat }: Props) {
               </div>
               <div className="bd-meta">
                 <span>
-                  {tn('bet', r.bets)} · {r.wl.wins}
-                  {t('record.w')}–{r.wl.losses}
-                  {t('record.l')}
-                  {r.wl.pushes > 0 ? `–${r.wl.pushes}${t('record.p')}` : ''}
+                  {tn('bet', r.bets)} ·{' '}
+                  <span className="bd-record">
+                    {r.wl.wins}
+                    {t('record.w')}–{r.wl.losses}
+                    {t('record.l')}
+                    {r.wl.pushes > 0 ? `–${r.wl.pushes}${t('record.p')}` : ''}
+                  </span>
                   {r.pending > 0 ? t('bd.pending', { n: r.pending }) : ''}
                 </span>
                 <span

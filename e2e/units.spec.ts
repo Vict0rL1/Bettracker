@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, reload, USER } from './harness'
+import { boot, menu, reload, USER } from './harness'
 
 // The usual seed: +200 (no stake), −50 on 50, +30 on 60. At $20 a unit:
 // lifetime +$180 is +9.00u, and ROI is −$20 on $110 staked: −1.00u on 5.5u.
@@ -8,7 +8,7 @@ const UNITS = { unitSize: 20, showUnits: true }
 test.describe('units', () => {
   test('every amount shows in units, while the boxes still take dollars', async ({ page }) => {
     await boot(page, { settings: UNITS })
-    const lifetime = page.locator('.stat-card').nth(1)
+    const lifetime = page.locator('.pl-card')
     await expect(lifetime.locator('.life-value')).toHaveText('+9.00u')
     // Hovering the figure gives the exact dollars.
     await expect(lifetime.locator('.life-value')).toHaveAttribute('title', '+$180.00')
@@ -18,7 +18,7 @@ test.describe('units', () => {
     await expect(page.locator('.history-card tbody tr').first().locator('.td-stake:not(.td-odds)')).toHaveText('3u')
 
     // The stake box is still in dollars; the note under it says what that is in units.
-    await page.click('.fab')
+    await page.click('.add-bet-btn')
     const sheet = page.locator('.quick-modal')
     await expect(sheet.locator('.amount-cur').first()).toHaveText('$')
     await sheet.locator('.field input').first().fill('30')
@@ -26,7 +26,7 @@ test.describe('units', () => {
     await page.keyboard.press('Escape')
 
     // Back to dollars: everything follows at once, and the choice survives a reload.
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-units .seg-btn', { hasText: 'Dollars' }).click()
     await page.keyboard.press('Escape')
     await expect(lifetime.locator('.life-value')).toHaveText('+$180.00')
@@ -36,7 +36,7 @@ test.describe('units', () => {
 
   test('units need a unit size; clearing it turns units off with it', async ({ page }) => {
     await boot(page)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     const unitsBtn = dialog.locator('.settings-units .seg-btn', { hasText: 'Units' })
     await expect(unitsBtn).toBeDisabled()
@@ -47,20 +47,21 @@ test.describe('units', () => {
     await size.press('Enter')
     await expect(unitsBtn).toBeEnabled()
     await unitsBtn.click()
-    await expect(page.locator('.stat-card').nth(1).locator('.life-value')).toHaveText('+7.20u')
+    await expect(page.locator('.pl-card').locator('.life-value')).toHaveText('+7.20u')
 
     // Cleared: back to dollars, and the queued change says so, so setting a size later doesn't flip units back on.
     await size.fill('')
     await size.press('Enter')
-    await expect(page.locator('.stat-card').nth(1).locator('.life-value')).toHaveText('+$180.00')
-    const queued = await page.evaluate((uid) => localStorage.getItem(`bettracker:settings-outbox:${uid}`), USER.id)
-    expect(queued).toContain('"unitSize":null')
-    expect(queued).toContain('"showUnits":false')
+    await expect(page.locator('.pl-card').locator('.life-value')).toHaveText('+$180.00')
+    // On screen at once; in storage a moment later.
+    const queued = () => page.evaluate((uid) => localStorage.getItem(`bettracker:settings-outbox:${uid}`) ?? '', USER.id)
+    await expect.poll(queued).toContain('"unitSize":null')
+    expect(await queued()).toContain('"showUnits":false')
   })
 
   test('closing Settings sends back no box nobody typed in, even after the settings changed elsewhere', async ({ page }) => {
     await boot(page, { backend: 'live', settings: { lossLimit: 100, unitSize: 20 } })
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     const dialog = page.locator('.settings-modal')
     await expect(dialog.locator('.settings-loss input')).toHaveValue('100')
     // Another device raises the limit and changes the unit while this dialog is open.
@@ -81,11 +82,11 @@ test.describe('units', () => {
 
   test('a value typed into a settings box is kept when the dialog is closed with Escape', async ({ page }) => {
     await boot(page)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await page.locator('.settings-modal .settings-unit input').fill('10')
     await page.keyboard.press('Escape')
     await expect(page.locator('.settings-modal')).toHaveCount(0)
-    await page.click('.settings-btn')
+    await menu(page, '.settings-btn')
     await expect(page.locator('.settings-modal .settings-unit input')).toHaveValue('10')
     await expect(page.locator('.settings-units .seg-btn', { hasText: 'Units' })).toBeEnabled()
   })

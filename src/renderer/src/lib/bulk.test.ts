@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { bet } from '../test-utils'
 import { retagPlan, settlePlan, toInput } from './bulk'
+import { normalizeInput } from './validate'
 
 describe('toInput', () => {
   it('carries every editable field, closing odds included', () => {
@@ -67,5 +68,16 @@ describe('settlePlan', () => {
   it('a push or void needs nothing', () => {
     const plan = settlePlan([noOdds], 'void')
     expect(plan.next[0].input).toMatchObject({ status: 'void', amount: 0 })
+  })
+})
+
+describe('settlePlan and free bets', () => {
+  it('leaves a free bet’s win alone (its profit can’t be worked out) and settles its loss at $0', () => {
+    const free = bet({ status: 'pending', stake: 0, odds: 2 })
+    expect(settlePlan([free], 'won')).toMatchObject({ next: [], skipped: 1 })
+    const lost = settlePlan([free], 'lost')
+    expect(lost.next[0].input.status).toBe('lost')
+    expect(lost.next[0].input.amount === 0).toBe(true)
+    expect(normalizeInput(lost.next[0].input)).toMatchObject({ status: 'lost', amount: 0 })
   })
 })

@@ -2,18 +2,21 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import SetupNeeded from './components/SetupNeeded'
+import DemoBanner from './components/DemoBanner'
 import { AuthProvider } from './auth/AuthProvider'
-import { isConfigured } from './lib/supabase'
+import { envProblems, isConfigured } from './lib/supabase'
 import './index.css'
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
+    {/* A build-time constant: outside `npm run demo` the banner is not in the bundle. */}
+    {import.meta.env.MODE === 'demo' && <DemoBanner />}
     {isConfigured ? (
       <AuthProvider>
         <App />
       </AuthProvider>
     ) : (
-      <SetupNeeded />
+      <SetupNeeded problems={envProblems} />
     )}
   </StrictMode>
 )

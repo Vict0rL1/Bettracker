@@ -52,21 +52,74 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    `supabase/migrations/002_stake_and_tags.sql` → `003_odds_and_status.sql`
    → `004_user_settings_and_closing_odds.sql` → `005_bankroll_moves.sql`
    (la 005, ingresos y retiradas, no depende de la 004: pueden ir en
-   cualquier orden). Todas son aditivas y re-ejecutables (`if not exists`,
+   cualquier orden) → `006_lost_free_bets.sql` (después de la 003: solo
+   sustituye su trigger para que una apuesta gratis perdida, stake 0 y
+   resultado 0, siga perdida al editarla; sin ella todo funciona, pero esa
+   edición la convierte en push) → `007_deleted_rows.sql` (después de la
+   005: una fila borrada ya no vuelve cuando otro dispositivo reenvía un alta
+   cuya respuesta se perdió; sin ella todo funciona, pero ese reintento la
+   resucita) → `008_expenses.sql` (después de la 007 y la 004, y se para con
+   un mensaje si falta alguna: las tablas de gastos, tarjetas y presupuestos
+   mensuales y la moneda de los gastos en `user_settings`; sin ella las
+   apuestas funcionan igual, y la vista Gastos avisa y guarda lo que se añada
+   en el dispositivo). Todas son aditivas y re-ejecutables (`if not exists`,
    `drop … if exists` antes de cada constraint, policy y trigger).
    `supabase/schema.sql` contiene lo mismo acumulado por si prefieres
    ejecutar un solo archivo. La 001 ya estaba aplicada antes de este
    trabajo.
-2. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
+2. **Lectura con IA (opcional)**, después de la 008 y antes de publicar la
+   app. Es la Edge Function `extract-expenses`; se despliega con la CLI de
+   Supabase desde la raíz del repositorio (importa
+   `src/shared/expenseExtraction.ts`, así que el editor del panel no sirve).
+   Pasos, coste y privacidad en el README, «AI reading of receipts
+   (optional)»; en corto:
+
+   ```bash
+   npx supabase@3.2.0 login
+   # supabase/functions/.env (ignorado por git), con:
+   #   ANTHROPIC_API_KEY=<clave de un workspace de Anthropic solo para esto, con límite de gasto mensual>
+   #   EXTRACT_ALLOWED_USERS=<tu id de usuario de Supabase>
+   npx supabase@3.2.0 secrets set --remote=<ref> --env-file supabase/functions/.env
+   rm supabase/functions/.env
+   npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-jwt
+   ```
+
+   `EXTRACT_ALLOWED_USERS` es la lista de quién puede escanear (ids, o
+   correos confirmados, separados por comas). Sin ella nadie puede; `*` deja
+   a cualquier usuario con sesión, y nunca debe usarse con el registro
+   abierto (Authentication → Sign In / Providers → «Allow new users to sign
+   up»). La clave va solo en los secretos de la función: nunca en `.env` ni
+   en una variable `VITE_` (el build se para si la ve). El límite de gasto
+   del workspace es el único tope duro. Sin desplegar la función, escanear
+   dice que la lectura con IA no está configurada y escribir el gasto a mano
+   funciona. La CLI 3.2.0 acepta `supabase/config.toml` (comprobado en la
+   etapa 2) y los parámetros de arriba (etapa 4); no se ha desplegado nada.
+3. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
    el proyecto que ya existe: Settings → Git, conectar este repositorio y
    poner el directorio raíz en `/`. Así se conservan el dominio y las
    variables. Un dominio nuevo dejaría la app instalada en el móvil apuntando
    al viejo, con lo guardado sin conexión allí, y obligaría a cambiar las URL
-   de redirección en Supabase Auth. El instalador de escritorio se construye
+   de redirección en Supabase Auth. En Supabase, Authentication → URL
+   Configuration: **Site URL** = la dirección de la app publicada, y en
+   **Redirect URLs** las demás desde las que te registres
+   (`http://localhost:5173`); si no, el correo de confirmación lleva a
+   `http://localhost:3000` (la cuenta queda confirmada igual). La misma
+   regla vale para el enlace de **¿Olvidaste la contraseña?**: comprobar
+   en Supabase que la dirección publicada está en Site URL o en Redirect
+   URLs y que la plantilla **Reset Password** (Authentication → Emails)
+   está activa. El correo integrado de Supabase envía muy pocos mensajes
+   por hora: para uso real, configurar SMTP. Nada de esto se ha probado
+   contra el proyecto real (no hay acceso desde aquí y no se enviaron
+   correos): está pendiente una prueba en vivo. Si está en
+   Netlify subida a mano (Netlify Drop): `npm run build` con el `.env` bueno
+   y arrastrar `dist/` a
+   la página **Deploys** del sitio que ya existe; soltarlo en la lista de
+   sitios crea otro, con otra dirección. El build comprueba antes la URL y
+   la clave (ver "Decisiones"). El instalador de escritorio se construye
    con `npm run build:desktop`.
-3. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
+4. **Actualizar cada dispositivo**: la PWA se actualiza sola al abrirla con
    conexión (una recarga basta); el escritorio hay que reinstalarlo.
-4. **Revisar la feature 4** (unidades y bankroll, su propio PR) y las
+5. **Revisar la feature 4** (unidades y bankroll, su propio PR) y las
    preguntas que deja abiertas: ver "Feature 4 · preguntas abiertas"
    abajo.
 
@@ -115,19 +168,63 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
   ejemplo, solo cambia la nota), sigue pendiente, así que un push de una
   pendiente solo se puede registrar desde una versión actualizada. Por eso,
   actualizar todos los dispositivos pronto.
+- **La 007 tampoco hace falta para arrancar, y conviene aplicarla antes.**
+  Sin ella la app nueva funciona igual (Deshacer de una importación o
+  restauración ya borra solo lo que escribió, comprobando el sello en el
+  mismo `delete`), pero un reintento de un alta cuya respuesta se perdió
+  puede devolver una fila borrada en otro dispositivo. La 007 crea
+  `public.deleted_rows` (sin políticas: ningún cliente la lee ni la
+  escribe), un trigger `after delete` que guarda el último `updated_at` de
+  cada fila borrada y un trigger `before insert` que deja pasar en silencio
+  (sin fila, sin error) un alta de ese id que no sea más nueva. Un Deshacer
+  de un borrado sella su alta justo después (`readdStamp`) y entra. Las
+  versiones antiguas no envían `updated_at` en el alta: reciben `now()` y
+  entran como antes. Borrar una cuenta borra también sus registros.
+  Reversión, si hiciera falta: `drop trigger entries_skip_deleted on
+  public.entries; drop trigger bankroll_moves_skip_deleted on
+  public.bankroll_moves;` (y los dos `*_remember_deleted`); la tabla puede
+  quedarse o borrarse después, no la usa nada más.
+- **La 008 tampoco hace falta para arrancar.** Sin ella, leer gastos,
+  tarjetas o presupuestos encuentra la tabla ausente y no es un error (no sale
+  aviso; la vista Gastos muestra un aviso fijo que dice que falta la 008); lo
+  que se añada espera en su cola con «Falta actualizar · n en cola» y un solo
+  aviso para las tres tablas, y se envía en cuanto corre la 008. Los
+  presupuestos y la moneda se quedan desactivados hasta que una lectura o una
+  escritura de esas tablas funcione en esa sesión (prueba positiva: sin
+  conexión no se sabe y tampoco se activan), porque una moneda enviada a una
+  base sin la columna frenaría el resto de ajustes. Una restauración tampoco
+  toca la moneda sin esa prueba.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
 
 ## Cómo probar
 
+Para verla sin Supabase ni `.env`: `npm run demo` (http://localhost:5172).
+Entra ya con sesión y sin datos, contra un backend falso que guarda todo en
+el navegador; funciona igual que contra Supabase, sin conexión incluido.
+Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic).
+Tras cerrar sesión, cualquier email y una contraseña de 6 caracteres o más
+vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
+
 ```bash
 npm ci
-npm test            # 429 tests unitarios (vitest)
+npm test            # 1270 tests unitarios en 54 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 57 comprobaciones Playwright, sin backend
+npm run test:e2e    # 251 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
+# La Edge Function de la lectura con IA (opcional; npx descarga Deno):
+npx --yes deno@2.9.6 check --config supabase/functions/extract-expenses/deno.json supabase/functions/extract-expenses/index.ts
 ```
+
+El `deno check` de la función se ejecutó en la etapa 2 de los gastos y pasó
+(Deno 2.9.6, contra los tipos reales de `@anthropic-ai/sdk@1.8.0` y
+`@supabase/supabase-js@2.110.7`; una copia con campos mal escritos falló con
+10 errores, así que comprueba de verdad). Detrás de un proxy con certificado
+propio hace falta `DENO_CERT` apuntando a él. No está en CI todavía (ver
+pendientes en `docs/expenses-2026-11.md`). Ninguna prueba llama a Anthropic
+ni a Supabase: la lectura con IA de la demo y de la suite e2e la contesta el
+servidor falso.
 
 CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
 con gitleaks, tests y build, el esquema SQL contra un Postgres de usar y
@@ -135,13 +232,14 @@ tirar, y la suite e2e.
 
 `supabase/tests/run.sh` monta la base de tres formas: (A) el esquema con el
 que se publicó la app (`supabase/tests/original_schema.sql`) con filas,
-subido con las migraciones 001→005, cada una dos veces; (B) lo mismo subido
+subido con las migraciones 001→008, cada una dos veces; (B) lo mismo subido
 con `schema.sql` dos veces; (C) una instalación desde cero con `schema.sql`
 dos veces y todas las migraciones encima, con filas escritas como las
 escribe una versión antigua (sin `status`). En A y B comprueba el backfill;
 en C, el trigger; en las tres, las escrituras de versiones antiguas y
-nuevas, las constraints y, para `bankroll_moves`, la regla de conflicto, la
-cascada al borrar el usuario y las policies ejercidas como un usuario
+nuevas, las constraints y, para `bankroll_moves` y las tres tablas de gastos
+(sección 11 de `checks.sql`), la regla de conflicto, la cascada al borrar el
+usuario y las policies ejercidas como un usuario
 conectado (rol `authenticated`, que crea `stubs.sql`; por eso necesita un
 superusuario, como el `postgres` de CI: hace falta crear el rol y luego
 poder hacer `set role` a él). Luego compara las tres estructuras (tablas,
@@ -158,14 +256,261 @@ mock de Supabase (`window.__supabaseMock`) más una caché sembrada en
 app. Con `backend: 'live'`, `'behind'` o `'behind-005'` el mock es un
 pequeño servidor en memoria (apuestas, ajustes e ingresos/retiradas; altas,
 ediciones con la regla de conflicto, borrados, upserts; latencia y caída de
-conexión opcionales) para probar la sincronización de verdad. `'behind'` es
+conexión opcionales) para probar la sincronización de verdad. Es el mismo
+que usa `npm run demo` (`src/renderer/src/demo/fakeSupabase.ts`), con su
+estado bajo `e2e:` en vez de `demo:`; `e2e/demo.spec.ts` prueba la demo tal
+cual se construye (`npm run demo:serve`, en el puerto 4182). `'behind'` es
 una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
-(`e2e:migrated-005` la "ejecuta"). La opción `moves` siembra la caché de
+(`e2e:migrated-005` la "ejecuta"); `'behind-008'`, con la 004, la 005 y la
+007 y sin la 008 (`e2e:migrated-008`). La opción `moves` siembra la caché de
 ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
-cargado). En este entorno hizo falta `NO_PROXY='*'` para que
+cargado); `expenses`, `cards` y `budgets`, las de gastos, tarjetas y
+presupuestos (con `moves` y sin ellas valen `[]`; `null`, ninguna caché);
+`view: 'expenses'` abre en la vista Gastos; `ai` dirige la lectura con IA
+falsa (`rows`, `fail` con un código, `hold`, `ignoreAbort`), y el harness
+exporta `TINY_PNG`, `scanFile` y `bigPng` (un recibo de 1200×1600 dibujado en
+la página). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Gastos (noviembre 2026)
+
+Petición del usuario: una pestaña para los gastos del día a día (un café,
+cosas), con presupuesto, sus dos tarjetas por separado y un gráfico que las
+una, y el registro a mano o con IA a partir de la foto de una factura o de
+una captura de Apple Wallet. Detalle completo en `docs/expenses-2026-11.md`.
+En corto:
+
+- **Vista Gastos** junto a Apuestas (pestañas bajo la cabecera, recordadas
+  por dispositivo; solo se monta la activa). En ella el botón principal es
+  **Añadir gasto**, y `T` y el **+** del móvil abren la hoja de gasto. Mes
+  con flechas (compartido con el calendario de apuestas), resumen (gastado,
+  presupuesto restante, por tarjeta, media diaria y proyección), un gráfico
+  que apila el gasto de cada tarjeta (acumulado contra la línea del
+  presupuesto, o por día), barras de presupuestos, desglose por categoría y
+  la lista (tabla en escritorio, tarjetas en el móvil; búsqueda y filtros).
+- **Gasto**: fecha, importe (negativo = reembolso, en verde), tarjeta
+  opcional, comercio, una de 11 categorías fijas, nota y origen (a mano o
+  IA). Se escribe como se teclea («4,50», «1.234,50», «12.500» en COP).
+  Deshacer en cada alta, edición y borrado; todo funciona sin conexión.
+- **Tarjetas** (las que se quieran; nombre, últimos 4, crédito o débito);
+  borrar una con gastos la archiva. **Presupuestos** mensuales: total, por
+  tarjeta y por categoría, ámbar desde el 80 % y rojo al pasarse, nunca
+  bloquean. **Moneda** de los gastos a elegir (USD por defecto); cambiarla
+  no convierte nada y las apuestas siguen en dólares.
+- **Lectura con IA**: «Escanear recibo» envía la imagen (reducida a 1600 px,
+  JPEG) a la Edge Function `extract-expenses`, que la lee con Claude Opus 5.5
+  con la clave de Anthropic del proyecto (solo en sus secretos) y devuelve los
+  gastos para **revisarlos** antes de guardar nada: tarjeta reconocida por
+  sus 4 últimos dígitos, posibles duplicados desmarcados, filas dudosas
+  abiertas. La imagen no se guarda en ningún sitio. Unos 3 a 10 céntimos de
+  dólar por escaneo.
+- **Copia completa**: el archivo incluye ahora `expenses`, `expenseCards`,
+  `expenseBudgets` y `settings.expenseCurrency` (sigue siendo la versión 1;
+  una copia anterior sigue valiendo y una app anterior los ignora). Esta
+  versión los lee y los cuenta pero **aún no los restaura**: la revisión lo
+  dice. «Descargar copia» espera a que carguen gastos, tarjetas y
+  presupuestos; «Restaurar» solo a apuestas, movimientos y ajustes. **CSV de
+  gastos** aparte, desde la lista; el CSV de apuestas no cambia.
+- **Datos**: migración 008 (tres tablas con RLS, realtime y los triggers de
+  la 007; `card_id` sin clave foránea; ids de presupuesto deterministas) y
+  una capa de sincronización genérica para las tres (`data/useRowSync.ts`),
+  con las mismas reglas que apuestas y movimientos.
+
+**Cómo se probó.** Unitarios de toda la lógica nueva (sincronización por
+tabla con `describe.each`, gasto del mes y proyección, presupuestos, moneda,
+lectura de importes, tarjeta por últimos dígitos, duplicados, CSV, imagen,
+el módulo compartido de la IA con su prompt, esquema y validación, el
+cliente de la función, la copia); `checks.sql` sección 11 contra Postgres;
+e2e: `expenses.spec.ts` (12: pestañas, alta/edición/borrado sin conexión,
+sincronización y cierre de sesión con una escritura en vuelo, tarjetas,
+presupuestos, moneda, gráfico, escaneo con duplicado y Deshacer sin guardar
+la imagen, fallos de la IA, cancelar a media lectura, antes de la 008, la
+revisión a 320 px en es y en), `expenses-sync.spec.ts` (3), y añadidos en
+`mobile.spec.ts` (la vista y sus diálogos a 320 y 390 px, campos de 16 px),
+`demo.spec.ts` (escaneo de ejemplo; «Empezar de cero» vacía los gastos) y
+`backup.spec.ts` (la copia lleva los gastos; la moneda solo se ofrece con la
+008 probada). La lectura con IA nunca se ha probado contra Anthropic de
+verdad, ni la 008 ni la función contra el proyecto real: no hay acceso desde
+aquí.
+
+**De paso**, en las apuestas: al pulsar el lápiz de una apuesta en el
+diálogo del día, el foco saltaba a la casilla del stake un instante después
+aunque ya se hubiera pasado a otra casilla, y lo que se escribía acababa en el
+stake (por eso `e2e/clv.spec.ts` fallaba de vez en cuando, más con la app más
+cargada). Ahora `DayModal.startEdit` solo mueve el foco si sigue donde estaba
+al pulsar; `forms.spec.ts` lo comprueba de forma determinista. Y un aviso de
+conexión, una vuelta a la app o un cambio nuevo que llegaban mientras la cola
+se estaba enviando se perdían (`syncNow` volvía sin hacer nada) y lo pendiente
+esperaba al reintento de 20 s (por eso `migration.spec.ts` «says so once…»
+fallaba a veces). Ahora una llamada durante un envío pide otro justo después
+(`drainTurns` en `data/oneAtATime.ts`, con su test), en apuestas, movimientos
+y las tres tablas de gastos; tras un fallo pasajero sigue mandando la espera.
+
+**Dudas abiertas.** Restaurar gastos, tarjetas y presupuestos desde una
+copia (el formato ya los guarda); un `deno check` de la función en CI; una
+cuota diaria duradera por usuario para la IA (hoy el límite de verdad es el
+del workspace de Anthropic); si conviene versionar un `deno.lock` (hoy
+`"lock": false`, ver «Decisiones»). Lista completa en
+`docs/expenses-2026-11.md`.
+
+### Rediseño visual «Graphite Ledger» (noviembre 2026)
+
+Detalle en `docs/design-2026-11.md`. En corto:
+
+- **El color es dinero:** verde ganado, rojo perdido, ámbar en juego. El botón
+  principal es tinta invertida (blanco en oscuro, negro en claro), no verde;
+  el foco, la selección y los segmentos son neutros.
+- **Paleta grafito** (`#0e0f11` / `#f7f7f8`), tarjetas planas con borde fino,
+  KPI en dos franjas con divisores, estados como punto + palabra, etiquetas
+  como texto con «·», controles segmentados con «pulgar».
+- **Inter Variable** incluida (`assets/fonts`, OFL), pesos 400/500/600, sin
+  versalitas espaciadas, cifras tabulares.
+- **Movimiento:** solo entradas cortas con `ease-out` (diálogos, hoja en
+  móvil, menú, avisos, cifras nuevas, acordeón); nada se mueve en reposo; con
+  «reducir movimiento» solo quedan fundidos.
+- **JSX tocado:** `HeroStats` (`key` por cifra), `BalanceChartInner` (eje de
+  P/L con marcas redondas), `CalendarView` (`data-heat` por tercios),
+  `App`/`Toast` (región `role="status"` siempre montada).
+- Mismas clases, textos y orden en el DOM: las 232 e2e pasan sin cambios.
+
+### Auditoría del 5 de noviembre (base 2bc6310)
+
+Informe en `docs/audit-2026-11-06.md`. En corto:
+
+- Importar, restaurar y Deshacer son **operaciones durables**
+  (`data/operations.ts`): cada parte se escribe en el historial con lo que va
+  a encolar (`prepared`), se encola y se marca (`queued`). Cualquier ventana
+  reanuda lo que quedó preparado (al arrancar y cada 20 s), una sola vez, bajo
+  el candado de la operación; no encola si la cola ya tiene esa generación
+  (por sello e ids) o si el servidor ya respondió por ella.
+- El historial guarda **qué dijo el servidor de cada fila** (`made`,
+  `present`, `absent`, `rejected`, `missing`) y de cada ajuste (`confirmed`,
+  `kept`, `rejected`, `missing`); `lib/batchStatus.ts` no deduce nada de una
+  cola vacía.
+- Cada respuesta lleva su **generación**: el sello de las filas
+  (`BatchEvent.stamp`) o el `editedAt` de la escritura de ajustes
+  (`settingsAnswer`). Tras un Deshacer del Deshacer (`redoBatch`), una
+  respuesta tardía del envío anterior no completa el nuevo (`ofThisGeneration`),
+  y el borrado de un Deshacer solo mira su generación (`generationStart`).
+- Los ajustes pendientes llevan su **origen** (`PendingSettings.fieldOrigin`):
+  solo la respuesta a esa escritura cuenta para esa restauración o su Deshacer.
+  Qué hace un Deshacer con cada ajuste lo decide `undoSettingsPlan` (y lo anota
+  `undoSettingsLog`): el valor de la copia se devuelve; el de antes, si nunca
+  se confirmó el reemplazo, no se toca ni se llama «tu cambio posterior».
+- **«Comprobar de nuevo»** solo dice lo que el servidor tiene; si falta algo,
+  ofrece reintentar, nunca lo hace solo.
+- El **registro de confirmaciones entre pestañas** (`data/confirmed.ts`) va
+  numerado con suelo y época; una lectura que no puede verificarse se descarta
+  y se repite, y un fallo al escribirlo se avisa a las demás ventanas. Lo
+  validado se aplica en el orden del servidor (también lo propio), y tras
+  cerrar sesión no se escribe en él.
+- Los **ajustes pendientes se envían por sentencias** (`settingsGroups` en
+  `data/useSettings.ts`): cada escritura de una operación a su hora, y los
+  campos del usuario a la última. Si una escritura pierde por la hora de la
+  fila, App la reclasifica con la fila (`checkSettings`): «conservado» solo si
+  el campo cambió de verdad.
+- **Deshacer** se planifica bajo el candado de su operación (un segundo clic u
+  otra ventana no lo repiten), espera a que los datos estén cargados y descarta
+  las altas rechazadas del lote. «Retenido» (solo en esta ventana) sale del
+  estado en vivo del almacenamiento, no de la fase guardada.
+- Un primer trabajo de esta auditoría se perdió con un reinicio del contenedor
+  (commits locales sin subir); se rehízo y desde entonces se sube a la rama.
+
+### Auditoría del 2 de noviembre (base df13583)
+
+Los informes de auditoría no estaban en este contenedor (están en el Mac del
+usuario); se trabajó con la lista de hallazgos del encargo. El informe
+actualizado está en `docs/audit-2026-11-03.md`.
+
+- **Restaurar y Deshacer seguros**: cada importación o restauración escribe
+  todas sus filas con el mismo `updated_at` (su *sello*, `ImportBatch.stamp`),
+  que en el servidor es su recibo. El servidor dice qué filas hizo el lote
+  (`addBets` devuelve las insertadas y relee el sello de las demás: una
+  respuesta perdida cuenta), y Deshacer borra solo con
+  `delete … where id = … and updated_at = sello` (`deleteBet`/`deleteMove`
+  con `ifStamp`): nunca una fila que ya estaba, la de otro dispositivo con el
+  mismo id ni una editada después, sepa lo que sepa este dispositivo. El plan
+  se rehace antes de aplicar (`RestorePlan.signature`) y la revisión se
+  actualiza sola si los datos cambian. Los ajustes reemplazados se guardan
+  (antes/después) y su Deshacer los devuelve campo a campo, con guarda en el
+  servidor (`PendingSettings.guard`, `saveGuarded`): un cambio posterior se
+  queda. El historial (`data/imports.ts`) es ahora un almacén con candado que
+  registra lo que hizo el servidor (`BatchEvent`) y qué no se pudo encolar.
+- **Resultado de la restauración** (`RestoreResult` en `DataDialog`,
+  `lib/batchStatus.ts`): añadidos (confirmados por el servidor), ya
+  presentes, duplicados omitidos, ajustes, pendientes de sincronizar (nunca
+  «añadidos»), fallos y qué hacer (Guardar de nuevo, Volver a enviar, Elegir
+  la copia otra vez), y luego qué hizo Deshacer.
+- **Rechazadas**: una operación rechazada no sale de la cola hasta que su
+  registro está guardado (`queueStore.update(…, { hold: false })`,
+  `drainOutbox` → `stop: 'storage'`); el aviso `refusal-blocked-notice` lo
+  dice.
+- **Reintentos de importación**: migración 007 (lápidas, ver "Orden de
+  despliegue seguro").
+- **Lecturas de ajustes tardías**: solo hacia delante en `updated_at`
+  (`newerSettings`); "sin fila" nunca sustituye a una fila.
+- **Lecturas entre pestañas**: las confirmaciones se publican en
+  `localStorage` (`data/confirmed.ts`) y cada lectura les superpone las de
+  otras ventanas confirmadas mientras estaba fuera (apuestas y movimientos).
+- **Ajustes guardándose / guardados aquí**: cada edición va primero a un
+  diario de la ventana (`data/settingsJournal.ts`), sin candado; al arrancar
+  se encolan los diarios de ventanas cerradas. El diálogo distingue
+  «Guardando en este dispositivo…», «Guardado en este dispositivo:
+  sincronizando…» y «…se sincronizará al volver la conexión».
+- **Duplicados por fila** en la revisión de importación (y de restauración
+  de otra cuenta): cada uno junto a la apuesta a la que se parece (fecha,
+  resultado, stake, beneficio, cuota, cierre, etiquetas, nota), omitido por
+  defecto, con «Importar las N» / «Omitir todas», totales exactos y listas
+  largas paginadas.
+- **Alta rápida con fecha**: hoy por defecto, Hoy/Ayer y un selector; el
+  borrador guarda la fecha; una hoja abierta al pasar la medianoche registra
+  el día que mostraba.
+- **Acciones en móvil**: «Editar» / «Ver día» / «Eliminar» en una línea,
+  con nombres accesibles completos.
+
+### Revisión de funciones y auditoría (octubre 2026)
+
+Hecho a partir de la revisión práctica y de la auditoría (los informes no
+estaban en este contenedor; se trabajó con la lista de hallazgos):
+
+- **Fiabilidad**: los seis defectos de la auditoría ya estaban resueltos;
+  se volvieron a comprobar (`e2e/resilience.spec.ts`, 38 casos).
+- **Alta rápida**: stake 0 + cuota 2.0 + GANADA ya no se cierra en
+  silencio: pide el beneficio de la promoción (`QuickAdd`, `lib/betForm.ts`).
+  Una gratis perdida queda perdida a 0 (`normalizeInput`, migración 006).
+  Un beneficio que se redondea a 0,00 se pide con su motivo. Los errores
+  van junto a su casilla (`aria-describedby`, foco al primero); un rechazo
+  deja el formulario abierto con lo escrito (`refusalText`) y solo se
+  cierra cuando se acepta. Los manejadores de `App` lanzan el error al
+  formulario en vez de solo mostrar un aviso.
+- **Importación CSV**: paso de revisión (`DataDialog`, `lib/importPlan.ts`):
+  listas, rechazadas con su motivo (traducido) y posibles duplicados
+  (omitidos salvo que se conserven; dos filas iguales del archivo se
+  importan las dos). Cada importación es un lote (`data/imports.ts`) que se
+  puede deshacer entero; el mismo archivo se reconoce (en curso o ya
+  importado).
+- **Edición directa y borradores**: el lápiz del historial abre esa
+  apuesta en edición; la fecha abre el día. Los formularios guardan
+  borrador al cerrarse sin querer (`data/drafts.ts`), con **Descartar**.
+- **Historial en móvil**: tarjetas compactas que se despliegan
+  (`HistoryTable`, ≤640 px); la tabla sigue en escritorio.
+- **Alcance**: cada cifra dice qué fechas cubre; el historial puede
+  limitarse al rango; la barra masiva dice cuántas hay seleccionadas y
+  cuántas ocultan los filtros; días ganadores y apuestas ganadas separados;
+  la tasa de equilibrio con su propio recuento.
+- **Copia completa** (`lib/backup.ts`): JSON versionado con apuestas,
+  movimientos y ajustes; se valida antes de aplicar y restaurar solo añade.
+  **¿Olvidaste la contraseña?** y pantalla de contraseña nueva
+  (`auth/NewPassword.tsx`).
+- **Panel**: P/L, bankroll y pendientes primero; analítica avanzada
+  plegable; guía de primeros pasos para cuentas nuevas; **Añadir apuesta**
+  y el **+** del móvil abren la misma hoja.
+- **Cabecera**: solo **Añadir apuesta** (y la insignia de sincronización);
+  lo demás (cuenta, Importar y exportar, Pendientes, Ajustes, tema, idioma
+  y Salir) está en el menú ☰ (`Header.tsx`), que cuenta las pendientes y se
+  maneja con el teclado.
 
 ### Fase 1 · red de seguridad
 - Workflow de CI con jobs `calidad` (ci/test/build) y `e2e`; hoy es
@@ -212,7 +557,8 @@ Playwright llegara a `localhost`; en CI no.
   tipografía y espaciado, breakpoints 1120/640, Recharts cargado en diferido.
 - Toda la interfaz en `lib/strings.ts` (en/es) con `t()`/`tn()` y botón de
   idioma; el idioma sigue al navegador y se recuerda. Mensajes de validación
-  y de red quedan en inglés (decisión acordada); el dinero se formatea en USD.
+  y de red quedan en inglés (decisión acordada; los de inicio de sesión y los
+  del `.env` sí se traducen, ver "Decisiones"); el dinero se formatea en USD.
 
 ### Fase 5 · features (orden del plan)
 1. **Registro rápido** (`QuickAdd.tsx`): botón flotante y tecla `T`; stake,
@@ -224,7 +570,8 @@ Playwright llegara a `localhost`; en CI no.
    (por defecto), decimal o fraccionaria; se guarda siempre decimal; la caja
    de cuota entiende `+150`, `1.91` y `3/2` siempre; al editar sin tocar la
    caja se conserva el valor exacto.
-3. **Panel de pendientes** (`PendingPanel.tsx`): contador en la cabecera,
+3. **Panel de pendientes** (`PendingPanel.tsx`): contador en el botón del
+   menú (☰) y en la tarjeta del panel,
    lista de más antigua a más reciente, un toque resuelve, fecha pasada en
    ámbar.
 4. **Unidades y bankroll** (`lib/bankroll.ts`, `BankrollDialog.tsx`,
@@ -294,6 +641,179 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   parche y reintentar solo lo no tocado.
 
 ## Decisiones tomadas y por qué
+
+- **El `.env` se comprueba antes de usarlo** (`src/shared/supabaseEnv.ts`):
+  - `npm run build` (y el de escritorio) se para si la URL o la clave no
+    pueden funcionar o publicarían un secreto, y dice qué poner. `npm run
+    dev` y `preview` solo avisan, y la app enseña lo mismo en la pantalla de
+    configuración, en vez de quedarse en blanco (una URL sin `https://` hacía
+    que supabase-js lanzara un error al cargar). La demo no se comprueba;
+  - detecta: URL sin `https://`, la del panel, la cadena de conexión de
+    Postgres (lleva la contraseña), una ruta de la API detrás, los ejemplos
+    sin cambiar, la clave secreta o `service_role`, una clave cortada o con
+    comillas o espacios, algo que no es una clave (el JWT secret) y una clave
+    anon de otro proyecto que el de la URL (lo que Supabase llama "Invalid
+    API key"). Una clave publishable no lleva su proyecto: ese caso sale al
+    iniciar sesión, con el mensaje que dice qué clave poner;
+  - la clave recomendada es la publishable (`sb_publishable_…`). La anon
+    antigua funciona, pero Supabase retira las claves antiguas a finales de
+    2026: el build lo avisa. La variable sigue llamándose
+    `VITE_SUPABASE_ANON_KEY`, para no romper los `.env` que ya existen;
+  - el idioma de lo que imprime el build es el de la terminal (`LANG`).
+- **Los errores de inicio de sesión salen en palabras** (`auth/authErrors.ts`):
+  clave rechazada, sin conexión, contraseña mal, correo sin confirmar, cuenta
+  ya existente, demasiados intentos, registro desactivado y correo no
+  aceptado, en en y es. Se guardan tal cual y se traducen al mostrarlos; lo
+  que no se reconoce sale con las palabras de Supabase, como antes.
+- **Auditoría de sincronización (seis defectos, todos con test que los
+  reproduce con el código anterior):**
+  1. *Reintentar una importación pisaba ediciones nuevas.* El upsert de
+     `addBets` sobrescribía las filas que ya habían llegado (y bajaba su
+     `updated_at`). Ahora la operación guarda `done` (filas confirmadas,
+     por lotes de 250), el reintento empieza después y usa `ON CONFLICT DO
+     NOTHING`: una fila que ya está se queda como la tiene el servidor.
+     `applyOutbox` y `reconcile` muestran la del servidor. El Deshacer de un
+     borrado sigue siendo un alta normal (no pasa por aquí).
+     `supabase/tests/checks.sql` (9) lo comprueba con RLS en Postgres.
+     Cada lote confirmado pasa a la copia del servidor en ese momento
+     (`landImport`) y la importación solo muestra las filas sin confirmar:
+     una fila que llegó y se borró en otro dispositivo no vuelve. Solo puede
+     volver una del lote que estaba en vuelo cuando se cortó. Las lecturas no
+     esperan al envío (y una lista larga se lee por páginas): una que salió
+     antes de que llegara un lote, una alta, una edición o un borrado vuelve
+     con eso puesto encima (`confirmedLog`), en apuestas y en movimientos.
+     Si no, las filas del lote desaparecían y una apuesta borrada volvía
+     hasta la siguiente lectura.
+  2. *Varias pestañas se pisaban la cola.* Cada una escribía la cola que
+     leyó al arrancar. Ahora la cola guardada es la verdad: cada cambio es
+     leer-modificar-escribir bajo un candado entre ventanas (Web Locks,
+     `bettracker:queue:<cola>:<usuario>`), y solo una ventana la vacía a la
+     vez (`bettracker:drain:…`), leyéndola antes de cada operación y
+     enviando la versión guardada al marcarla `sent`. Las demás se enteran
+     por el evento `storage`. Apuestas, movimientos y ajustes. Mismas
+     claves y formato: nada que migrar. Sin Web Locks (http en la red
+     local) el candado es solo de la ventana, como antes.
+     El candado solo no basta: localStorage no es coherente entre procesos
+     del navegador (cada ventana lee su copia, y la escritura de otra le
+     llega un momento después), así que quien toma el candado podía leer la
+     cola de antes de la última escritura y devolverla (en Chromium, tres
+     ventanas a toda velocidad perdían una de cada cinco). Cada escritura
+     bajo un candado sube una versión, en localStorage
+     (`<candado>:version`) y en IndexedDB (`bettracker-locks`, que todas
+     leen al día); el siguiente espera a que su copia la tenga antes de
+     leer (como mucho 2 s, por si alguien borró el almacenamiento a mano).
+     Sin IndexedDB lee enseguida, como antes. El drenado lee la cola igual
+     (`fresh()`). Test: `e2e/resilience.spec.ts`, tres ventanas con el
+     `store.ts` real (servidor de desarrollo).
+     Una petición sin respuesta completa (cuerpo incluido) se abandona a los
+     30 s (`lib/timeoutFetch.ts`, en `global.fetch` del cliente) y cuenta
+     como sin conexión: si no, una ventana colgada se quedaba el candado de
+     vaciado y ninguna otra sincronizaba. Si IndexedDB tarda más de 3 s en
+     abrirse, la ventana sigue sin versiones mientras tanto y las usa desde
+     que abre.
+  3. *Un fallo al guardar se daba por guardado.* La caché se puede perder
+     (`writeExpendable`); la cola no (`writeDurable`): si no cabe, se tiran
+     las cachés y se reintenta, y si aun así falla la cola se queda en la
+     ventana (`held`), sigue sincronizando, el aviso lo dice y el toast no
+     dice "añadida". "Reintentar" la guarda cuando hay sitio, y también la
+     lista de rechazadas si tampoco cupo (entonces cuenta en el aviso). Lo retenido
+     es la lista de cambios hechos en la ventana, que se reaplican sobre la
+     cola guardada en cada intento: lo que otras guardaron se queda y lo que
+     esta quitó (una operación enviada, una apuesta borrada) no vuelve. Por
+     eso cada cambio busca por id y decide una sola vez qué quita: la marca
+     `sent` lleva el intento que la puso (`sentBy`, opcional) y solo ese
+     intento la quita, el progreso de una importación no retrocede, la
+     cabeza que se marca al arrancar se decide una vez (`markHeadSent`) y
+     los ajustes se combinan campo a campo por hora (`editSettings`).
+     "Volver a enviar" solo quita de la lista lo que la cola guardó: con
+     la cola solo en la ventana, lo reenviado sale del aviso pero sigue
+     guardado en la lista hasta que la cola se guarda o eso sale de ella
+     (enviado, o rechazado otra vez en su propia entrada).
+  4. *Errores temporales tiraban la cola.* `describeError` guarda status y
+     código (`SyncError`). 5xx, 408, 429 y códigos PGRST000–003, 08…, 40001,
+     40P01, 53…, 57P01–03, 57014 → `'retry'` con espera creciente (1 s, 2 s…
+     hasta 2 min, ±20 %; un 429 empieza en 5 s); 401, clave o JWT →
+     `'paused'`; solo un rechazo definitivo saca el cambio, a la lista de
+     rechazadas (`bettracker:refused:<usuario>`, `moves-refused`), visible
+     tras recargar, con "Volver a enviar" y "Descartar". Un alta rechazada
+     (no como duplicada: una que llegó responde así y se lee de vuelta), en
+     el intento que sea, se lleva lo que se encoló detrás para su apuesta
+     (ediciones y borrado, hasta un Deshacer que la crea de nuevo), y entra
+     en la lista antes de salir de la cola; lo que se pliega en ellas o se
+     encola para la apuesta mientras tanto sale con ellas, y la entrada se
+     reescribe. "Volver a enviar" encola primero
+     y luego quita de la lista; cada entrada se pliega antes
+     (`requeueRefused`: un alta y su borrado no son nada) y una edición
+     rechazada no pisa una más nueva de la misma apuesta, ni su borrado
+     (`requeueOp`). "Cerrar sesión" cuenta también las rechazadas antes de
+     borrarlas. Cada parada limpia los motivos de la anterior en la
+     insignia (solo el estado: cada aviso se dice una vez por episodio), y
+     los ajustes pendientes también salen en ella; una lectura que funciona
+     no da por enviado un ajuste que sigue fallando. Una primera
+     lectura fallida se repite con el temporizador (`retryPlan`), como en
+     movimientos y ajustes; lo confirmado antes de esa primera lectura se
+     muestra aparte (`foldApplied`), sin contar como leído ni guardarse en
+     caché como la lista entera. Sesión terminada → insignia "Sesión cerrada",
+     "Volver a entrar" sin borrar la cola, y el aviso de cada cambio dice
+     que se sincronizará al volver a entrar.
+     Cada lectura y cada envío dicen para qué cuenta son
+     (`signedInUserId(asUser)`): con la sesión de otra cuenta cuenta como
+     sin sesión, así que una sincronización de A que sigue en marcha cuando
+     entra B no lee las filas de B ni manda los cambios de A como B. Lo que
+     esa sincronización traiga se descarta (los hooks comparan con
+     `userRef`), y tras cerrar sesión nada de esa cuenta se vuelve a
+     guardar en el dispositivo hasta que entre otra vez (`clearUserData`,
+     `markSignedIn`). Cerrar sesión en una ventana la cierra también en las
+     demás (`signedOutElsewhere`, en `AuthProvider`), aunque Supabase no se
+     lo diga (sin conexión y con el token caducado no lo hace, ni la demo):
+     si no, seguían mostrando la cuenta y lo que cambiaban no se guardaba.
+  5. *Un rechazo de ajustes borraba un parche más nuevo.* Ahora cualquier
+     respuesta solo liquida lo que se envió (`afterSettingsAnswer`): lo
+     editado mientras tanto sigue pendiente y sale enseguida. Un ajuste se
+     ve en pantalla en cuanto se cambia, antes de que acabe de guardarse.
+     El parche guarda la hora de cada campo (`fieldEditedAt`, opcional: los
+     guardados por versiones anteriores no la tienen), así que un campo
+     vuelto al mismo valor mientras el envío estaba fuera también sigue
+     pendiente si ese envío perdió contra otro dispositivo.
+  6. *Un `max-rows` menor truncaba el historial.* `readAll` avanza por las
+     filas recibidas y para con el total contado (o, sin total, con una
+     página vacía). Apuestas y movimientos.
+- **Puertos de la suite e2e**: 4183 (build), 4182 (demo), 4181 (dev), en
+  `e2e/urls.ts`; ninguna spec lleva una URL fija.
+- **El correo de confirmación vuelve a la app**: `signUp` pide
+  `emailRedirectTo` = la dirección actual (solo http/https; Supabase la usa si
+  está en Redirect URLs, si no, su Site URL). Un enlace caducado o ya abierto
+  (los escáneres de correo los abren antes) deja el error en la dirección;
+  la pantalla de entrada lo dice en en y es y lo quita de la dirección.
+- **Sin sesión, la cola espera** (`data/session.ts`, `SignedOutError`):
+  cerrar sesión en un dispositivo cierra la de todos (`signOut` es global), y
+  cuando la sesión de otro caduca y no se puede renovar, supabase-js manda
+  las peticiones como nadie. Antes, eso tiraba lo que hubiera en cola: un
+  alta fallaba ("You are signed out") y se descartaba, una edición o un
+  borrado no encontraban la fila y salían de la cola, y una lectura volvía
+  vacía y borraba la copia del dispositivo. Ahora cada lectura y cada envío
+  piden antes la sesión; sin ella, o con una clave que Supabase no acepta o
+  un JWT caducado (`isAuthError`), el cambio se queda en cola, en pausa
+  (`'paused'`), y sale tras el siguiente inicio de sesión. Un rechazo de RLS sigue
+  siendo un rechazo: con la sesión pedida antes, ya no viene de esto.
+- **En el móvil** (revisado con capturas a 320, 360, 390 y 430 px, en los dos
+  temas y los dos idiomas):
+  - nada puede ensanchar la página: el calendario y la rejilla usan
+    `minmax(0, 1fr)`, y la tarjeta de inicio de sesión se encoge;
+  - en el calendario, los días con solo apuestas abiertas llevan un punto
+    ámbar en vez de la palabra;
+  - los campos van a 16 px para que iOS no haga zoom;
+  - los botones táctiles miden al menos 32–36 px;
+  - el + deja libre el final de la página;
+  - se respetan las zonas seguras (notch, barra de inicio);
+  - el historial deja fijas a la derecha las acciones de cada fila, y la barra
+    de selección flota abajo en vez de empujar las filas;
+  - las cuotas americanas y fraccionarias abren el teclado completo (el
+    numérico del iPhone no tiene signo menos ni barra);
+  - en pantallas táctiles, el diálogo del día no pone el cursor en el stake al
+    abrirse;
+  - `e2e/mobile.spec.ts` vigila todo esto.
+
 
 - Tabla `entries` conservada; "bet" en código e interfaz.
 - Push y void fuera del denominador del ROI (devuelven el stake).
@@ -406,11 +926,62 @@ Hecha según la propuesta que había aquí (tabla `bankroll_moves`, migración
   sitio; así el trigger existe desde el momento en que `status` pasa a ser
   obligatorio. La regla de "migraciones nuevas para cada cambio" sigue
   valiendo para todo lo ya aplicado.
+- **Gastos: una capa de sincronización genérica** (`data/rowTable.ts`,
+  `data/rowStorage.ts`, `data/useRowSync.ts`) para gastos, tarjetas y
+  presupuestos, con las mismas piezas que los movimientos (`useOpQueue`,
+  `drainOutbox`, registro de confirmaciones entre pestañas, lectura que no
+  encuentra la tabla = ninguno todavía) pero sin lotes ni restauraciones.
+  `useMoves` no se tocó: copiarlo tres veces habría triplicado el código, y
+  refactorizarlo habría puesto en riesgo lo que ya funciona. Cada tabla tiene
+  su cola, su caché y su canal (`bettracker:<nombre>…:<uid>`), así que una
+  frenada no frena las demás, y un solo aviso de «falta actualizar» vale para
+  las tres.
+- **`expenses.card_id` sin clave foránea.** Las tarjetas y los gastos van
+  por colas distintas: un gasto puede llegar al servidor antes que su
+  tarjeta, y con una FK se rechazaría para siempre. Un id sin tarjeta se
+  muestra como «Sin tarjeta». Borrar una tarjeta con gastos la archiva; solo
+  se borra de verdad cuando la lista de gastos está cargada y leída en esta
+  sesión y ninguno la usa.
+- **Ids de presupuesto deterministas** (`lib/stableId.ts`, a partir de
+  usuario, ámbito y destino): dos dispositivos que ponen el mismo
+  presupuesto sin conexión acaban en una sola fila (`unique (user_id, scope,
+  target)`); el alta que choca aplica su valor si es más reciente. El
+  algoritmo está congelado por un test con valores fijos.
+- **Moneda solo de los gastos, sin conversión.** `user_settings.expense_currency`;
+  las apuestas siguen en dólares y las unidades nunca se aplican a gastos.
+  Cambiarla solo cambia cómo se escriben los mismos números (la app lo dice).
+  Se activa solo con prueba de que existe la 008 en esa sesión (una lectura
+  o escritura de las tablas que funcionó): un parche con la columna contra
+  una base sin ella frenaría todos los ajustes.
+- **IA vía Edge Function, con la clave en sus secretos y lista de
+  permitidos.** La clave de Anthropic nunca llega a la app (el build se para
+  si ve una `VITE_*ANTHROPIC*` o un valor `sk-ant-`). La función comprueba
+  la sesión del usuario (`auth.getUser`) y `EXTRACT_ALLOWED_USERS` (sin ella,
+  nadie), sin reintentos del SDK y con un plazo de 108 s, por debajo de los
+  115 s de la app, para no facturar dos veces. El prompt, el esquema JSON y
+  la validación están en un módulo sin imports (`src/shared/expenseExtraction.ts`)
+  que comparten la función, la app (que vuelve a validar la respuesta) y los
+  tests. Las tarjetas se mandan como pistas (nombre, últimos 4, tipo), nunca
+  sus ids: el cliente decide la tarjeta.
+- **`deno.json` con `"lock": false`.** Sin eso, cada `deno check` escribe un
+  `deno.lock` en el repositorio. Las dependencias directas ya van fijadas en
+  el import (`npm:@anthropic-ai/sdk@1.8.0`, `npm:@supabase/supabase-js@2.110.7`);
+  versionar un lock fijaría también las transitivas con su hash, y es una
+  decisión para cuando haya un `deno check` en CI que lo mantenga al día.
+- **La copia guarda los gastos pero aún no los restaura** (versión 1 del
+  formato, claves opcionales). Restaurarlos pide decidir cómo se mezclan
+  con lo que hay (ids de tarjeta de otra cuenta, presupuestos con id
+  determinista por usuario); mientras, no se pierde nada: están en el
+  archivo y la revisión dice cuántos hay. Una lista de gastos mal formada
+  cuenta como ausente: nunca impide restaurar las apuestas.
 
 ## Mapa de archivos nuevos o muy cambiados
 
 ```
-src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput
+src/shared/types.ts                 Bet, BetInput, Settings, OddsFormat, BankrollMove, MoveInput, Expense, ExpenseCard, ExpenseBudget
+src/shared/supabaseEnv.ts           comprueba VITE_SUPABASE_URL y _ANON_KEY (el build y la app); rechaza una clave de Anthropic
+src/shared/expenseExtraction.ts     lectura con IA: categorías, prompt, esquema JSON, validación (app, función y tests)
+src/renderer/src/auth/authErrors.ts los rechazos de Supabase Auth, en palabras (en y es)
 src/renderer/src/lib/
   stats.ts      resumen, ROI, CLV, breakdown por tag/banda/día/mes
   bands.ts      bandas de cuota (único lugar)
@@ -424,21 +995,66 @@ src/renderer/src/lib/
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
   quick.ts      valores por defecto del registro rápido
+  uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
+  view.ts       vista Apuestas o Gastos, recordada por dispositivo
+  categories.ts, stableId.ts            categorías de gasto; ids deterministas de presupuesto
+  currency.ts   formato de la moneda de los gastos
+  spend.ts      gasto del mes, proyección, presupuestos, datos del gráfico, filtros
+  expenseForm.ts, expenseReview.ts      la hoja de gasto (importes como se teclean); la revisión de lo leído por la IA
+  cardMatch.ts  tarjeta por últimos 4 dígitos o nombre
+  expenseCsv.ts CSV de gastos
+  scanImage.ts, scanImageDom.ts         la imagen a escanear: tamaño, tipo, JPEG
+src/renderer/src/demo/
+  fakeSupabase.ts   el Supabase falso de la demo y de la suite e2e
+  start.ts          entrada de `npm run demo` (va delante de main.tsx)
+  demo.ts           usuario de la demo y "Empezar de cero"
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
   moves.ts, useMoves.ts                   ingresos y retiradas: servidor y sincronización
   readAll.ts                              leer todas las filas, por páginas
   drain.ts                                vaciar la cola: qué sale y qué se queda
-  errors.ts                               leer un fallo: sin conexión, falta migración, rechazo
+  errors.ts                               leer un fallo: sin conexión, en pausa, reintentar, falta migración, rechazo
+  session.ts                              ninguna petición de las filas de un usuario sin su sesión
+  store.ts                                las colas en el almacenamiento, compartidas entre ventanas con candado
+                                          y versión en IndexedDB; lo retenido se reaplica
+  useOpQueue.ts                           una cola de operaciones (apuestas o movimientos): candados, rechazadas
+  rowTable.ts, rowStorage.ts, useRowSync.ts, rowOps.ts
+                                          gastos, tarjetas y presupuestos: servidor, almacenamiento y sincronización
+  expenseSpecs.ts, expenses.ts            las tres tablas descritas para esa capa
+  expenseLast.ts                          última tarjeta y categoría usadas en el dispositivo
+  extract.ts                              llamada a la Edge Function extract-expenses
+src/renderer/src/lib/betForm.ts     los problemas de cada casilla, en palabras; rechazos
+src/renderer/src/lib/importPlan.ts  revisión de una importación: duplicados, huella del archivo
+src/renderer/src/lib/backup.ts      copia completa: formato, validación, plan de restauración
+src/renderer/src/lib/useMedia.ts    media queries (tarjetas del historial en móvil)
+src/renderer/src/data/drafts.ts     borradores de los formularios
+src/renderer/src/data/imports.ts    lotes de importación (para deshacerlos)
+src/renderer/src/auth/NewPassword.tsx  contraseña nueva desde el enlace de recuperación
+src/renderer/src/index.css    todo el estilo: tokens grafito arriba, móvil al final (docs/design-2026-11.md)
+src/renderer/src/assets/fonts/   Inter Variable (woff2) y su licencia OFL
 src/renderer/src/components/
+  DataDialog (importar/exportar/copias), FirstRun (primeros pasos), FieldError,
   QuickAdd, SettingsDialog, PendingPanel, RangeBar, LossBanner,
   HistoryTable (selección + barra masiva), DayModal (cuota de cierre),
   Breakdown (seis pestañas), HeroStats (tarjetas CLV y Bankroll), Toast (acción),
-  BankrollDialog, StakeNote, BalanceChart (vista Bankroll)
-e2e/*.spec.ts                       57 comprobaciones
-supabase/migrations/00{2,3,4,5}_*.sql, supabase/schema.sql
+  BankrollDialog, StakeNote, BalanceChart (vista Bankroll), DemoBanner,
+  ViewTabs (Apuestas | Gastos), Paged
+src/renderer/src/components/expenses/
+  ExpensesView, SpendSummary, SpendChart(+Inner), BudgetsPanel, CategoryBreakdown,
+  ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
+  BudgetEditor, CurrencyPicker, useDialog
+e2e/*.spec.ts                       251 comprobaciones (mobile.spec.ts: el móvil;
+                                    setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
+                                    resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
+                                    importación cortada, lecturas tardías, paginación, ajustes en vuelo;
+                                    expenses.spec.ts y expenses-sync.spec.ts: los gastos)
+e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
+supabase/migrations/00{2,3,4,5,6,7,8}_*.sql, supabase/schema.sql
+supabase/functions/extract-expenses/ la Edge Function de la lectura con IA (index.ts, deno.json)
+supabase/config.toml                ajustes de la CLI: sin la comprobación JWT de la pasarela para esa función
+docs/expenses-2026-11.md            los gastos: decisiones, datos, sincronización, IA, pruebas, pendientes
 supabase/tests/                     el esquema contra un Postgres real
 ```

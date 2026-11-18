@@ -26,7 +26,7 @@ function createWindow(): BrowserWindow {
     minWidth: 480,
     minHeight: 600,
     show: false,
-    backgroundColor: '#0a0f14',
+    backgroundColor: '#0e0f11',
     autoHideMenuBar: true,
     title: 'BetTracker',
     webPreferences: {

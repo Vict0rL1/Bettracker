@@ -1,0 +1,10 @@
+# Supabase CLI settings for this project. Only what BetTracker needs is set;
+# everything else keeps the CLI's defaults.
+project_id = "bettracker"
+
+# The AI reading of receipts (supabase/functions/extract-expenses). The
+# function checks the signed-in user itself (auth.getUser) and must answer the
+# browser's CORS preflight, which carries no token: the gateway's JWT check
+# stays off, so a plain `functions deploy` can't turn it back on.
+[functions.extract-expenses]
+verify_jwt = false

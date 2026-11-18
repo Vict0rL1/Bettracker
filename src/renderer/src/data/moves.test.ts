@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * followed by a read of the row already there, and each needs its own answer.
  */
 const state = vi.hoisted(() => ({
+  /** What auth.getSession() answers: signed in unless a test says otherwise. */
+  session: { data: { session: { user: { id: 'user-1' } } as unknown }, error: null as Error | null },
   replies: [] as { data: unknown; error: { message: string; code?: string } | null; count?: number | null }[],
   calls: [] as { method: string; args: unknown[] }[]
 }))
@@ -22,13 +24,13 @@ vi.mock('../lib/supabase', () => {
   return {
     supabase: {
       ...chain,
-      auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } }, error: null }) }
+      auth: { getSession: async () => state.session }
     }
   }
 })
 
 import { addMove, deleteMove, getMoves, sendMoveOp, subscribeToMoves, updateMove } from './moves'
-import { MigrationNeededError } from './errors'
+import { MigrationNeededError, SignedOutError } from './errors'
 
 const calls = (method: string) => state.calls.filter((c) => c.method === method)
 const call = (method: string) => calls(method)[0]
@@ -37,13 +39,14 @@ const ROW = { id: 'm1', user_id: 'user-1', date: '2026-03-01', amount: '-120.50'
 const NO_TABLE = { message: "Could not find the table 'public.bankroll_moves' in the schema cache", code: 'PGRST205' }
 
 beforeEach(() => {
+  state.session = { data: { session: { user: { id: 'user-1' } } }, error: null }
   state.calls = []
   state.replies = []
 })
 
 describe('getMoves', () => {
   it('reads every move of the table in date order, coercing numeric strings', async () => {
-    state.replies = [{ data: [ROW, { ...ROW, id: 'm2', amount: '500', note: null }], error: null }]
+    state.replies = [{ data: [ROW, { ...ROW, id: 'm2', amount: '500', note: null }], error: null, count: 2 }]
     expect(await getMoves()).toEqual([
       { id: 'm1', date: '2026-03-01', amount: -120.5, note: 'rent', createdAt: 'C', updatedAt: 'S' },
       { id: 'm2', date: '2026-03-01', amount: 500, note: '', createdAt: 'C', updatedAt: 'S' }
@@ -51,6 +54,22 @@ describe('getMoves', () => {
     expect(call('from')?.args).toEqual(['bankroll_moves'])
     expect(calls('order').map((c) => c.args[0])).toEqual(['date', 'created_at', 'id'])
     expect(calls('range').map((c) => c.args)).toEqual([[0, 999]])
+  })
+
+  // Used to jump a whole page ahead after a short one, missing the rows between.
+  it('goes on from the rows that came when the server answers fewer than asked (a lower max-rows)', async () => {
+    const page = (n: number, from: number) => Array.from({ length: n }, (_, i) => ({ ...ROW, id: `m${from + i}` }))
+    state.replies = [
+      { data: page(200, 0), error: null, count: 450 },
+      { data: page(200, 200), error: null, count: 450 },
+      { data: page(50, 400), error: null, count: 450 }
+    ]
+    expect((await getMoves()).map((m) => m.id)).toEqual(page(450, 0).map((r) => r.id))
+    expect(calls('range').map((c) => c.args)).toEqual([
+      [0, 999],
+      [200, 1199],
+      [400, 1399]
+    ])
   })
 
   it('reads page by page until the counted total is in', async () => {
@@ -77,7 +96,7 @@ describe('addMove', () => {
     state.replies = [{ data: ROW, error: null }]
     const out = await addMove({ date: '2026-03-01', amount: -120.499, note: '  rent ' }, 'm1', 'Q')
     expect(call('insert')?.args[0]).toEqual({ id: 'm1', user_id: 'user-1', date: '2026-03-01', amount: -120.5, note: 'rent', updated_at: 'Q' })
-    expect(out.amount).toBe(-120.5)
+    expect(out?.amount).toBe(-120.5)
   })
 
   it('returns the row already there when an earlier attempt landed (23505), never overwriting it', async () => {
@@ -86,7 +105,7 @@ describe('addMove', () => {
       { data: { ...ROW, note: 'edited elsewhere' }, error: null }
     ]
     const out = await addMove({ date: '2026-03-01', amount: -120.5 }, 'm1', 'Q')
-    expect(out.note).toBe('edited elsewhere')
+    expect(out?.note).toBe('edited elsewhere')
     expect(calls('eq').at(-1)?.args).toEqual(['id', 'm1'])
     expect(calls('insert')).toHaveLength(1)
     expect(calls('update')).toHaveLength(0)
@@ -127,13 +146,23 @@ describe('updateMove — last write wins by edit time', () => {
 })
 
 describe('deleteMove', () => {
-  it('deletes by id and says whether a row went', async () => {
+  it('deletes by id, and answers no row', async () => {
     state.replies = [{ data: null, error: null, count: 1 }]
-    expect(await deleteMove('m1')).toBe(true)
+    expect(await deleteMove('m1')).toBeNull()
     expect(call('delete')?.args).toEqual([{ count: 'exact' }])
     expect(call('eq')?.args).toEqual(['id', 'm1'])
-    state.replies = [{ data: null, error: null, count: 0 }]
-    expect(await deleteMove('m1')).toBe(false)
+  })
+
+  it('with a stamp (an Undo), removes it only while it carries it, and answers a row it left with that row', async () => {
+    state.replies = [
+      { data: null, error: null, count: 0 },
+      { data: { ...ROW, note: 'edited since' }, error: null }
+    ]
+    expect((await deleteMove('m1', 'S'))?.note).toBe('edited since')
+    expect(calls('eq').slice(0, 2).map((c) => c.args)).toEqual([
+      ['id', 'm1'],
+      ['updated_at', 'S']
+    ])
   })
 })
 
@@ -174,5 +203,26 @@ describe('subscribeToMoves', () => {
     expect(call('on')?.args[1]).toEqual({ event: '*', schema: 'public', table: 'bankroll_moves', filter: 'user_id=eq.user-1' })
     stop()
     expect(call('removeChannel')).toBeDefined()
+  })
+})
+
+describe('without a session', () => {
+  it('reads and sends nothing, and says signed out, which keeps the queue for the next sign-in', async () => {
+    state.session = { data: { session: null }, error: null }
+    await expect(getMoves()).rejects.toBeInstanceOf(SignedOutError)
+    await expect(sendMoveOp({ opId: 'o1', kind: 'update', id: 'm', input: { date: '2026-03-01', amount: 50 }, editedAt: 'E' })).rejects.toBeInstanceOf(
+      SignedOutError
+    )
+    await expect(sendMoveOp({ opId: 'o2', kind: 'delete', id: 'm' })).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
+  })
+
+  it('nor as another account signed in since: that is a sign-out for this one', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getMoves('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    await expect(sendMoveOp({ opId: 'o1', kind: 'add', id: 'm', input: { date: '2026-03-01', amount: 50 }, queuedAt: 'Q' }, 'user-1')).rejects.toBeInstanceOf(
+      SignedOutError
+    )
+    expect(state.calls).toEqual([])
   })
 })

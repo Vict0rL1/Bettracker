@@ -39,8 +39,15 @@ export const monthPrefix = (ym: MonthKey): string => `${ym.year}-${pad2(ym.month
 const locale = (): string => LOCALE[getLang()]
 const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
 
-export const monthLabel = (ym: MonthKey): string =>
-  cap(new Date(ym.year, ym.month, 1).toLocaleDateString(locale(), { month: 'long', year: 'numeric' }))
+export const monthLabel = (ym: MonthKey): string => cap(monthInline(ym))
+
+/**
+ * The month as words inside a sentence ("Spent in {month}"): monthLabel
+ * without the raised first letter, so Spanish keeps its lowercase month
+ * ("noviembre de 2026"); English reads the same as monthLabel.
+ */
+export const monthInline = (ym: MonthKey): string =>
+  new Date(ym.year, ym.month, 1).toLocaleDateString(locale(), { month: 'long', year: 'numeric' })
 
 export const daysInMonth = (ym: MonthKey): number => new Date(ym.year, ym.month + 1, 0).getDate()
 
@@ -50,6 +57,13 @@ export const firstWeekday = (ym: MonthKey): number => new Date(ym.year, ym.month
 function parseParts(dateStr: string): Date {
   const [y, m, d] = dateStr.split('-').map(Number)
   return new Date(y, m - 1, d)
+}
+
+/** The date `n` days after `dateStr` (before, for a negative `n`), on the local calendar: DST days have 23 or 25 hours. */
+export function addDays(dateStr: string, n: number): string {
+  const d = parseParts(dateStr)
+  d.setDate(d.getDate() + n)
+  return toDateStr(d.getFullYear(), d.getMonth(), d.getDate())
 }
 
 /** Weekday of a date string, 0 = Sunday. */

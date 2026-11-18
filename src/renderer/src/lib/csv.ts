@@ -1,11 +1,13 @@
 import type { Bet, BetInput, BetStatus, OddsFormat } from '../../../shared/types'
 import { fromAmerican, fromFractional } from './odds'
-import { isValidDate, normalizeInput, storableOdds } from './validate'
+import type { StringKey } from './strings'
+import { InputError, isValidDate, normalizeInput, storableOdds } from './validate'
 
 const COLUMNS = ['date', 'status', 'stake', 'odds', 'closing_odds', 'amount', 'sport', 'book', 'bet_type', 'note'] as const
 type Column = (typeof COLUMNS)[number]
 
-function escapeField(value: string): string {
+/** A CSV cell: quoted (inner quotes doubled) when it holds a comma, a quote or a line break. */
+export function escapeField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
@@ -114,10 +116,26 @@ export function parseCsv(text: string): string[][] {
   return rows
 }
 
+/** Why a line was left out, as the review step says it (in the user's language). */
+export interface Rejection {
+  /** The line in the file, counting the header as line 1. */
+  line: number
+  /** The same, in English (as `errors` has it). */
+  why: string
+  key: StringKey
+  vars: Record<string, string | number>
+}
+
 export interface ImportResult {
   rows: BetInput[]
+  /** The line in the file each row came from, in the same order as `rows`. */
+  lines: number[]
   /** Human-readable problems, one per rejected line, capped for display. */
   errors: string[]
+  /** Every rejected line, with its reason. */
+  rejected: Rejection[]
+  /** A problem with the whole file (empty, no header to go by), when there is one. */
+  fileProblem: StringKey | null
   skipped: number
   /** Imported rows that carry no stake — they'll stay out of ROI. */
   noStake: number
@@ -338,7 +356,7 @@ function oddsReading(header: readonly string[], oddsHeaders: readonly (string | 
   return 'unknown'
 }
 
-type OddsCell = { ok: true; value: number | null } | { ok: false; why: string }
+type OddsCell = { ok: true; value: number | null } | { ok: false; why: string; key: StringKey; vars: Record<string, string | number> }
 
 /**
  * One odds cell as a decimal price. Blank is no odds; anything else must be
@@ -349,10 +367,18 @@ type OddsCell = { ok: true; value: number | null } | { ok: false; why: string }
  */
 function readOdds(raw: string, shape: OddsShape, reading: OddsReading, fallback: OddsFormat, what: string): OddsCell {
   const cell = raw.trim()
-  const notAPrice: OddsCell = { ok: false, why: `"${cell}" is not a ${what} (decimal above 1, American like +150 or -110, or a fraction like 3/2).` }
+  const closing = what === 'closing price'
+  const notAPrice: OddsCell = {
+    ok: false,
+    why: `"${cell}" is not a ${what} (decimal above 1, American like +150 or -110, or a fraction like 3/2).`,
+    key: closing ? 'csv.closingOdds' : 'csv.odds',
+    vars: { value: cell }
+  }
   const mixed = (american: string, decimal: string): OddsCell => ({
     ok: false,
-    why: `"${cell}" could be American (${american}) or decimal (${decimal}) — this file has both kinds of odds; write it with a sign, or name the format in the header ("american odds" or "decimal odds").`
+    why: `"${cell}" could be American (${american}) or decimal (${decimal}) — this file has both kinds of odds; write it with a sign, or name the format in the header ("american odds" or "decimal odds").`,
+    key: 'csv.oddsMixed',
+    vars: { value: cell, american, decimal }
   })
   switch (shape.kind) {
     case 'blank':
@@ -388,7 +414,8 @@ function readOdds(raw: string, shape: OddsShape, reading: OddsReading, fallback:
  */
 export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): ImportResult {
   const rows = parseCsv(text)
-  if (rows.length === 0) return { rows: [], errors: ['The file is empty.'], skipped: 0, noStake: 0 }
+  const none = { rows: [], lines: [], rejected: [], skipped: 0, noStake: 0 }
+  if (rows.length === 0) return { ...none, errors: ['The file is empty.'], fileProblem: 'csv.fileEmpty' }
 
   const header = rows[0].map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ''))
   const index: Partial<Record<Column, number>> = {}
@@ -411,10 +438,9 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
 
   if (index.date === undefined || (index.amount === undefined && index.status === undefined)) {
     return {
-      rows: [],
+      ...none,
       errors: ['The file needs a header row with a "date" column and an "amount" or "status" column.'],
-      skipped: 0,
-      noStake: 0
+      fileProblem: 'csv.fileHeader'
     }
   }
 
@@ -433,11 +459,14 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
   )
 
   const out: BetInput[] = []
+  const lines: number[] = []
   const errors: string[] = []
+  const rejected: Rejection[] = []
   let skipped = 0
   let noStake = 0
-  const reject = (line: number, why: string): void => {
+  const reject = (line: number, why: string, key: StringKey, vars: Record<string, string | number> = {}): void => {
     skipped++
+    rejected.push({ line, why, key, vars })
     if (errors.length < 5) errors.push(`Line ${line}: ${why}`)
   }
 
@@ -446,14 +475,14 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
     const line = r + 1
     const date = at(row, 'date').trim()
     if (!isValidDate(date)) {
-      reject(line, `"${date}" is not a YYYY-MM-DD date.`)
+      reject(line, `"${date}" is not a YYYY-MM-DD date.`, 'csv.date', { value: date })
       continue
     }
 
     const amountRaw = at(row, 'amount')
     const amount = parseMoney(amountRaw)
     if (amountRaw.trim() !== '' && amount === null) {
-      reject(line, `"${amountRaw}" is not a number.`)
+      reject(line, `"${amountRaw}" is not a number.`, 'csv.amount', { value: amountRaw.trim() })
       continue
     }
 
@@ -462,26 +491,27 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
     const statusRaw = at(row, 'status').trim().toLowerCase()
     const status: BetStatus | undefined = STATUS_WORDS[statusRaw]
     if (status === undefined && amount === null) {
-      reject(line, statusRaw ? `"${at(row, 'status')}" is not a bet status.` : 'no amount and no status.')
+      if (statusRaw) reject(line, `"${at(row, 'status')}" is not a bet status.`, 'csv.status', { value: at(row, 'status').trim() })
+      else reject(line, 'no amount and no status.', 'csv.noResult')
       continue
     }
 
     const stakeRaw = at(row, 'stake')
     const stake = parseMoney(stakeRaw)
     if (stakeRaw.trim() !== '' && (stake === null || stake < 0)) {
-      reject(line, `"${stakeRaw}" is not a valid stake.`)
+      reject(line, `"${stakeRaw}" is not a valid stake.`, 'csv.stake', { value: stakeRaw.trim() })
       continue
     }
 
     const odds = readOdds(at(row, 'odds'), oddsShapes[r - 1], reading, oddsFormat, 'price')
     if (!odds.ok) {
-      reject(line, odds.why)
+      reject(line, odds.why, odds.key, odds.vars)
       continue
     }
 
     const closing = readOdds(at(row, 'closing_odds'), closingShapes[r - 1], reading, oddsFormat, 'closing price')
     if (!closing.ok) {
-      reject(line, closing.why)
+      reject(line, closing.why, closing.key, closing.vars)
       continue
     }
 
@@ -504,17 +534,19 @@ export function parseBetsCsv(text: string, oddsFormat: OddsFormat = 'decimal'): 
     try {
       normalizeInput(input)
     } catch (err) {
-      reject(line, err instanceof Error ? err.message : String(err))
+      if (err instanceof InputError) reject(line, err.message, `invalid.${err.code}` as StringKey, err.vars)
+      else reject(line, err instanceof Error ? err.message : String(err), 'common.error')
       continue
     }
 
     if (stake === null) noStake++
     out.push(input)
+    lines.push(line)
   }
 
   if (skipped > errors.length) {
     const more = skipped - errors.length
     errors.push(`…and ${more} more skipped ${more === 1 ? 'line' : 'lines'}.`)
   }
-  return { rows: out, errors, skipped, noStake }
+  return { rows: out, lines, errors, rejected, fileProblem: null, skipped, noStake }
 }

@@ -6,13 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * row (update, then select, then insert) and each needs its own answer.
  */
 const state = vi.hoisted(() => ({
+  /** What auth.getSession() answers: signed in unless a test says otherwise. */
+  session: { data: { session: { user: { id: 'user-1' } } as unknown }, error: null as Error | null },
   replies: [] as { data: unknown; error: { message: string; code?: string } | null }[],
   calls: [] as { method: string; args: unknown[] }[]
 }))
 
 vi.mock('../lib/supabase', () => {
   const chain: Record<string, unknown> = {}
-  for (const m of ['from', 'select', 'insert', 'update', 'eq', 'lte', 'single', 'maybeSingle']) {
+  for (const m of ['from', 'select', 'insert', 'update', 'eq', 'is', 'lte', 'single', 'maybeSingle']) {
     chain[m] = (...args: unknown[]) => {
       state.calls.push({ method: m, args })
       return chain
@@ -22,18 +24,20 @@ vi.mock('../lib/supabase', () => {
   return {
     supabase: {
       ...chain,
-      auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } }, error: null }) }
+      auth: { getSession: async () => state.session }
     }
   }
 })
 
-import { getSettings, saveSettings } from './settings'
+import { getSettings, getSettingsRead, saveSettings } from './settings'
+import { SignedOutError } from './errors'
 
 const calls = (method: string) => state.calls.filter((c) => c.method === method)
 
 const ROW = { user_id: 'user-1', odds_format: 'decimal', unit_size: '25', show_units: true, starting_bankroll: null, default_stake: '10', loss_limit: null, updated_at: 'E' }
 
 beforeEach(() => {
+  state.session = { data: { session: { user: { id: 'user-1' } } }, error: null }
   state.calls = []
   state.replies = []
 })
@@ -48,8 +52,18 @@ describe('getSettings', () => {
       startingBankroll: null,
       defaultStake: 10,
       lossLimit: null,
+      expenseCurrency: 'USD',
       updatedAt: 'E'
     })
+  })
+
+  it('reads the expenses currency (migration 008), and dollars for a missing or junk one', async () => {
+    state.replies = [{ data: { ...ROW, expense_currency: 'EUR' }, error: null }]
+    expect((await getSettings())?.expenseCurrency).toBe('EUR')
+    for (const junk of ['eur', 'EURO', null, 12]) {
+      state.replies = [{ data: { ...ROW, expense_currency: junk }, error: null }]
+      expect((await getSettings())?.expenseCurrency, String(junk)).toBe('USD')
+    }
   })
 
   it('is null for a user who never saved a setting', async () => {
@@ -60,6 +74,17 @@ describe('getSettings', () => {
   it('falls back to the default odds format on an unknown value', async () => {
     state.replies = [{ data: { ...ROW, odds_format: 'martian' }, error: null }]
     expect((await getSettings())?.oddsFormat).toBe('american')
+  })
+})
+
+describe('getSettingsRead', () => {
+  it('says whether the table has the currency column: a row without the key has not, one with it has, no row says nothing (null)', async () => {
+    state.replies = [{ data: ROW, error: null }]
+    expect(await getSettingsRead()).toMatchObject({ hasCurrencyColumn: false, settings: { oddsFormat: 'decimal' } })
+    state.replies = [{ data: { ...ROW, expense_currency: 'MXN' }, error: null }]
+    expect(await getSettingsRead()).toMatchObject({ hasCurrencyColumn: true, settings: { expenseCurrency: 'MXN' } })
+    state.replies = [{ data: null, error: null }]
+    expect(await getSettingsRead()).toEqual({ settings: null, hasCurrencyColumn: null })
   })
 })
 
@@ -107,5 +132,81 @@ describe('saveSettings — last write wins by edit time', () => {
     state.replies = [{ data: ROW, error: null }]
     await saveSettings({ unitSize: null, showUnits: false }, 'E')
     expect(calls('update')[0]?.args[0]).toEqual({ unit_size: null, show_units: false, updated_at: 'E' })
+  })
+
+  it('writes every field to its column, the expenses currency included', async () => {
+    state.replies = [{ data: ROW, error: null }]
+    await saveSettings({ expenseCurrency: 'EUR' }, 'E')
+    expect(calls('update')[0]?.args[0]).toEqual({ expense_currency: 'EUR', updated_at: 'E' })
+    state.calls = []
+    state.replies = [{ data: ROW, error: null }]
+    await saveSettings({ oddsFormat: 'fractional', unitSize: 5, showUnits: true, startingBankroll: 100, defaultStake: 0, lossLimit: 250 }, 'E')
+    expect(calls('update')[0]?.args[0]).toEqual({
+      odds_format: 'fractional',
+      unit_size: 5,
+      show_units: true,
+      starting_bankroll: 100,
+      default_stake: 0,
+      loss_limit: 250,
+      updated_at: 'E'
+    })
+  })
+})
+
+describe('saveSettings — a guarded field on an account with no row yet (the server holds the defaults)', () => {
+  it('a guard that is the default applies: the first save inserts the row, at the edit time', async () => {
+    state.replies = [
+      { data: null, error: null }, // the guarded update matched nothing
+      { data: null, error: null }, // no row exists
+      { data: { ...ROW, odds_format: 'fractional' }, error: null }
+    ]
+    const out = await saveSettings({ oddsFormat: 'fractional' }, 'E', undefined, { oddsFormat: 'american' })
+    expect(calls('eq').map((c) => c.args)).toContainEqual(['odds_format', 'american'])
+    expect(calls('insert')[0]?.args[0]).toEqual({ user_id: 'user-1', odds_format: 'fractional', updated_at: 'E' })
+    expect(out?.oddsFormat).toBe('fractional')
+  })
+
+  it('a guard that is not the default finds its value gone: nothing is inserted, and the defaults are the answer', async () => {
+    state.replies = [
+      { data: null, error: null },
+      { data: null, error: null }
+    ]
+    const out = await saveSettings({ oddsFormat: 'fractional' }, 'E', undefined, { oddsFormat: 'decimal' })
+    expect(calls('insert')).toHaveLength(0)
+    expect(out?.oddsFormat).toBe('american')
+  })
+
+  it('a guard against null is checked with IS NULL', async () => {
+    state.replies = [{ data: { ...ROW, loss_limit: '50' }, error: null }]
+    await saveSettings({ lossLimit: 50 }, 'E', undefined, { lossLimit: null })
+    expect(calls('is')[0]?.args).toEqual(['loss_limit', null])
+  })
+
+  it('another device’s first save got there first: a conflict', async () => {
+    state.replies = [
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: null, error: { message: 'duplicate key value violates unique constraint', code: '23505' } }
+    ]
+    expect(await saveSettings({ oddsFormat: 'fractional' }, 'E', undefined, { oddsFormat: 'american' })).toBeNull()
+  })
+})
+
+describe('without a session', () => {
+  // As nobody, no row would come back, and the defaults would replace this
+  // user's settings on the device; a save would be refused and dropped.
+  it('reads and saves nothing, and says signed out', async () => {
+    state.session = { data: { session: null }, error: null }
+    await expect(getSettings()).rejects.toBeInstanceOf(SignedOutError)
+    await expect(saveSettings({ unitSize: 25 }, 'E')).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
+  })
+
+  // Read as the next account to sign in, its row was stored as this user's.
+  it('nor as another account signed in since: that is a sign-out for this one', async () => {
+    state.session = { data: { session: { user: { id: 'user-2' } } }, error: null }
+    await expect(getSettings('user-1')).rejects.toBeInstanceOf(SignedOutError)
+    await expect(saveSettings({ unitSize: 25 }, 'E', 'user-1')).rejects.toBeInstanceOf(SignedOutError)
+    expect(state.calls).toEqual([])
   })
 })

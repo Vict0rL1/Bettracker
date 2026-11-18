@@ -53,6 +53,13 @@ function gcd(a: number, b: number): number {
 /** What an empty odds box shows, per format. */
 export const ODDS_PLACEHOLDER: Record<OddsFormat, string> = { american: '+150', decimal: '1.91', fractional: '3/2' }
 
+/**
+ * The on-screen keyboard an odds box asks for. A phone's decimal pad has no
+ * minus, plus or slash, so American (-110) and fractional (3/2) odds need
+ * the full keyboard; decimal odds get the pad.
+ */
+export const oddsInputMode = (format: OddsFormat): 'decimal' | 'text' => (format === 'decimal' ? 'decimal' : 'text')
+
 /** The user-facing text for a stored decimal price. */
 export function formatOdds(decimal: number, format: OddsFormat): string {
   switch (format) {

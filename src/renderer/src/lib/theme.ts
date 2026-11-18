@@ -20,7 +20,7 @@ function stored(): Theme | null {
 /** Applied before React mounts (see index.html) and again on every change. */
 export function applyTheme(theme: Theme): void {
   const root = document.documentElement
-  const bg = theme === 'light' ? '#f6f7f9' : '#0a0f14'
+  const bg = theme === 'light' ? '#f7f7f8' : '#0e0f11'
   root.dataset.theme = theme
   root.style.background = bg
   // Keeps the mobile browser/PWA chrome in step with the app.
