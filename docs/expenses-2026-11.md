@@ -642,10 +642,11 @@ hay que hacer a mano». Orden: (1) la 008 y la 009 en el editor SQL, después de
 (2) la función y sus secretos con la CLI (`npx supabase@3.2.0`, desde la
 raíz del repositorio, con `--env-file` y `--no-verify-jwt`;
 `supabase/config.toml` guarda `verify_jwt = false`); (3) la app. En otro
-orden no se pierde nada. Si una versión de la CLI no acepta el import de
-fuera de `supabase/`, copiar el módulo a
-`supabase/functions/_shared/expenseExtraction.ts`, cambiar ese import y
-añadir un test que compare los dos archivos.
+orden no se pierde nada. La función importa su propia copia del módulo
+compartido, `supabase/functions/_shared/expenseExtraction.ts`, para que todo
+lo que se despliega esté bajo `supabase/functions`: es idéntica byte a byte a
+`src/shared/expenseExtraction.ts`, la escribe `npm run sync:function` y un
+test falla mientras difieran.
 
 ## Pendiente
 

@@ -545,3 +545,22 @@ describe('failBody and EXTRACT_STATUS', () => {
     expect(EXTRACT_STATUS.rate_limited).toBe(429)
   })
 })
+
+// The Edge Function is deployed from supabase/functions alone (the CLI and the
+// Dashboard bundle only what is under it), so it imports its own copy of this
+// module: supabase/functions/_shared/expenseExtraction.ts. The copy is never
+// edited by hand; after changing the module, `npm run sync:function` writes it.
+describe('the Edge Function\'s copy of this module', () => {
+  it('is the same file, byte for byte (run `npm run sync:function` after editing src/shared/expenseExtraction.ts)', () => {
+    const source = readFileSync(new URL('./expenseExtraction.ts', import.meta.url))
+    const copy = readFileSync(new URL('../../supabase/functions/_shared/expenseExtraction.ts', import.meta.url))
+    expect(copy.equals(source)).toBe(true)
+  })
+
+  it('is what the function imports, and nothing outside supabase/functions', () => {
+    const fn = readFileSync(new URL('../../supabase/functions/extract-expenses/index.ts', import.meta.url), 'utf8')
+    const imports = [...fn.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1])
+    expect(imports).toContain('../_shared/expenseExtraction.ts')
+    expect(imports.filter((i) => i.startsWith('.') && !i.startsWith('../_shared/') && !i.startsWith('./'))).toEqual([])
+  })
+})

@@ -76,8 +76,11 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    002 a la 009 con «yes» o «NO».
 2. **Lectura con IA (opcional)**, después de la 008 y la 009 y antes de
    publicar la app. Es la Edge Function `extract-expenses`; se despliega con la CLI de
-   Supabase desde la raíz del repositorio (importa
-   `src/shared/expenseExtraction.ts`, así que el editor del panel no sirve).
+   Supabase desde la raíz del repositorio (todo lo que necesita está bajo
+   `supabase/functions`: su `index.ts` y `_shared/expenseExtraction.ts`, copia
+   exacta de `src/shared/expenseExtraction.ts` que escribe `npm run
+   sync:function` y vigila un test). Los secretos también se pueden poner en
+   el panel (Edge Functions → Secrets).
    Pasos, coste y privacidad en el README, «AI reading of receipts
    (optional)»; en corto:
 
@@ -227,7 +230,7 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 1575 tests unitarios en 59 archivos (vitest)
+npm test            # 1577 tests unitarios en 59 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
 npm run test:e2e    # 267 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)

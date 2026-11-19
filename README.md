@@ -668,7 +668,7 @@ through `npx` at the version these steps were last checked with, **3.2.0**
 project's **reference id** (the `<ref>` of `https://<ref>.supabase.co`).
 
 ```bash
-# From the repository root: the function imports src/shared/expenseExtraction.ts.
+# From the repository root (the folder that holds supabase/).
 npx supabase@3.2.0 login
 
 # The secrets go in a file, not on the command line (it would stay in the shell
@@ -688,12 +688,15 @@ npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-
   deploy` can't turn the gateway's check back on.
 - **Docker**: the CLI bundles the function with Docker when it's running;
   without it, add `--use-api` to bundle on Supabase's side.
-- **The Dashboard's editor can't deploy it** (it imports a second file): use
-  the CLI. If a CLI version refuses the import from outside `supabase/`
-  ("Module not found … src/shared"), copy `src/shared/expenseExtraction.ts`
-  to `supabase/functions/_shared/expenseExtraction.ts`, point the one import
-  in `index.ts` at it, and keep the two files identical (a unit test that
-  compares them byte for byte is the safe way).
+- **Everything the function needs is under `supabase/functions`**: its
+  `index.ts` and `_shared/expenseExtraction.ts`, a byte-for-byte copy of
+  `src/shared/expenseExtraction.ts` (the app's own module), so bundling never
+  has to reach outside that folder, with or without Docker. The copy is never
+  edited by hand: after changing the module run `npm run sync:function`; a
+  unit test fails while the two files differ.
+- **The secrets can also be set in the Dashboard** (Edge Functions →
+  Secrets) instead of with `secrets set`: the same two names and values, and
+  no file to make or delete.
 - **`EXTRACT_ALLOWED_USERS`**: who may scan, comma-separated user ids
   (recommended; **Authentication → Users** shows yours) or confirmed emails.
   Unset, every scan is refused ("This account isn't allowed"). `*` lets every
