@@ -323,6 +323,45 @@ Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
+### Pulido 2.0: Gastos (noviembre 2026)
+
+Del master prompt de BetTracker 2.0 (mejorar sin rediseñar, menos es más,
+exactitud antes que analítica) y de las dos auditorías de solo lectura. Sin
+migración ni cambios en la sincronización. Detalle en
+`docs/expenses-2026-11.md`, «Pulido 2.0».
+
+- **Media diaria y proyección** (`pace` en `lib/spend.ts`): la media es el
+  neto fechado hasta hoy entre el día de hoy (lo fechado por delante ya no la
+  infla) y la proyección, esa media por los días del mes más lo fechado
+  después de hoy. La línea de la ficha dice cómo («19 días · a este ritmo,
+  $1,685.40»; en un mes pasado, «En 31 días») y su `title`, la cifra de la
+  que sale. La proyección solo vive ahí.
+- **Nada es cero antes de cargar**: la franja, los presupuestos y las
+  categorías muestran «—»; la frase de carga o de sin conexión se dice una
+  vez bajo el total, en el gráfico y en la lista.
+- **Por categoría suma 100 %** (denominador: los netos positivos); el
+  presupuesto de una tarjeta archivada no se lista; `compact` y `axis` de
+  `lib/currency.ts` tienen tramo M («$1.5M»).
+- **Presupuestos**: dos renglones por línea (el nombre; «$338.81 de $400.00 ·
+  Quedan $61.19») y la barra; sin presupuestos, una línea y «Ponerlo».
+- **«+n más»** es un botón que enseña todas las tarjetas; **teléfono**: la
+  franja en dos columnas (Presupuesto restante y Media diaria lado a lado);
+  las cuatro cifras comparten línea base; el acumulado del gráfico con
+  segmentos rectos y margen para la última fecha; «Por categoría» vacío es
+  una línea.
+- Código: `cardInk`, `cardLines`, `cardBudget` y `levelClass` en
+  `lib/spend.ts` (se borra `components/expenses/inks.ts`), `monthOrder` en
+  `lib/dates.ts`, `monthSpend` memoizado en `App.tsx` para la vista y los
+  ajustes.
+
+**Cómo se probó.** Unitarias nuevas en `spend.test.ts` y `currency.test.ts`
+para todo lo anterior; `e2e/expenses-summary.spec.ts` (8); typecheck, build y
+la suite e2e completa en verde. **Expectativas que cambiaron**: en
+`spend.test.ts`, `pace` recibe filas en vez del total y las dos cuotas de
+`categoryShares` pasan de 55 (lo gastado) a 50 (los netos positivos) de
+denominador. Ninguna e2e anterior cambió. Capturas a 1280, 390 y 320 px, en
+oscuro y claro, en español, con y sin presupuestos, un mes pasado y cargando.
+
 ### Gastos: tocar una tarjeta o una categoría (noviembre 2026)
 
 Petición del dueño: «al presionar una tarjeta que me salga los gastos que

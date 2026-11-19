@@ -1,6 +1,6 @@
 import { EXPENSE_CATEGORIES, type BudgetScope, type Expense, type ExpenseBudget, type ExpenseCard, type ExpenseCategory } from '../../../shared/types'
 import { categoryKey, toCategory } from './categories'
-import { addMonths, daysInMonth, monthPrefix, toDateStr, type MonthKey } from './dates'
+import { addMonths, daysInMonth, monthOrder, monthPrefix, toDateStr, type MonthKey } from './dates'
 import { NEAR_RATIO } from './lossLimit'
 import type { StringKey } from './strings'
 
@@ -69,26 +69,48 @@ export function monthSpend(list: readonly Expense[], ym: MonthKey, cards: readon
   return { total: fromCents(total), spent: fromCents(spent), refunded: fromCents(refunded), count, byCard: toAmounts(byCard), byCategory: toAmounts(byCategory) }
 }
 
+/** Today's day of the month, from a local date string. */
+const dayOf = (today: string): number => Number(today.slice(8, 10))
+
+/** The net of the rows dated on or before this day of their month, in cents (31: every row of the month). */
+const netThroughDay = (rows: readonly Expense[], day: number): number =>
+  rows.reduce((sum, e) => (Number(e.date.slice(8, 10)) <= day ? sum + cents(e.amount) : sum), 0)
+
 export interface Pace {
   /** The days the average is over: today's day in the current month, all of a past one, none of a future one. */
   daysCounted: number
+  /** The net of the rows dated through the last day counted: what the average is of (the figure the title gives). */
+  counted: number
+  /** counted / daysCounted, to the cent; null for a month still to come. */
   dailyAverage: number | null
-  /** Where the month ends at this pace (the current month only). */
+  /** Where the month ends at this pace (the current month only): the average over every day of the month, plus what is already dated after today. */
   projected: number | null
   state: 'past' | 'current' | 'future'
 }
 
-/** current month: days elapsed = today's day, projected = total / elapsed × daysInMonth; past: all days, no projection; future: nulls. */
-export function pace(total: number, ym: MonthKey, today: string): Pace {
-  const [ty, tm, td] = today.split('-').map(Number)
-  const order = ym.year * 12 + ym.month - (ty * 12 + (tm - 1))
+/**
+ * The daily average and where the month is heading.
+ *  - The current month: the average is the net of the rows dated through today (local) over today's day number. An
+ *    expense logged ahead (rent due on the 30th, entered on the 2nd) is NOT in it: it would triple the average of two
+ *    days. The projection is that average over every day of the month, plus the net of the rows dated after today,
+ *    which is committed whatever the pace. Both to the cent.
+ *  - A past month: the average over all its days; no projection (the month is what it was).
+ *  - A future month: nothing to say.
+ */
+export function pace(list: readonly Expense[], ym: MonthKey, today: string): Pace {
+  const order = monthOrder(ym, today)
   const days = daysInMonth(ym)
-  if (order > 0) return { daysCounted: 0, dailyAverage: null, projected: null, state: 'future' }
-  if (order < 0) return { daysCounted: days, dailyAverage: fromCents(Math.round(cents(total) / days)), projected: null, state: 'past' }
+  if (order > 0) return { daysCounted: 0, counted: 0, dailyAverage: null, projected: null, state: 'future' }
+  const rows = expensesInMonth(list, ym)
+  const whole = netThroughDay(rows, 31)
+  if (order < 0) return { daysCounted: days, counted: fromCents(whole), dailyAverage: fromCents(Math.round(whole / days)), projected: null, state: 'past' }
+  const td = dayOf(today)
+  const through = netThroughDay(rows, td)
   return {
     daysCounted: td,
-    dailyAverage: fromCents(Math.round(cents(total) / td)),
-    projected: fromCents(Math.round((cents(total) / td) * days)),
+    counted: fromCents(through),
+    dailyAverage: fromCents(Math.round(through / td)),
+    projected: fromCents(Math.round((through / td) * days) + (whole - through)),
     state: 'current'
   }
 }
@@ -118,17 +140,16 @@ export interface MonthComparison {
  * shown month has not started.
  */
 export function vsLastMonth(list: readonly Expense[], ym: MonthKey, today: string): MonthComparison | null {
-  const [ty, tm, td] = today.split('-').map(Number)
-  const order = ym.year * 12 + ym.month - (ty * 12 + (tm - 1))
+  const order = monthOrder(ym, today)
   if (order > 0) return null
   const previousMonth = addMonths(ym, -1)
   const before = expensesInMonth(list, previousMonth)
   if (before.length === 0) return null
+  const td = dayOf(today)
   /** Each month is counted up to this day number; a month's days never reach 32. */
   const through = order === 0 ? td : 31
-  const upTo = (rows: readonly Expense[]): number => rows.reduce((sum, e) => (Number(e.date.slice(8, 10)) <= through ? sum + cents(e.amount) : sum), 0)
-  const current = upTo(expensesInMonth(list, ym))
-  const previous = upTo(before)
+  const current = netThroughDay(expensesInMonth(list, ym), through)
+  const previous = netThroughDay(before, through)
   return {
     previousMonth,
     previousThrough: order === 0 ? toDateStr(previousMonth.year, previousMonth.month, Math.min(td, daysInMonth(previousMonth))) : null,
@@ -157,6 +178,9 @@ export function comparisonChange(c: Pick<MonthComparison, 'diff' | 'ratio'>): Co
 }
 
 export type BudgetLevel = 'none' | 'ok' | 'near' | 'over'
+
+/** The class a budget's bar fill (and the Budget left tile's) takes: red once over, amber near the limit, the plain ink otherwise. */
+export const levelClass = (level: BudgetLevel): 'over' | 'near' | 'ink' => (level === 'over' ? 'over' : level === 'near' ? 'near' : 'ink')
 
 export interface BudgetState {
   level: BudgetLevel
@@ -192,13 +216,24 @@ export interface BudgetLine {
   drill: Drill
 }
 
-/** total first, then card budgets in card order (skipping cards this device doesn't know), then categories in EXPENSE_CATEGORIES order. */
+/**
+ * A card's budget, or null. Its target is the card's id, compared case-insensitively: the ids were written by
+ * different devices (lib/stableId.ts lowercases them for the same reason).
+ */
+export const cardBudget = (budgets: readonly ExpenseBudget[], cardId: string): ExpenseBudget | null =>
+  budgets.find((b) => b.scope === 'card' && b.target.toLowerCase() === cardId.toLowerCase()) ?? null
+
+/**
+ * total first, then card budgets in card order (skipping archived cards, which have left the editor, and cards this
+ * device doesn't know), then categories in EXPENSE_CATEGORIES order.
+ */
 export function budgetLines(budgets: readonly ExpenseBudget[], month: MonthSpend, cards: readonly ExpenseCard[]): BudgetLine[] {
   const lines: BudgetLine[] = []
   const total = totalBudget(budgets)
   if (total) lines.push({ budget: total, scope: 'total', label: { key: 'budget.total' }, state: budgetState(month.total, total.monthlyLimit), drill: 'all' })
   for (const card of cards) {
-    const b = budgets.find((x) => x.scope === 'card' && x.target.toLowerCase() === card.id.toLowerCase())
+    if (card.archived) continue
+    const b = cardBudget(budgets, card.id)
     if (b) lines.push({ budget: b, scope: 'card', label: { text: card.name }, state: budgetState(month.byCard.get(card.id) ?? 0, b.monthlyLimit), drill: { card: card.id } })
   }
   for (const c of EXPENSE_CATEGORIES) {
@@ -213,21 +248,45 @@ export const totalBudget = (budgets: readonly ExpenseBudget[]): ExpenseBudget | 
 export interface CategoryShare {
   category: ExpenseCategory
   amount: number
-  /** Of month.spent, 0..1 (a category that only got money back is 0). */
+  /**
+   * Of the sum of the categories' positive nets, 0..1, so the shares add up to 100 % (of month.spent they would not: a
+   * refund lowers its category's net, not the others'). A category that only got money back is 0.
+   */
   share: number
 }
 
 /** Categories with a non-zero net, largest first (ties: list order). */
 export function categoryShares(month: MonthSpend): CategoryShare[] {
-  const out: CategoryShare[] = []
-  for (const c of EXPENSE_CATEGORIES) {
-    const amount = month.byCategory.get(c) ?? 0
+  const nets: { category: ExpenseCategory; amount: number }[] = []
+  let positive = 0
+  for (const category of EXPENSE_CATEGORIES) {
+    const amount = month.byCategory.get(category) ?? 0
     if (amount === 0) continue
-    const share = month.spent > 0 ? Math.min(1, Math.max(0, amount / month.spent)) : 0
-    out.push({ category: c, amount, share })
+    if (amount > 0) positive += cents(amount)
+    nets.push({ category, amount })
   }
+  const out = nets.map(({ category, amount }) => ({ category, amount, share: amount > 0 && positive > 0 ? cents(amount) / positive : 0 }))
   // Array#sort is stable: equal amounts keep the list's order.
   return out.sort((a, b) => b.amount - a.amount)
+}
+
+/** One line of By card: a card's key (cardKeyOf) and its net for the month. */
+export interface CardLine {
+  key: string
+  amount: number
+}
+
+/** The lines By card shows before "+n more" (the button lists the rest). */
+export const TOP_CARDS = 3
+
+/**
+ * By card's lines: each active card (at 0 when it spent nothing this month) and any other key that moved money this
+ * month (an archived card, NO_CARD), the largest net first; equal nets keep the cards' order, then the moved keys'.
+ */
+export function cardLines(month: MonthSpend, cards: readonly ExpenseCard[]): CardLine[] {
+  const keys = new Set<string>(cards.filter((c) => !c.archived).map((c) => c.id))
+  for (const [key, amount] of month.byCard) if (amount !== 0) keys.add(key)
+  return [...keys].map((key) => ({ key, amount: month.byCard.get(key) ?? 0 })).sort((a, b) => b.amount - a.amount)
 }
 
 /** name null = "No card"; dashed: drawn as an outline (NO_CARD), so it never needs a fourth grey. */
@@ -258,6 +317,27 @@ export const SERIES_INKS = ['var(--series-1)', 'var(--series-2)', 'var(--series-
 const byCreated = (a: ExpenseCard, b: ExpenseCard): number => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 const seriesKey = (cardKey: string): string => `s_${cardKey}`
 
+/** What a card is drawn with: one of the neutral series inks, or the outlined "No card" swatch. */
+export interface CardInk {
+  ink: string
+  dashed: boolean
+}
+
+const NO_CARD_INK: CardInk = { ink: 'var(--series-none)', dashed: true }
+
+/**
+ * Each card's ink by its key (cardKeyOf), as the chart, its legend and By card all draw it: SERIES_INKS by the card's
+ * place among ALL the cards, oldest first, so a card keeps its grey from month to month (an archived card keeps its
+ * place too); NO_CARD, and a card this device doesn't know, the outlined swatch. Pass the cards once, look keys up.
+ */
+export function cardInk(cards: readonly ExpenseCard[]): (key: string) => CardInk {
+  const ordered = [...cards].sort(byCreated)
+  return (key) => {
+    const i = ordered.findIndex((c) => c.id === key)
+    return i < 0 ? NO_CARD_INK : { ink: SERIES_INKS[i % SERIES_INKS.length], dashed: false }
+  }
+}
+
 /**
  * Series keys `s_<cardId>` / `s_none`. `daily`: one point per day of the month, each series holding that day's net amount
  * (negative on a day of refunds). `cumulative`: running totals, one point per day **up to today** in the current month
@@ -286,16 +366,16 @@ export function spendChartData(
     perDay.set(k, row)
   }
 
+  const inkOf = cardInk(cards)
   const series: SpendSeries[] = []
-  ordered.forEach((card, i) => {
-    if (perDay.has(card.id)) series.push({ key: seriesKey(card.id), cardId: card.id, name: card.name, ink: SERIES_INKS[i % SERIES_INKS.length], dashed: false })
-  })
-  if (perDay.has(NO_CARD)) series.push({ key: seriesKey(NO_CARD), cardId: null, name: null, ink: 'var(--series-none)', dashed: true })
+  for (const card of ordered) {
+    if (perDay.has(card.id)) series.push({ key: seriesKey(card.id), cardId: card.id, name: card.name, ...inkOf(card.id) })
+  }
+  if (perDay.has(NO_CARD)) series.push({ key: seriesKey(NO_CARD), cardId: null, name: null, ...inkOf(NO_CARD) })
 
-  const [ty, tm, td] = today.split('-').map(Number)
-  const order = ym.year * 12 + ym.month - (ty * 12 + (tm - 1))
+  const order = monthOrder(ym, today)
   /** The last day the month has got to: all of a past month, today in the current one, none of a future one. */
-  const lastDay = order < 0 ? days : order === 0 ? Math.min(td, days) : 0
+  const lastDay = order < 0 ? days : order === 0 ? Math.min(dayOf(today), days) : 0
 
   const daily: SpendPoint[] = []
   const cumulative: SpendPoint[] = []

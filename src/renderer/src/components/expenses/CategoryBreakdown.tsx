@@ -8,6 +8,8 @@ import CategoryIcon from './CategoryIcon'
 
 interface Props {
   shares: CategoryShare[]
+  /** Whether the expenses have loaded on this device: until then a dash, never "nothing to break down" (the summary says why). */
+  loaded: boolean
   /** The list's category filter: its line reads as the one the list shows. */
   active: ExpenseCategory | 'all'
   /** A line shows that category's expenses in the list below (ExpensesView), whatever the list showed before. */
@@ -15,11 +17,12 @@ interface Props {
 }
 
 /**
- * Where the month's money went, largest first. Each line shows its
- * category's expenses: the name is the button and it covers the line
- * (.drill-row), so the amount and the share stay plain text.
+ * Where the month's money went, largest first, each category's share of
+ * the positive nets (they add up to 100 %). Each line shows its category's
+ * expenses: the name is the button and it covers the line (.drill-row), so
+ * the amount and the share stay plain text. An empty month is one quiet line.
  */
-export default function CategoryBreakdown({ shares, active, onShow }: Props) {
+export default function CategoryBreakdown({ shares, loaded, active, onShow }: Props) {
   const { t } = useLang()
   const money = useMoney()
 
@@ -28,8 +31,10 @@ export default function CategoryBreakdown({ shares, active, onShow }: Props) {
       <header className="card-head">
         <h2>{t('spend.catTitle')}</h2>
       </header>
-      {shares.length === 0 ? (
-        <p className="empty-state">{t('spend.catNone')}</p>
+      {!loaded ? (
+        <p className="spend-cats-empty">—</p>
+      ) : shares.length === 0 ? (
+        <p className="spend-cats-empty">{t('spend.catNone')}</p>
       ) : (
         <ul className="spend-cat-list">
           {shares.map((s) => {

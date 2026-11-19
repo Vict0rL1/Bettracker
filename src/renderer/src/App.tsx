@@ -101,7 +101,7 @@ import { currencyFormat } from './lib/currency'
 import { downloadExpensesCsv } from './lib/expenseCsv'
 import { cardDeleteMode, type ExpenseDraft } from './lib/expenseForm'
 import type { PreparedImage } from './lib/scanImageDom'
-import { monthSpend } from './lib/spend'
+import { cardBudget, monthSpend } from './lib/spend'
 import { budgetId } from './lib/stableId'
 import { loadView, saveView, type AppView } from './lib/view'
 
@@ -299,6 +299,8 @@ export default function App() {
   const money = useMemo(() => moneyFormat(unit), [unit])
   // The expenses have their own currency (never units, never the bets' dollars): their subtree gets this instead.
   const expenseMoney = useMemo(() => currencyFormat(settings.expenseCurrency), [settings.expenseCurrency])
+  // What the shown month spent, once: the Expenses view and Expense settings read the same figures.
+  const expenseMonth = useMemo(() => monthSpend(expenses.rows, ym, cards.rows), [expenses.rows, ym, cards.rows])
 
   // The bankroll is a balance over every bet, whatever the range. Until both
   // the settings (for the starting bankroll) and the deposits and withdrawals
@@ -666,7 +668,7 @@ export default function App() {
       try {
         const mode = cardDeleteMode(card, expenses.rows, { loaded: expenses.loaded, readThisSession: expenses.tableReady })
         // Its budget goes with it, and comes back with an Undo.
-        const budget = budgets.rows.find((b) => b.scope === 'card' && b.target.toLowerCase() === card.id.toLowerCase()) ?? null
+        const budget = cardBudget(budgets.rows, card.id)
         if (budget) {
           budgetSeen.current.set(budget.id, budget.updatedAt)
           await budgets.remove(budget.id)
@@ -1470,6 +1472,7 @@ export default function App() {
                 onNextMonth={() => setYm((m) => addMonths(m, 1))}
                 onThisMonth={() => setYm(currentMonth())}
                 expenses={expenses.rows}
+                month={expenseMonth}
                 cards={cards.rows}
                 budgets={budgets.rows}
                 expensesLoaded={expenses.loaded}
@@ -1666,7 +1669,7 @@ export default function App() {
                 cards={cards.rows}
                 budgets={budgets.rows}
                 expenses={expenses.rows}
-                month={monthSpend(expenses.rows, ym, cards.rows)}
+                month={expenseMonth}
                 ym={ym}
                 cardsLoaded={cards.loaded}
                 budgetsLoaded={budgets.loaded}

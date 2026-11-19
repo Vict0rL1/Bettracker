@@ -574,9 +574,14 @@ says which one is missing and what you add waits on the device.
   expenses archives it: it leaves the pickers and its expenses keep its name. An expense whose card
   isn't there shows under **No card**.
 - **Budgets** — monthly, the same every month: one for the whole month, one
-  per card and one per category, all optional. They show as bars (amber from
-  80%, red once over) and never block anything. Two devices that set the same
-  budget meet on one row.
+  per card and one per category, all optional. The **Budgets** panel gives
+  each one two lines, its name and `$338.81 of $400.00 · $61.19 left` (or
+  `· $12.00 over`), with a bar under them: amber from 80%, red once over, and
+  always said in words too. They never block anything. With no budget set the
+  panel is one quiet line, *No budget set*, and **Set one**, which opens
+  Expense settings at the budgets. A budget of an archived card is left out
+  until the card is restored. Two devices that set the same budget meet on
+  one row.
 - **Currency** — expenses are shown in the currency picked in **Expense
   settings**: your main currency (USD by default; CAD, EUR, MXN, COP, ARS,
   CLP, PEN and more). Its code stands next to the month's title and amounts
@@ -586,19 +591,37 @@ says which one is missing and what you add waits on the device.
 - **Other currencies** — an expense can be paid in a currency that isn't
   yours: pick it next to the amount, and the app converts it (see
   [Other currencies and exchange rates](#other-currencies-and-exchange-rates)).
-- **The month** — what was spent, what is left of the budget, each card's
-  share, the daily average and where the month is heading. Under what was
-  spent, one line compares it with **the month before**: day for day while
-  the month is under way ("12% less than at this point last month": both
-  months up to today's day number, never part of a month against a whole
-  one), whole months for a past one. An arrow and plain words, no colour;
-  hover it for the figure it is compared with. It is left out when the month
-  before has no expenses. Then one chart of every
-  card's spending (running total against the budget, or per day; hover or
-  tap a day for its figures, days still to come say nothing), the
-  categories, and the list (a table on a computer, cards on a phone; search,
-  and filter by card and category). The arrows and `←`/`→` change the month,
-  shared with the bets' calendar.
+- **The month** — four figures in one strip: what was spent, what is left of
+  the budget, each card's share and the daily average. Under what was spent,
+  one line compares it with **the month before**: day for day while the month
+  is under way ("12% less than at this point last month": both months up to
+  today's day number, never part of a month against a whole one), whole
+  months for a past one. An arrow and plain words, no colour; hover it for
+  the figure it is compared with. It is left out when the month before has no
+  expenses. **By card** lists the three largest; **+n more** is a button that
+  lists them all. Then one chart of every card's spending (running total
+  against the budget, drawn with straight segments so nothing reads as spent
+  before its day, or per day; hover or tap a day for its figures, days still
+  to come say nothing), the categories (each one's share of the month's
+  positive spending, so they add up to 100%; a refund lowers its own
+  category's net), and the list (a table on a computer, cards on a phone;
+  search, and filter by card and category). The arrows and `←`/`→` change
+  the month, shared with the bets' calendar. On a phone the strip is two
+  columns: the total across the top, *Budget left* and *Daily average* side
+  by side, *By card* across the bottom.
+- **The daily average and the projection** — the average is the net of what
+  is dated **through today** divided by today's day number: an expense
+  logged ahead (the rent due on the 30th, entered on the 2nd) is not in it,
+  or two days would average a month's rent. Its line says so and where the
+  month is heading: "19 days · on pace for $1,685.40", the average over
+  every day of the month **plus what is already dated after today** (it is
+  spent whatever the pace). Hover it for the figure the average is made of.
+  A past month says "Over 31 days" and projects nothing (the month is what it
+  was); a month still to come says it hasn't started. The projection lives
+  in that one line: the total above it is always what was actually spent.
+  Until the expenses have loaded on the device (or while it is offline and
+  never did) the figures are "—" and the reason is said once under the
+  total, in the chart and in the list; a zero is only ever a real zero.
 - **Tap a card or a category to see its expenses** — a card under *By
   card*, a card's or a category's budget, or a category under *By category*:
   the list shows just that card's (or that category's) expenses for the

@@ -114,7 +114,7 @@ const cache = new Map<string, MoneyFormat>()
  *  signed:   +€12.50 (for the interface; expenses use plain)
  *  stake:    whole units from 1,000 ("$1,240"), else plain
  *  bankroll: as plain
- *  compact / axis: the symbol and a trimmed k ("€12", "€1.4k", "PEN 12k")
+ *  compact / axis: the symbol and a trimmed k, M from a million ("€12", "€1.4k", "PEN 12k", "€1.5M")
  */
 export function currencyFormat(code: string): MoneyFormat {
   const key = usable(code)
@@ -124,12 +124,14 @@ export function currencyFormat(code: string): MoneyFormat {
   const whole = new Intl.NumberFormat('en-US', { style: 'currency', currency: key, currencyDisplay: DISPLAY, minimumFractionDigits: 0, maximumFractionDigits: 0 })
   const prefix = prefixOf(nf)
   const plain = (n: number): string => withSign(n, nf.format(Math.abs(n)), false)
+  // From a million, M with one decimal ("1.5M"): "1500k" would run past a tile or an axis label.
   const compactBody = (a: number): string => {
+    if (a >= 1_000_000) return `${trimZero((a / 1_000_000).toFixed(1))}M`
     if (a >= 100_000) return `${Math.round(a / 1000)}k`
     if (a >= 1000) return `${trimZero((a / 1000).toFixed(1))}k`
     return String(Math.round(a))
   }
-  const axisBody = (a: number): string => (a >= 1000 ? `${trimZero((a / 1000).toFixed(1))}k` : String(Math.round(a)))
+  const axisBody = (a: number): string => (a >= 1_000_000 ? `${trimZero((a / 1_000_000).toFixed(1))}M` : a >= 1000 ? `${trimZero((a / 1000).toFixed(1))}k` : String(Math.round(a)))
   const format: MoneyFormat = {
     unit: null,
     scale: (n) => n,

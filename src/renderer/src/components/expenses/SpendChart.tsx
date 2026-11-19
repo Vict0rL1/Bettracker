@@ -12,7 +12,11 @@ const SpendChartInner = lazy(() => import('./SpendChartInner'))
 interface Props {
   expenses: readonly Expense[]
   cards: readonly ExpenseCard[]
+  /** Whether the expenses have loaded on this device: until then the chart says so, never an empty month. */
+  loaded: boolean
   cardsLoaded: boolean
+  /** With `loaded` false: the device is offline (the line says so) rather than still loading. */
+  offline: boolean
   ym: MonthKey
   today: string
   /** The monthly total budget, or null. */
@@ -27,7 +31,7 @@ const VIEWS: readonly SpendChartView[] = ['cumulative', 'daily']
  * by card. Cards are neutral inks (colour is for money states only); "No
  * card" is an outline.
  */
-export default function SpendChart({ expenses, cards, cardsLoaded, ym, today, budget }: Props) {
+export default function SpendChart({ expenses, cards, loaded, cardsLoaded, offline, ym, today, budget }: Props) {
   const { t } = useLang()
   const [view, setViewState] = useState<SpendChartView>(loadSpendChartView)
   const setView = (next: SpendChartView): void => {
@@ -63,7 +67,8 @@ export default function SpendChart({ expenses, cards, cardsLoaded, ym, today, bu
   }, [view, data, showBudget, budget])
 
   let body
-  if (!cardsLoaded) body = <p className="chart-empty">{t('exp.loading')}</p>
+  if (!loaded) body = <p className="chart-empty">{t(offline ? 'exp.offlineNotLoaded' : 'exp.loading')}</p>
+  else if (!cardsLoaded) body = <p className="chart-empty">{t('exp.loading')}</p>
   else if (!any) body = <p className="chart-empty">{t('spend.chartEmpty', { month: monthInline(ym) })}</p>
   else
     body = (

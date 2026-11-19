@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Expense, ExpenseBudget, ExpenseCard } from '../../../shared/types'
-import { monthInline, monthLabel } from './dates'
+import { monthInline, monthLabel, monthOrder } from './dates'
 import { getLang, setLang } from './i18n'
 import {
   budgetLines,
   budgetState,
+  cardBudget,
   cardFilterChoices,
+  cardInk,
   cardKeyOf,
+  cardLines,
   categoryShares,
   chartDayHasTip,
   comparisonChange,
@@ -14,6 +17,7 @@ import {
   expensesInMonth,
   filterExpenses,
   groupExpensesByDay,
+  levelClass,
   listSummary,
   merchantLast,
   merchantSuggestions,
@@ -89,23 +93,48 @@ describe('monthSpend', () => {
   })
 })
 
+describe('monthOrder', () => {
+  it('0 for the current month, below 0 for a past one, above 0 for one to come, across years', () => {
+    expect(monthOrder(NOV, TODAY)).toBe(0)
+    expect(monthOrder({ year: 2026, month: 9 }, TODAY)).toBe(-1)
+    expect(monthOrder({ year: 2025, month: 10 }, TODAY)).toBe(-12)
+    expect(monthOrder({ year: 2026, month: 11 }, TODAY)).toBe(1)
+    expect(monthOrder({ year: 2027, month: 0 }, TODAY)).toBe(2)
+  })
+})
+
 describe('pace', () => {
-  it('the current month: the average so far, and where the month ends at this pace', () => {
-    expect(pace(170, NOV, TODAY)).toEqual({ daysCounted: 17, dailyAverage: 10, projected: 300, state: 'current' })
+  it('the current month: the average over the days through today, and where the month ends at this pace', () => {
+    expect(pace([exp({ date: '2026-11-10', amount: 170 })], NOV, TODAY)).toEqual({ daysCounted: 17, counted: 170, dailyAverage: 10, projected: 300, state: 'current' })
+  })
+
+  it('an expense dated after today is not in the average, and goes into the projection as it stands', () => {
+    const rows = [exp({ date: '2026-11-01', amount: 40 }), exp({ date: '2026-11-30', amount: 1500 })]
+    expect(pace(rows, NOV, '2026-11-02')).toEqual({ daysCounted: 2, counted: 40, dailyAverage: 20, projected: 2100, state: 'current' })
+    // Today itself counts; another month never does.
+    const more = [...rows, exp({ date: '2026-11-02', amount: 10 }), exp({ date: '2026-10-31', amount: 999 })]
+    expect(pace(more, NOV, '2026-11-02')).toMatchObject({ counted: 50, dailyAverage: 25, projected: 2250 })
   })
 
   it('a past month: the average over all its days, no projection', () => {
-    expect(pace(310, { year: 2026, month: 9 }, TODAY)).toEqual({ daysCounted: 31, dailyAverage: 10, projected: null, state: 'past' })
-    expect(pace(100, { year: 2025, month: 11 }, TODAY).state).toBe('past')
+    const rows = [exp({ date: '2026-10-05', amount: 300 }), exp({ date: '2026-10-31', amount: 10 })]
+    expect(pace(rows, { year: 2026, month: 9 }, TODAY)).toEqual({ daysCounted: 31, counted: 310, dailyAverage: 10, projected: null, state: 'past' })
+    expect(pace([exp({ date: '2025-12-01', amount: 100 })], { year: 2025, month: 11 }, TODAY).state).toBe('past')
   })
 
   it('a future month: nothing to say', () => {
-    expect(pace(0, { year: 2026, month: 11 }, TODAY)).toEqual({ daysCounted: 0, dailyAverage: null, projected: null, state: 'future' })
-    expect(pace(0, { year: 2027, month: 0 }, TODAY).state).toBe('future')
+    expect(pace([exp({ date: '2026-12-01', amount: 50 })], { year: 2026, month: 11 }, TODAY)).toEqual({ daysCounted: 0, counted: 0, dailyAverage: null, projected: null, state: 'future' })
+    expect(pace([], { year: 2027, month: 0 }, TODAY).state).toBe('future')
   })
 
-  it('rounds to the cent', () => {
-    expect(pace(10, NOV, '2026-11-03')).toMatchObject({ dailyAverage: 3.33, projected: 100 })
+  it('rounds to the cent, adding in cents', () => {
+    expect(pace([exp({ date: '2026-11-01', amount: 10 })], NOV, '2026-11-03')).toMatchObject({ dailyAverage: 3.33, projected: 100 })
+    expect(pace([exp({ date: '2026-11-01', amount: 0.1 }), exp({ date: '2026-11-02', amount: 0.2 })], NOV, '2026-11-03')).toMatchObject({ counted: 0.3, dailyAverage: 0.1, projected: 3 })
+  })
+
+  it('a refund dated ahead lowers the projection, never the average; an empty month is 0 over the days so far', () => {
+    expect(pace([exp({ date: '2026-11-03', amount: 170 }), exp({ date: '2026-11-20', amount: -30 })], NOV, TODAY)).toMatchObject({ counted: 170, dailyAverage: 10, projected: 270 })
+    expect(pace([], NOV, TODAY)).toMatchObject({ daysCounted: 17, counted: 0, dailyAverage: 0, projected: 0 })
   })
 })
 
@@ -197,6 +226,19 @@ describe('budgetState', () => {
   it('a month that got money back counts as nothing spent', () => {
     expect(budgetState(-20, 100)).toMatchObject({ level: 'ok', ratio: 0, left: 120 })
   })
+
+  it('levelClass: the bar is red once over, amber near the limit, the plain ink otherwise', () => {
+    expect((['none', 'ok', 'near', 'over'] as const).map(levelClass)).toEqual(['ink', 'ink', 'near', 'over'])
+  })
+})
+
+describe('cardBudget', () => {
+  it('a card’s budget, whatever the case its id was saved in; none for another card or another scope', () => {
+    const b = budget('card', A.toUpperCase(), 500)
+    expect(cardBudget([budget('total', '', 100), b], A)).toBe(b)
+    expect(cardBudget([b], B)).toBeNull()
+    expect(cardBudget([budget('category', 'food', 10)], 'food')).toBeNull()
+  })
 })
 
 describe('budgetLines and totalBudget', () => {
@@ -210,10 +252,11 @@ describe('budgetLines and totalBudget', () => {
     budget('category', 'coffee', 4),
     budget('card', A, 500),
     budget('total', '', 100),
-    budget('card', B, 50)
+    budget('card', B, 50),
+    budget('card', C, 10)
   ]
 
-  it('total first, then cards in card order (skipping cards this device doesn’t know), then categories in list order', () => {
+  it('total first, then cards in card order (skipping archived cards and cards this device doesn’t know), then categories in list order', () => {
     const lines = budgetLines(budgets, monthSpend(list, NOV, CARDS), CARDS)
     expect(lines.map((l) => [l.scope, l.budget.target])).toEqual([
       ['total', ''],
@@ -232,6 +275,14 @@ describe('budgetLines and totalBudget', () => {
     expect(budgetLines(upper, monthSpend(list, NOV, CARDS), CARDS).map((l) => l.drill)).toEqual(['all', { card: A }, { category: 'coffee' }])
   })
 
+  it('an archived card’s budget is left out (the card has left the editor), even with spending on it this month', () => {
+    const spent = monthSpend([exp({ date: '2026-11-03', amount: 3, cardId: C })], NOV, CARDS)
+    expect(budgetLines([budget('card', C, 10)], spent, CARDS)).toEqual([])
+    // Restored, it is back with what the month spent on it.
+    const restored = CARDS.map((c) => (c.id === C ? { ...c, archived: false } : c))
+    expect(budgetLines([budget('card', C, 10)], spent, restored).map((l) => [l.label, l.state.spent])).toEqual([[{ text: 'Old' }, 3]])
+  })
+
   it('totalBudget: the one for the whole month, or none', () => {
     expect(totalBudget(budgets)?.monthlyLimit).toBe(100)
     expect(totalBudget([budget('card', A, 5)])).toBeNull()
@@ -239,7 +290,7 @@ describe('budgetLines and totalBudget', () => {
 })
 
 describe('categoryShares', () => {
-  it('categories with a net, largest first, each a share of what was spent', () => {
+  it('categories with a net, largest first, each a share of the positive nets: the shares add up to 100 %', () => {
     const list = [
       exp({ date: '2026-11-03', amount: 30, category: 'food' }),
       exp({ date: '2026-11-03', amount: 10, category: 'coffee' }),
@@ -248,12 +299,71 @@ describe('categoryShares', () => {
       exp({ date: '2026-11-04', amount: 5, category: 'home' }),
       exp({ date: '2026-11-04', amount: -5, category: 'home' })
     ]
+    // Of 50 (the positive nets), not of the 55 spent: a category that only got money back takes no share.
     expect(categoryShares(monthSpend(list, NOV, []))).toEqual([
-      { category: 'food', amount: 30, share: 30 / 55 },
-      { category: 'coffee', amount: 10, share: 10 / 55 },
-      { category: 'transport', amount: 10, share: 10 / 55 },
+      { category: 'food', amount: 30, share: 0.6 },
+      { category: 'coffee', amount: 10, share: 0.2 },
+      { category: 'transport', amount: 10, share: 0.2 },
       { category: 'shopping', amount: -5, share: 0 }
     ])
+  })
+
+  it('a partial refund lowers its category’s net and share; the shares still add up to 100 %', () => {
+    const list = [exp({ date: '2026-11-03', amount: 30, category: 'food' }), exp({ date: '2026-11-03', amount: 100, category: 'shopping' }), exp({ date: '2026-11-05', amount: -20, category: 'shopping' })]
+    const shares = categoryShares(monthSpend(list, NOV, []))
+    expect(shares.map((s) => [s.category, s.amount, Math.round(s.share * 100)])).toEqual([
+      ['shopping', 80, 73],
+      ['food', 30, 27]
+    ])
+    expect(shares.reduce((sum, s) => sum + s.share, 0)).toBeCloseTo(1, 12)
+    expect(categoryShares(monthSpend([exp({ date: '2026-11-03', amount: -5, category: 'shopping' })], NOV, []))).toEqual([{ category: 'shopping', amount: -5, share: 0 }])
+  })
+})
+
+describe('cardLines', () => {
+  // CARDS: Visa (B) and Amex (A) active, Old (C) archived.
+  it('every active card (at 0 with nothing spent) and any other key that moved money this month, the largest net first', () => {
+    const list = [
+      exp({ date: '2026-11-03', amount: 4.5, cardId: A }),
+      exp({ date: '2026-11-03', amount: 7, cardId: GONE }),
+      exp({ date: '2026-11-04', amount: 3, cardId: C }),
+      exp({ date: '2026-11-04', amount: -2, cardId: B })
+    ]
+    expect(cardLines(monthSpend(list, NOV, CARDS), CARDS)).toEqual([
+      { key: NO_CARD, amount: 7 },
+      { key: A, amount: 4.5 },
+      { key: C, amount: 3 },
+      { key: B, amount: -2 }
+    ])
+  })
+
+  it('an archived card with nothing this month is left out; active ones with nothing are 0, in card order', () => {
+    expect(cardLines(monthSpend([], NOV, CARDS), CARDS)).toEqual([
+      { key: B, amount: 0 },
+      { key: A, amount: 0 }
+    ])
+    expect(cardLines(monthSpend([exp({ date: '2026-11-03', amount: 1 })], NOV, []), [])).toEqual([{ key: NO_CARD, amount: 1 }])
+  })
+})
+
+describe('cardInk', () => {
+  it('a card’s ink is its place among all the cards, oldest first: the one the chart draws it with', () => {
+    const inkOf = cardInk(CARDS)
+    expect(inkOf(A)).toEqual({ ink: SERIES_INKS[0], dashed: false })
+    expect(inkOf(B)).toEqual({ ink: SERIES_INKS[1], dashed: false })
+    expect(inkOf(C)).toEqual({ ink: SERIES_INKS[2], dashed: false })
+    const { series } = spendChartData([exp({ date: '2026-11-02', amount: 1, cardId: B }), exp({ date: '2026-11-02', amount: 1 })], CARDS, NOV, TODAY)
+    expect(series.map((s) => [s.ink, s.dashed])).toEqual([
+      [inkOf(B).ink, false],
+      [inkOf(NO_CARD).ink, true]
+    ])
+  })
+
+  it('"No card" and a card this device doesn’t know are the outlined swatch; a fifth card wraps round to the first ink', () => {
+    expect(cardInk(CARDS)(NO_CARD)).toEqual({ ink: 'var(--series-none)', dashed: true })
+    expect(cardInk(CARDS)(GONE)).toEqual({ ink: 'var(--series-none)', dashed: true })
+    const many = Array.from({ length: 5 }, (_, i) => card(`0000000${i}-0000-4000-8000-000000000000`, `C${i}`, `2026-01-0${i + 1}T00:00:00Z`))
+    expect(cardInk(many)(many[4].id)).toEqual({ ink: SERIES_INKS[0], dashed: false })
   })
 })
 

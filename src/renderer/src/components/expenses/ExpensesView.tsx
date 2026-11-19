@@ -3,7 +3,7 @@ import type { Expense, ExpenseBudget, ExpenseCard } from '../../../../shared/typ
 import { currencyName } from '../../lib/currency'
 import { currentMonth, monthLabel, sameMonth, todayStr, type MonthKey } from '../../lib/dates'
 import { useLang } from '../../lib/i18n'
-import { budgetLines, categoryShares, drillFilter, expensesInMonth, monthSpend, totalBudget, vsLastMonth, type Drill, type ExpenseFilter } from '../../lib/spend'
+import { budgetLines, categoryShares, drillFilter, expensesInMonth, pace, totalBudget, vsLastMonth, type Drill, type ExpenseFilter, type MonthSpend } from '../../lib/spend'
 import { ChevronLeftIcon, ChevronRightIcon } from '../icons'
 import BudgetsPanel from './BudgetsPanel'
 import CategoryBreakdown from './CategoryBreakdown'
@@ -19,6 +19,8 @@ export interface ExpensesViewProps {
   onNextMonth: () => void
   onThisMonth: () => void
   expenses: Expense[]
+  /** What the month spent (lib/spend.ts monthSpend), memoised by App: Expense settings reads the same figures. */
+  month: MonthSpend
   cards: ExpenseCard[]
   budgets: ExpenseBudget[]
   expensesLoaded: boolean
@@ -79,11 +81,12 @@ export default function ExpensesView(p: ExpensesViewProps) {
     list.scrollIntoView?.({ behavior: lessMotion() ? 'auto' : 'smooth', block: 'start' })
   }, [reveal])
 
-  const month = useMemo(() => monthSpend(p.expenses, p.ym, p.cards), [p.expenses, p.ym, p.cards])
+  const { month } = p
   const monthList = useMemo(() => expensesInMonth(p.expenses, p.ym), [p.expenses, p.ym])
   const lines = useMemo(() => budgetLines(p.budgets, month, p.cards), [p.budgets, month, p.cards])
   const shares = useMemo(() => categoryShares(month), [month])
   const versus = useMemo(() => vsLastMonth(p.expenses, p.ym, today), [p.expenses, p.ym, today])
+  const paceOf = useMemo(() => pace(monthList, p.ym, today), [monthList, p.ym, today])
   const total = totalBudget(p.budgets)
   const onCurrent = sameMonth(p.ym, currentMonth())
   const first = p.expensesLoaded && p.cardsLoaded && p.budgetsLoaded && p.expenses.length === 0 && p.cards.length === 0 && p.budgets.length === 0
@@ -146,19 +149,31 @@ export default function ExpensesView(p: ExpensesViewProps) {
             ym={p.ym}
             month={month}
             versus={versus}
+            pace={paceOf}
             budgets={p.budgets}
             cards={p.cards}
+            loaded={p.expensesLoaded}
             cardsLoaded={p.cardsLoaded}
+            offline={p.offline}
             today={today}
             onManageBudgets={() => p.onManage('budgets')}
             activeCard={filter.card}
             onShow={show}
           />
           <div className="spend-grid">
-            <SpendChart expenses={p.expenses} cards={p.cards} cardsLoaded={p.cardsLoaded} ym={p.ym} today={today} budget={total?.monthlyLimit ?? null} />
+            <SpendChart
+              expenses={p.expenses}
+              cards={p.cards}
+              loaded={p.expensesLoaded}
+              cardsLoaded={p.cardsLoaded}
+              offline={p.offline}
+              ym={p.ym}
+              today={today}
+              budget={total?.monthlyLimit ?? null}
+            />
             <BudgetsPanel lines={lines} loaded={p.budgetsLoaded} onEdit={() => p.onManage('budgets')} filter={filter} onShow={show} />
           </div>
-          <CategoryBreakdown shares={shares} active={filter.category} onShow={show} />
+          <CategoryBreakdown shares={shares} loaded={p.expensesLoaded} active={filter.category} onShow={show} />
           <ExpenseList
             listRef={listRef}
             ym={p.ym}

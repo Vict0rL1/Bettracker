@@ -83,7 +83,8 @@ export default function SpendChartInner({ view, series, points, lo, hi, ticks, b
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={points} margin={{ top: 8, right: 10, left: 0, bottom: 2 }} stackOffset={daily ? 'sign' : 'none'} barCategoryGap="20%">
+      {/* 24px at the right: the last day's label ("Nov 30") is centred on the plot's edge and needs the room. */}
+      <ComposedChart data={points} margin={{ top: 8, right: 24, left: 0, bottom: 2 }} stackOffset={daily ? 'sign' : 'none'} barCategoryGap="20%">
         <CartesianGrid vertical={false} stroke="var(--grid)" strokeWidth={1} />
         <XAxis
           type="number"
@@ -151,9 +152,10 @@ export default function SpendChartInner({ view, series, points, lo, hi, ticks, b
               />
             ))
           : series.map((s) => (
+              // Straight segments: a curve would bend before a day's spending and read as money spent the day before.
               <Area
                 key={s.key}
-                type="monotone"
+                type="linear"
                 dataKey={s.key}
                 stackId="spend"
                 fill={s.ink}

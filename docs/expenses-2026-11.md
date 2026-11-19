@@ -32,8 +32,9 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   el mes, compartido con el calendario de apuestas.
 - **El mes**: gastado (los reembolsos restan) y cómo va frente al mes
   anterior, presupuesto restante, gasto
-  por tarjeta (las tres primeras y «+n más»), media diaria y a qué ritmo va el
-  mes; un gráfico que apila el gasto de cada tarjeta con tintas neutras
+  por tarjeta (las tres primeras y «+n más», que enseña todas), media diaria
+  de los días hasta hoy y a qué ritmo va el mes (ver «Pulido 2.0»); un
+  gráfico que apila el gasto de cada tarjeta con tintas neutras
   («Sin tarjeta», punteada) en dos vistas, acumulado contra la línea del
   presupuesto o por día; barras de presupuestos; desglose por categoría; y la
   lista agrupada por día, tabla en escritorio y tarjetas en el móvil, con
@@ -534,6 +535,117 @@ migración y sin tocar la sincronización.
   el teclado deja anillo, el neutro de la app; vale también para el gráfico
   de apuestas.
 
+## Pulido 2.0 (noviembre 2026)
+
+Del «master prompt» de BetTracker 2.0 del dueño (mejorar lo que hay sin
+rediseñar; menos es más; la exactitud financiera antes que la analítica
+decorativa; el panel de presupuestos sin presupuestos no puede ser un hueco)
+y de dos auditorías de solo lectura. Sin migración y sin tocar la
+sincronización. Lo que cambió en Gastos:
+
+### Cálculos
+
+- **Media diaria y proyección** (`pace` en `lib/spend.ts`). Antes la media
+  dividía el total del mes, con lo fechado después de hoy dentro: un alquiler
+  del 30 apuntado el día 2 triplicaba la media de dos días y la proyección lo
+  contaba quince veces. Ahora la media es el neto de las filas fechadas
+  **hasta hoy** (fecha local) entre el número de día de hoy, y la proyección
+  es esa media por los días del mes **más el neto de lo fechado después de
+  hoy** (ya está comprometido, vaya al ritmo que vaya). Ejemplo: el 2 de
+  noviembre, $40 el día 1 y $1.500 el día 30 → media $20.00, proyección
+  $2,100.00 (antes: media $770.00 y proyección $23,100.00). Un mes pasado: la
+  media sobre todos sus días, sin proyección (el mes ya es lo que fue). Un mes
+  futuro: nada. Todo en céntimos enteros. `pace` recibe las filas, no el
+  total, y el reductor «hasta el día n» (`netThroughDay`) es el mismo que usa
+  la comparación con el mes anterior. `Pace` trae además `counted`, el neto
+  del que sale la media, para el `title` de la ficha.
+- **Nada es cero antes de cargar.** Hasta que los gastos han cargado en el
+  dispositivo (o si está sin conexión y nunca cargaron) la franja enseñaba
+  $0.00 como si fuera real. Ahora lo gastado, el presupuesto restante y la
+  media son «—», igual que «Por tarjeta», el panel de presupuestos y las
+  categorías. El porqué se dice una vez en la franja (bajo el total), en el
+  hueco del gráfico y en la lista («Cargando tus gastos…» o «Tus gastos se
+  cargan cuando este dispositivo tenga conexión», la frase que ya usaba la
+  lista), no en cada ficha: siete veces la misma frase era ruido. Un cero
+  solo aparece cuando es un cero de verdad.
+- **Las categorías suman 100 %.** El denominador de «Por categoría» era lo
+  gastado en positivo (`month.spent`), así que con un reembolso parcial las
+  cuotas no sumaban 100. Ahora es la suma de los netos positivos de las
+  categorías: comida 30, compras 100 y −20 → comida 27 %, compras 73 %. Una
+  categoría que solo devolvió dinero es 0 %.
+- **El presupuesto de una tarjeta archivada** no se lista (`budgetLines`):
+  la tarjeta ya no está en el editor. Vuelve si se restaura la tarjeta.
+- **Importes compactos**: `lib/currency.ts` añade el tramo M («$1.5M») a
+  `compact` y `axis`, para pesos y ejes que lleguen al millón.
+
+### Interfaz
+
+- **Presupuestos**: cada línea son dos renglones, el nombre y «$338.81 de
+  $400.00 · Quedan $61.19» (o «· $12.00 de más»), con la barra debajo; el
+  ámbar y el rojo de la barra y de las palabras siguen, y el nivel se dice
+  siempre con palabras (también para el lector de pantalla). Sin
+  presupuestos, una sola línea («Sin presupuesto») y el botón fantasma de la
+  cabecera dice «Ponerlo» (abre los Ajustes de gastos en los presupuestos);
+  la tarjeta mide lo que su línea (`align-self: start`), no lo que el
+  gráfico de al lado. Cargando, la línea de carga.
+- **La media diaria dice cómo se hace**: «19 días · a este ritmo, $1,685.40»
+  en el mes en curso y «En 31 días» en un mes pasado; el `title` lleva la
+  cifra de la que sale («Hasta el 19 nov 2026: $1,061.80»), como la línea
+  del mes anterior. La proyección vive solo en esa línea: lo gastado es
+  siempre lo gastado.
+- **«+n más»** de «Por tarjeta» es un botón: enseña todas las tarjetas, de
+  mayor a menor (44 px en el móvil).
+- **Teléfono (≤ 640 px)**: la franja va en dos columnas: lo gastado a lo
+  ancho, Presupuesto restante y Media diaria lado a lado, Por tarjeta a lo
+  ancho. Solo CSS (`order`); el DOM y el teclado no cambian. A 320 y 390 px
+  nada desborda y las cifras caben en una línea (20 px en las dos mitades).
+- **Las cuatro cifras comparten línea base**: cada valor va bajo su
+  etiqueta y la línea de abajo se empuja al fondo (`margin-top: auto`).
+- **Gráfico**: el acumulado se dibuja con segmentos rectos (`linear`, no
+  `monotone`): la curva se doblaba antes del día del gasto y parecía dinero
+  gastado la víspera. Las barras por día no cambian. Margen derecho de 24 px
+  para que la última fecha del eje no se corte.
+- **Mes vacío** que no es el primer uso: «Por categoría» es una línea, no un
+  hueco de 160 px; los presupuestos, como arriba; el gráfico conserva su
+  estado vacío (da la altura de la fila).
+
+### Código
+
+- `cardInk(cards)` en `lib/spend.ts` es la única fuente de la tinta de cada
+  tarjeta (gráfico, leyenda y «Por tarjeta»); desaparece
+  `components/expenses/inks.ts`.
+- `monthOrder(ym, hoy)` en `lib/dates.ts`: mes en curso 0, pasado < 0,
+  futuro > 0; lo usan `pace`, `vsLastMonth` y `spendChartData`.
+- `cardBudget(budgets, cardId)`: la búsqueda del presupuesto de una tarjeta
+  (sin distinguir mayúsculas en el id), en `budgetLines`, el editor y
+  `App.tsx` al borrar una tarjeta.
+- `cardLines(month, cards)` y `TOP_CARDS`: la selección de líneas de «Por
+  tarjeta» (las tarjetas activas más las claves que movieron dinero, de
+  mayor a menor), probada aparte.
+- `levelClass(level)`: la clase de la barra (`over` / `near` / `ink`),
+  compartida por la franja y el panel.
+- `App.tsx` calcula `monthSpend` una vez (`useMemo`) y se lo pasa a la vista
+  y a los Ajustes de gastos, que antes lo recalculaban en cada render.
+
+### Pruebas
+
+- Unitarias: `spend.test.ts` (`pace` con filas: el 2 de noviembre, un
+  reembolso fechado por delante, un mes pasado, uno futuro, céntimos;
+  `monthOrder`; `categoryShares` con el reembolso parcial; `budgetLines` con
+  la tarjeta archivada; `cardBudget`, `cardLines`, `cardInk`, `levelClass`) y
+  `currency.test.ts` (el tramo M). **Expectativas que cambiaron**: `pace`
+  recibe filas en vez del total, y las dos cuotas de `categoryShares` son de
+  50 (los netos positivos), no de 55 (lo gastado).
+- e2e: `e2e/expenses-summary.spec.ts` (8): la media y la proyección en el mes
+  en curso, en uno pasado y en uno futuro, en en y es, con la cifra del
+  `title`; sin conexión sin haber cargado (ni un «$» en la vista); la primera
+  carga («—», la frase una vez en la franja, y la tarjeta de primeros pasos
+  al terminar vacía);
+  «+n más» en el ordenador y a 390 px en español; sin presupuestos y
+  «Ponerlo», luego las dos líneas de un presupuesto cerca y pasado; la franja
+  en dos columnas a 390 y 320 px, sin nada de lado y cada cifra en su línea.
+  Ninguna e2e anterior cambió.
+
 ## Sincronización
 
 Una capa genérica para tablas sencillas de un usuario, en vez de copiar
@@ -768,7 +880,10 @@ reabrieron; las que más pesan:
   tasas por moneda y fecha, «Moneda supuesta» solo donde importa, cambiar la
   moneda de una fila o de todas). Con «Tocar una tarjeta o una categoría»:
   `spend` (`drillFilter`, `listSummary`, `wholeMonthPoints`,
-  `chartDayHasTip` y la línea que enseña cada presupuesto).
+  `chartDayHasTip` y la línea que enseña cada presupuesto). Con el pulido
+  2.0: `spend` (`pace` con filas, `monthOrder`, `categoryShares` que suma
+  100 %, `budgetLines` sin tarjetas archivadas, `cardBudget`, `cardLines`,
+  `cardInk`, `levelClass`) y `currency` (el tramo M).
 - **SQL**: `checks.sql` secciones 11 (008) y 12 (009) en las variantes A, B y
   C de `run.sh`, que además prueba `check_migrations.sql` tras cada
   migración.
@@ -813,7 +928,8 @@ reabrieron; las que más pesan:
   deshacen; Intro y Espacio, y al instante con «reducir movimiento»; en
   español a 390 px con 44 px para el dedo; y el gráfico, con la fecha fija,
   sin tooltip ni cursor en un día que no ha llegado, con el ratón y con el
-  dedo, sin anillo tras un toque y con el del teclado).
+  dedo, sin anillo tras un toque y con el del teclado). Con el pulido 2.0,
+  `expenses-summary.spec.ts` (8; ver «Pulido 2.0»).
 - **La función**: `deno check` (Deno 2.9.6) pasó en la etapa 2 contra los
   tipos reales del SDK y de supabase-js, y otra vez con la moneda de cada
   gasto. Nunca se ha llamado a Anthropic ni a un proyecto de Supabase real:

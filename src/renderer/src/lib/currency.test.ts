@@ -68,6 +68,20 @@ describe('currencyFormat', () => {
     expect(currencyFormat('ARS').axis(12_000)).toBe('$12k')
   })
 
+  it('from a million, M with one decimal, trimmed (pesos reach it)', () => {
+    const ars = currencyFormat('ARS')
+    expect(ars.compact(1_500_000)).toBe('$1.5M')
+    expect(ars.compact(1_000_000)).toBe('$1M')
+    expect(ars.compact(-12_400_000)).toBe('-$12.4M')
+    expect(ars.axis(1_500_000)).toBe('$1.5M')
+    expect(ars.axis(2_000_000)).toBe('$2M')
+    expect(ars.axis(-1_000_000)).toBe('-$1M')
+    // Just under it stays in k.
+    expect(ars.compact(999_499)).toBe('$999k')
+    expect(ars.axis(999_000)).toBe('$999k')
+    expect(currencyFormat('PEN').compact(12_000_000)).toBe(`PEN${NBSP}12M`)
+  })
+
   it('stake: whole units from 1,000, else to the cent; bankroll as plain', () => {
     const mxn = currencyFormat('MXN')
     expect(mxn.stake(1240.4)).toBe('$1,240')
