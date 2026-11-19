@@ -1,10 +1,10 @@
-import { useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Expense, ExpenseBudget, ExpenseCard } from '../../../../shared/types'
 import { currencyName } from '../../lib/currency'
 import { currentMonth, monthLabel, sameMonth, todayStr, type MonthKey } from '../../lib/dates'
 import { useLang } from '../../lib/i18n'
-import { budgetLines, categoryShares, expensesInMonth, monthSpend, totalBudget, vsLastMonth, type ExpenseFilter } from '../../lib/spend'
-import { ChevronLeftIcon, ChevronRightIcon, ReceiptIcon, SlidersIcon } from '../icons'
+import { budgetLines, categoryShares, drillFilter, expensesInMonth, pace, totalBudget, vsLastMonth, type Drill, type ExpenseFilter, type MonthSpend } from '../../lib/spend'
+import { ChevronLeftIcon, ChevronRightIcon } from '../icons'
 import BudgetsPanel from './BudgetsPanel'
 import CategoryBreakdown from './CategoryBreakdown'
 import ExpenseList from './ExpenseList'
@@ -19,6 +19,8 @@ export interface ExpensesViewProps {
   onNextMonth: () => void
   onThisMonth: () => void
   expenses: Expense[]
+  /** What the month spent (lib/spend.ts monthSpend), memoised by App: Expense settings reads the same figures. */
+  month: MonthSpend
   cards: ExpenseCard[]
   budgets: ExpenseBudget[]
   expensesLoaded: boolean
@@ -31,35 +33,60 @@ export interface ExpensesViewProps {
   /** Migration 009 is missing: an expense added or changed waits for its three columns. */
   needs009: boolean
   currency: string
-  /** Why the AI reading can't start now, or null. */
-  scanBlocked: 'offline' | 'signed_out' | 'loading' | null
+  /** The first-run card's Add an expense (the same sheet as the + button and `T`). */
   onAdd: () => void
-  onScan: () => void
   onEdit: (e: Expense) => void
   onDelete: (e: Expense) => void
+  /** Expense settings at a section: the first-run card and the budgets (the menu's Expense settings opens it too). */
   onManage: (section: ExpenseSettingsSection) => void
   onExport: () => void
 }
 
 const NO_FILTER: ExpenseFilter = { card: 'all', category: 'all', query: '' }
 
+/** Whether the system asks for less motion: the list then comes into view at once instead of scrolling there. */
+const lessMotion = (): boolean => (typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false)
+
 /**
  * The Expenses view: the month (shared with the bets' calendar, and its
  * arrow keys), what it cost, how it went against the budgets, where the
  * money went, and the list. Everything is in the expense currency, through
- * the MoneyContext App gives this subtree. Only one view is mounted.
+ * the MoneyContext App gives this subtree. Only one view is mounted. Its bar
+ * holds the month alone: adding (and scanning, from the expense sheet) is the
+ * + button, and Expense settings is in the menu.
+ *
+ * Each line that names a card or a category (By card, the budgets, By
+ * category) shows its expenses when tapped: the list below is narrowed to
+ * exactly that card or that category (lib/spend.ts drillFilter), scrolled to
+ * the top of the window and given the focus. The budgets' monthly total
+ * shows the whole month.
  */
 export default function ExpensesView(p: ExpensesViewProps) {
   const { t, lang } = useLang()
-  const scanOffId = useId()
   const today = todayStr()
   const [filter, setFilter] = useState<ExpenseFilter>(NO_FILTER)
+  const listRef = useRef<HTMLElement>(null)
+  // Bumped by each tap on a line: the list comes into view once it shows that line's expenses.
+  const [reveal, setReveal] = useState(0)
+  const show = useCallback((d: Drill): void => {
+    setFilter(drillFilter(d))
+    setReveal((n) => n + 1)
+  }, [])
+  useEffect(() => {
+    const list = listRef.current
+    if (reveal === 0 || !list) return
+    // Its heading takes the focus (keyboard and screen reader land on the list, which says what it shows), without a
+    // jump of its own: the scroll brings the card's top to the window's top, under nothing (scroll-margin-top).
+    list.querySelector<HTMLElement>('.exp-list-title')?.focus({ preventScroll: true })
+    list.scrollIntoView?.({ behavior: lessMotion() ? 'auto' : 'smooth', block: 'start' })
+  }, [reveal])
 
-  const month = useMemo(() => monthSpend(p.expenses, p.ym, p.cards), [p.expenses, p.ym, p.cards])
+  const { month } = p
   const monthList = useMemo(() => expensesInMonth(p.expenses, p.ym), [p.expenses, p.ym])
   const lines = useMemo(() => budgetLines(p.budgets, month, p.cards), [p.budgets, month, p.cards])
   const shares = useMemo(() => categoryShares(month), [month])
   const versus = useMemo(() => vsLastMonth(p.expenses, p.ym, today), [p.expenses, p.ym, today])
+  const paceOf = useMemo(() => pace(monthList, p.ym, today), [monthList, p.ym, today])
   const total = totalBudget(p.budgets)
   const onCurrent = sameMonth(p.ym, currentMonth())
   const first = p.expensesLoaded && p.cardsLoaded && p.budgetsLoaded && p.expenses.length === 0 && p.cards.length === 0 && p.budgets.length === 0
@@ -87,26 +114,6 @@ export default function ExpensesView(p: ExpensesViewProps) {
             <ChevronRightIcon />
           </button>
         </div>
-        <div className="exp-bar-actions">
-          <button
-            type="button"
-            className="btn btn-ghost exp-scan-open"
-            title={t('scan.openTitle')}
-            disabled={p.scanBlocked !== null}
-            aria-describedby={p.scanBlocked ? scanOffId : undefined}
-            onClick={p.onScan}
-          >
-            <ReceiptIcon /> {t('scan.open')}
-          </button>
-          <button type="button" className="btn btn-ghost exp-manage-btn" onClick={() => p.onManage('cards')}>
-            <SlidersIcon size={14} /> {t('exp.manage')}
-          </button>
-        </div>
-        {p.scanBlocked && (
-          <p className="hint exp-scan-off" id={scanOffId}>
-            {t(`scan.err.${p.scanBlocked}`)}
-          </p>
-        )}
       </div>
 
       {p.needs008 && (
@@ -138,13 +145,37 @@ export default function ExpensesView(p: ExpensesViewProps) {
         </article>
       ) : (
         <>
-          <SpendSummary ym={p.ym} month={month} versus={versus} budgets={p.budgets} cards={p.cards} cardsLoaded={p.cardsLoaded} today={today} onManageBudgets={() => p.onManage('budgets')} />
+          <SpendSummary
+            ym={p.ym}
+            month={month}
+            versus={versus}
+            pace={paceOf}
+            budgets={p.budgets}
+            cards={p.cards}
+            loaded={p.expensesLoaded}
+            cardsLoaded={p.cardsLoaded}
+            offline={p.offline}
+            today={today}
+            onManageBudgets={() => p.onManage('budgets')}
+            activeCard={filter.card}
+            onShow={show}
+          />
           <div className="spend-grid">
-            <SpendChart expenses={p.expenses} cards={p.cards} cardsLoaded={p.cardsLoaded} ym={p.ym} today={today} budget={total?.monthlyLimit ?? null} />
-            <BudgetsPanel lines={lines} loaded={p.budgetsLoaded} onEdit={() => p.onManage('budgets')} />
+            <SpendChart
+              expenses={p.expenses}
+              cards={p.cards}
+              loaded={p.expensesLoaded}
+              cardsLoaded={p.cardsLoaded}
+              offline={p.offline}
+              ym={p.ym}
+              today={today}
+              budget={total?.monthlyLimit ?? null}
+            />
+            <BudgetsPanel lines={lines} loaded={p.budgetsLoaded} onEdit={() => p.onManage('budgets')} filter={filter} onShow={show} />
           </div>
-          <CategoryBreakdown shares={shares} active={filter.category} onPick={(category) => setFilter((f) => ({ ...f, category }))} />
+          <CategoryBreakdown shares={shares} loaded={p.expensesLoaded} active={filter.category} onShow={show} />
           <ExpenseList
+            listRef={listRef}
             ym={p.ym}
             expenses={monthList}
             cards={p.cards}

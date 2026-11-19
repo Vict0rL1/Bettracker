@@ -1,22 +1,12 @@
 import { useMemo } from 'react'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { bankrollAxis, type ChartView } from '../lib/chartView'
+import { xTicks, yAxisFor, type ChartPoint, type ChartView } from '../lib/chartView'
 import { humanDate, monthYearShort, shortDate } from '../lib/dates'
 import { scaledFormat } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
 
-/** A point as drawn: values already in the unit shown (dollars, or units). */
-export interface ChartPoint {
-  date: string
-  balance: number
-  dayTotal: number
-  /** Bankroll view only: that day's deposits less withdrawals, and the money put in so far. */
-  moved?: number
-  funded?: number
-  /** Bankroll view only: the balance carried in from before the period. */
-  opening?: true
-}
+export type { ChartPoint } from '../lib/chartView'
 
 interface Props {
   mode: ChartView
@@ -28,10 +18,13 @@ interface Props {
  * this component needs it, so BalanceChart loads this lazily: the dashboard
  * paints and is usable before the chart library has even been downloaded.
  *
- * P/L view: the running result, from 0. Bankroll view: the bankroll as a
- * level on one axis (never a second scale), with a dashed step line for the
- * money put in — the gap between the two is the P/L, and a deposit lifts both
- * — and a dot on each day money moved in or out.
+ * P/L view: the running result, from an opening point at 0. Bankroll view:
+ * the bankroll as a level on one axis (never a second scale), with a dashed
+ * step line for the money put in — at each point the gap between the two is
+ * the P/L to that day — and a dot on each day money moved in or out. Points
+ * are joined straight in both views: a curve between two days would suggest
+ * money moving on days nothing was settled. The arithmetic (which dates get
+ * a label, the axis) is in lib/chartView.ts.
  */
 export default function BalanceChartInner({ mode, data }: Props) {
   const { t } = useLang()
@@ -39,30 +32,8 @@ export default function BalanceChartInner({ mode, data }: Props) {
   const fmt = scaledFormat(money.unit !== null)
   const bankroll = mode === 'bankroll'
 
-  const ticks = useMemo(() => {
-    if (data.length < 2) return []
-    const count = Math.min(5, data.length)
-    const idx = new Set<number>()
-    for (let i = 0; i < count; i++) idx.add(Math.round((i * (data.length - 1)) / (count - 1)))
-    return [...idx].map((i) => data[i].date)
-  }, [data])
-
-  // P/L always shows its zero line and fills the plot from its lowest point
-  // (or 0) to its highest, labelled on the round ticks that fall inside it
-  // ($0, $500, $1k), not on wherever the data happens to end. A bankroll is
-  // fitted to its own round range and shows zero only when it gets there.
-  const yAxis = useMemo(() => {
-    if (!bankroll) {
-      const balances = data.map((p) => p.balance)
-      const lo = Math.min(0, ...balances)
-      const hi = Math.max(0, ...balances)
-      const ticks = bankrollAxis(lo, hi, money.unit !== null).ticks.filter((v) => v >= lo && v <= hi)
-      return { domain: [lo, hi] as [number, number], ticks, zero: true }
-    }
-    const values = data.flatMap((p) => [p.balance, p.funded ?? p.balance])
-    const { lo, hi, ticks } = bankrollAxis(Math.min(...values), Math.max(...values), money.unit !== null)
-    return { domain: [lo, hi] as [number, number], ticks, zero: lo <= 0 && hi >= 0 }
-  }, [bankroll, data, money.unit])
+  const ticks = useMemo(() => xTicks(data), [data])
+  const yAxis = useMemo(() => yAxisFor(mode, data, money.unit !== null), [mode, data, money.unit])
 
   const spansYears = data.length > 1 && data[0].date.slice(0, 4) !== data[data.length - 1].date.slice(0, 4)
   const last = data.length > 0 ? data[data.length - 1] : null
@@ -72,7 +43,8 @@ export default function BalanceChartInner({ mode, data }: Props) {
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{ top: 8, right: 10, left: 0, bottom: 2 }}>
+      {/* Room on the right for the last date's label, which is centred on the last point. */}
+      <AreaChart data={data} margin={{ top: 8, right: 24, left: 0, bottom: 2 }}>
         <defs>
           <linearGradient id="balanceFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={lineColor} stopOpacity={0.14} />
@@ -117,7 +89,8 @@ export default function BalanceChartInner({ mode, data }: Props) {
             }
             return (
               <div className="chart-tip">
-                <div className="tip-value">{fmt.plain(point.balance)}</div>
+                {/* A bankroll is a level (its natural sign); a running P/L is a result, so it carries its sign. */}
+                <div className="tip-value">{bankroll ? fmt.plain(point.balance) : fmt.signed(point.balance)}</div>
                 <div className="tip-sub">{sub}</div>
               </div>
             )
@@ -125,6 +98,7 @@ export default function BalanceChartInner({ mode, data }: Props) {
         />
         {bankroll && (
           <Area
+            // Deposits and withdrawals are instantaneous: the money put in is a step, never a slope.
             type="stepAfter"
             dataKey="funded"
             stroke="var(--text-3)"
@@ -137,9 +111,7 @@ export default function BalanceChartInner({ mode, data }: Props) {
           />
         )}
         <Area
-          // A bankroll moves in steps (a deposit is not a slope), so its points
-          // are joined straight; the running P/L keeps its smooth curve.
-          type={bankroll ? 'linear' : 'monotone'}
+          type="linear"
           dataKey="balance"
           stroke={lineColor}
           strokeWidth={1.75}

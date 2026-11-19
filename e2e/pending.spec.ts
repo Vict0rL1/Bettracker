@@ -17,8 +17,11 @@ test.describe('pending bets', () => {
     await expect(page.locator('.history-card tbody tr.is-pending .pill').first()).toHaveText('PENDING')
     // Lifetime P/L and ROI are what the three settled bets alone give.
     await expect(page.locator('.pl-card').locator('.life-value')).toHaveText('+$180.00')
-    await expect(page.locator('.pl-card').locator('.stat-sub')).toContainText('2 pending, $70.00 riding')
     await expect(page.locator('.roi-card .life-value')).toHaveText('-18.2%')
+    // What is riding is said once, on the pending card; the P/L line counts bets and days only.
+    await expect(page.locator('.pl-card').locator('.stat-sub')).toHaveText('5 bets over 5 days since Aug 2026')
+    await expect(page.locator('.pending-card .key-value')).toHaveText('2')
+    await expect(page.locator('.pending-card .key-sub')).toHaveText('$70.00 at risk · 2 past their date')
     // The calendar marks the open days rather than scoring them. The seed is
     // in August 2026; walk back to it from whatever month the test runs in.
     for (let i = 0; i < 24; i++) {

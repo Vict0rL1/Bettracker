@@ -58,10 +58,25 @@ export interface ExtractRequest {
   cards: ExtractCardHint[]
 }
 
+/**
+ * How the image shows an expense's currency: an ISO code, a currency word or a symbol of one currency for that
+ * amount ('code'); a bare "$" settled by where the image says the purchase was made ('place'); nothing ('none').
+ */
+export type CurrencyBasis = 'code' | 'place' | 'none'
+
 /** One expense the image shows. amount: + spent, − refund or credit, never 0. */
 export interface ExtractedExpense {
   date: string | null
   amount: number
+  /** The ISO 4217 code `amount` is in; null when the image doesn't settle it (currencyBasis 'none'). */
+  currency: string | null
+  currencyBasis: CurrencyBasis
+  /**
+   * What the card was charged for this purchase in another currency, when the image shows that too (a Wallet
+   * detail: "USD 12.00" with "CA$16.95" under it): signed as `amount`, never 0. Null, as chargedCurrency, otherwise.
+   */
+  chargedAmount: number | null
+  chargedCurrency: string | null
   merchant: string
   category: ExpenseCategory
   cardLast4: string | null
@@ -74,6 +89,10 @@ export interface ExtractedExpense {
 /** `sample`: the demo's canned answer. Honoured only when the caller says so (allowSample), never when the model sets it. */
 export interface ExtractResult {
   kind: 'receipt' | 'wallet' | 'other'
+  /**
+   * The currency every expense shares, when they all have the same one; else null. An app made before the
+   * per-expense currency reads only this one, for every row.
+   */
   currency: string | null
   expenses: ExtractedExpense[]
   warnings: string[]
@@ -153,11 +172,20 @@ Fields
 - category: the closest key below; "other" when none fits.
 - cardLast4: the last 4 digits of the card used when they are printed ("•••• 1234", "XXXX1234", "Tarjeta **** 1234"), else null. Only digits you can read in the image: never copy them from the user's card list. On a payment-app screen that belongs to one card, use that card's digits for every row.
 - cardHint: the card's name when it is shown ("Apple Card", "Visa Oro"), else null. Use the user's card list only to recognise names; never guess a card the image doesn't show.
-- note: a short hint in the user's language, such as "Includes a 3.00 tip" or "In EUR", or "". Never copy card numbers, addresses, phone numbers, people's names, or order or loyalty numbers.
+- note: a short hint in the user's language, such as "Includes a 3.00 tip", or "". Never copy card numbers, addresses, phone numbers, people's names, or order or loyalty numbers.
 - pending: true only for a transaction marked pending.
 - confidence: "high" when everything is legible, "medium" when something was inferred, "low" when the amount or the date is a guess.
-- currency: the ISO 4217 code of the amounts (USD, EUR, MXN, ...) only from what the image shows: an ISO code, a currency word, or a symbol whose country is clear from the image. A bare "$" with nothing else is null. Never assume the user's currency.
-- warnings: short notes in the user's language about problems with reading the image only (part of it cut off, a hard-to-read total, several receipts in one photo, amounts in another currency). An empty list when there is nothing to say.
+- currencyBasis, currency, chargedAmount, chargedCurrency: see "The currency of each expense".
+- warnings: short notes in the user's language about problems with reading the image only (part of it cut off, a hard-to-read total, several receipts in one photo). An empty list when there is nothing to say.
+
+The currency of each expense
+Decide it for each expense on its own, from this image only. A payment-app list can mix currencies (a purchase abroad or online shows in its own currency next to purchases in the card's), so never carry one row's currency over to a row that doesn't show it. Never assume the user's currency, and never take it from the currency the app shows or from the user's cards: a bare "$" can be any dollar.
+- currencyBasis "code": the image shows the currency for that amount: an ISO code ("USD 12.00", "12,00 EUR"), a currency word ("US dollars", "euros", "pesos mexicanos"), or a symbol that belongs to one currency (US$, C$, CA$, €, £, MX$). A mark like these comes first: when the amount has one, the basis is "code" whatever else the image shows.
+- currencyBasis "place": the amount shows only a bare "$", and the image itself shows where the purchase was made, which settles which dollar it is: an address with a US state or a Canadian province, a US ZIP code or a Canadian postal code, tax lines ("Sales tax" in the US; GST, HST, PST, QST, TPS or TVQ in Canada), a phone number, or a website's country domain. Only evidence printed in this image counts.
+- currencyBasis "none": nothing in the image settles it. A bare "$" with no such evidence is "none", and so is a payment-app row that shows only "$".
+- currency: the ISO 4217 code (USD, CAD, EUR, MXN, ...) when currencyBasis is "code" or "place"; null when it is "none".
+- chargedAmount and chargedCurrency: only when the image also shows what the card was charged for that same purchase in another currency (a payment app often shows "USD 12.00" with "CA$16.95" under it): the charged amount, with the same sign as amount, and its ISO code. amount and currency stay what was paid in the purchase's own currency. Otherwise both null. Never work a charged amount out from a rate, and never invent one.
+- currency (top level, outside the list): the code every expense shares when they all have one and it is the same; null when they differ, when any is null, or when there are none.
 
 Category keys
 - coffee: cafés and coffee shops
@@ -202,19 +230,24 @@ export function buildUserPrompt(req: ExtractRequest): string {
 export const EXTRACTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['kind', 'currency', 'expenses', 'warnings'],
+  required: ['kind', 'expenses', 'currency', 'warnings'],
+  // In the order the model writes them: each row's currency right after its amount (the evidence first, then the
+  // code), and the picture's one currency once every row has its own.
   properties: {
     kind: { type: 'string', enum: ['receipt', 'wallet', 'other'] },
-    currency: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     expenses: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['date', 'amount', 'merchant', 'category', 'cardLast4', 'cardHint', 'note', 'pending', 'confidence'],
+        required: ['date', 'amount', 'currencyBasis', 'currency', 'chargedAmount', 'chargedCurrency', 'merchant', 'category', 'cardLast4', 'cardHint', 'note', 'pending', 'confidence'],
         properties: {
           date: { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }] },
           amount: { type: 'number' },
+          currencyBasis: { type: 'string', enum: ['code', 'place', 'none'] },
+          currency: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          chargedAmount: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+          chargedCurrency: { anyOf: [{ type: 'string' }, { type: 'null' }] },
           merchant: { type: 'string' },
           category: { type: 'string', enum: [...EXPENSE_CATEGORIES] },
           cardLast4: { anyOf: [{ type: 'string' }, { type: 'null' }] },
@@ -225,6 +258,7 @@ export const EXTRACTION_SCHEMA = {
         }
       }
     },
+    currency: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     warnings: { type: 'array', items: { type: 'string' } }
   }
 } as const
@@ -336,6 +370,12 @@ export function parseExtractRequest(text: string): { ok: true; value: ExtractReq
 
 const KINDS = ['receipt', 'wallet', 'other'] as const
 const CONFIDENCES = ['high', 'medium', 'low'] as const
+
+/** A currency code as the model wrote it, in capitals; null when it is no code. */
+const codeOf = (v: unknown): string | null => {
+  const upper = typeof v === 'string' ? v.trim().toUpperCase() : null
+  return upper !== null && CURRENCY.test(upper) ? upper : null
+}
 const DROPPED: Record<'en' | 'es', string> = {
   en: 'A line with 0 or an impossible amount was left out.',
   es: 'Se dejó fuera una línea con importe 0 o imposible.'
@@ -349,12 +389,21 @@ const toCents = (a: number): number => (Math.sign(a) * Math.round(Number((Math.a
  * the schema's shape at all. Used by the function and again by the app on
  * every answer. `lang` words the validator's own warning; `allowSample`
  * (demo/e2e fake only) keeps `sample`.
+ *
+ * Each expense's currency: a code with how the image shows it ('code' or
+ * 'place'), or null and 'none'; a basis without a code, or a code without a
+ * basis, is 'none'. A charged amount needs both its number and its code, and
+ * a currency other than the row's. The top-level currency is the one every
+ * row shares, else null. An answer from a function older than the
+ * per-expense currency (no row has `currency` or `currencyBasis`) is read as
+ * that function meant it: every row in the picture's one currency, read from
+ * the image ('code'), or none.
  */
 export function normalizeExtraction(raw: unknown, ctx: { today: string; lang: 'en' | 'es'; allowSample?: boolean }): ExtractResult | null {
   if (!isRecord(raw) || !Array.isArray(raw.expenses)) return null
   const kind = (KINDS as readonly unknown[]).includes(raw.kind) ? (raw.kind as ExtractResult['kind']) : 'other'
-  const upper = typeof raw.currency === 'string' ? raw.currency.trim().toUpperCase() : null
-  const currency = upper !== null && CURRENCY.test(upper) ? upper : null
+  const picture = codeOf(raw.currency)
+  const older = raw.expenses.every((e) => !isRecord(e) || (e.currency === undefined && e.currencyBasis === undefined))
   let warnings = (Array.isArray(raw.warnings) ? raw.warnings : [])
     .map((w) => cleanModelText(w, EXTRACT_LIMITS.maxWarning))
     .filter((w) => w !== '')
@@ -379,9 +428,20 @@ export function normalizeExtraction(raw: unknown, ctx: { today: string; lang: 'e
     if (date === null) confidence = 'low'
     const digits = typeof e.cardLast4 === 'string' ? e.cardLast4.replace(/\D/g, '') : ''
     const hint = cleanModelText(e.cardHint, EXTRACT_LIMITS.maxCardName)
+    const code = older ? picture : codeOf(e.currency)
+    const currencyBasis: CurrencyBasis = code === null ? 'none' : older ? 'code' : e.currencyBasis === 'code' || e.currencyBasis === 'place' ? e.currencyBasis : 'none'
+    // What the card was charged: a number and a code, in a currency that is not the row's; signed as the row.
+    const chargedCurrency = codeOf(e.chargedCurrency)
+    const c = e.chargedAmount
+    const charged = typeof c === 'number' && Number.isFinite(c) ? toCents(Math.abs(c)) : 0
+    const hasCharged = chargedCurrency !== null && charged > 0 && charged <= EXTRACT_LIMITS.maxAmount && chargedCurrency !== (currencyBasis === 'none' ? null : code)
     expenses.push({
       date,
       amount,
+      currency: currencyBasis === 'none' ? null : code,
+      currencyBasis,
+      chargedAmount: hasCharged ? Math.sign(amount) * charged : null,
+      chargedCurrency: hasCharged ? chargedCurrency : null,
       merchant: cleanModelText(e.merchant, EXTRACT_LIMITS.maxMerchant),
       category: (EXPENSE_CATEGORIES as readonly unknown[]).includes(e.category) ? (e.category as ExpenseCategory) : 'other',
       cardLast4: digits.length === 4 ? digits : null,
@@ -392,6 +452,9 @@ export function normalizeExtraction(raw: unknown, ctx: { today: string; lang: 'e
     })
   }
   if (dropped) warnings = [...warnings.slice(0, EXTRACT_LIMITS.maxWarnings - 1), DROPPED[ctx.lang === 'es' ? 'es' : 'en']]
+  // The one currency of the picture: what every row shares (for an app that reads only this), or what the answer said when no row is left to say.
+  const shared = expenses[0]?.currency ?? null
+  const currency = older || expenses.length === 0 ? picture : expenses.every((e) => e.currency === shared) ? shared : null
   const result: ExtractResult = { kind, currency, expenses, warnings }
   if (ctx.allowSample === true && raw.sample === true) result.sample = true
   return result

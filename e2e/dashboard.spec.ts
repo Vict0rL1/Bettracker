@@ -47,12 +47,15 @@ test.describe('the dashboard', () => {
     await boot(page, { entries: [...SEED, open], settings: { startingBankroll: 1000 }, moves: [] })
     const key = page.locator('.key-stats')
     await expect(key.locator('.pl-card .stat-label')).toHaveText('Lifetime P/L')
-    await expect(key.locator('.bankroll-card .scope-tag')).toHaveText('All dates')
+    // With all time every card covers the same dates, so none says so, and the range's note is for the screen reader only.
+    await expect(key.locator('.scope-tag')).toHaveCount(0)
+    await expect(page.locator('.range-bar .scope-note')).toHaveClass(/visually-hidden/)
     await expect(key.locator('.pending-card .key-value')).toHaveText('1')
     await expect(key.locator('.pending-card .key-sub')).toContainText('$40.00 at risk')
 
     await page.locator('.range-bar .scope-btn', { hasText: 'This year' }).click()
     await expect(page.locator('.range-bar .scope-note')).toContainText('Bankroll, pending bets, the calendar, the month card and the history cover all dates.')
+    await expect(page.locator('.range-bar .scope-note')).not.toHaveClass(/visually-hidden/)
     await expect(page.locator('.roi-card .scope-tag')).toHaveText('This year')
     // The bankroll and pending bets do not follow the range.
     await expect(key.locator('.bankroll-card .scope-tag')).toHaveText('All dates')
@@ -80,7 +83,7 @@ test.describe('the dashboard', () => {
     await expect(page.locator('.mini-implied .mini-sub')).toHaveText('implied by the odds of 2 settled bets')
     // Days: Aug 1 is a winning day although it holds a lost bet.
     await expect(page.locator('.mini-days .stat-label')).toHaveText('Winning days')
-    await expect(page.locator('.mini-days .mini-sub')).toHaveText('1 winning, 1 losing days')
+    await expect(page.locator('.mini-days .mini-sub')).toHaveText('1 winning day, 1 losing day')
 
     await reload(page)
     await expect(page.locator('.advanced-toggle')).toHaveAttribute('aria-expanded', 'true')
@@ -92,17 +95,22 @@ test.describe('the dashboard', () => {
     await expect(page.locator('.cal-legend')).toContainText('Losing day')
   })
 
-  test('one way to add a bet: the header button and the phone’s + open the same quick add', async ({ page }) => {
+  test('one way to add a bet: the + button, on a computer as on a phone, opens the quick add', async ({ page }) => {
     await boot(page)
-    await expect(page.locator('.add-bet-btn')).toHaveText('Add bet')
-    await expect(page.locator('.fab')).toBeHidden()
-    await page.locator('.add-bet-btn').click()
+    // No Add bet in the header any more: the + at the bottom right is the one add button.
+    await expect(page.locator('.add-bet-btn')).toHaveCount(0)
+    const fab = page.locator('.fab')
+    await expect(fab).toBeVisible()
+    await expect(fab).toHaveAttribute('aria-label', 'Add bet')
+    await fab.click()
     await expect(page.locator('.quick-modal')).toBeVisible()
+    // Out of the way while the sheet is open.
+    await expect(fab).toHaveCount(0)
     await page.keyboard.press('Escape')
     await page.setViewportSize({ width: 390, height: 800 })
-    await expect(page.locator('.fab')).toBeVisible()
-    await expect(page.locator('.fab')).toHaveAttribute('aria-label', 'Add bet')
-    await page.locator('.fab').click()
+    await expect(fab).toBeVisible()
+    await expect(fab).toHaveAttribute('aria-label', 'Add bet')
+    await fab.click()
     await expect(page.locator('.quick-modal')).toBeVisible()
   })
 })
@@ -138,12 +146,16 @@ test.describe('settings and bankroll say why a value was not taken', () => {
 })
 
 test.describe('the top bar', () => {
-  test('holds only Add bet; the rest is in the menu, which the keyboard works', async ({ page }) => {
+  test('holds only the menu button; the rest is in the menu, which the keyboard works', async ({ page }) => {
     await boot(page, { theme: 'dark' })
     const bar = page.locator('.topbar-actions')
-    await expect(bar.locator('button:visible')).toHaveCount(2)
-    await expect(bar.locator('.add-bet-btn')).toHaveText('Add bet')
+    await expect(bar.locator('button:visible')).toHaveCount(1)
+    await expect(bar.locator('.menu-btn')).toBeVisible()
     const toggle = page.locator('.menu-btn')
+    // The + button comes right after it for the keyboard, where the header's Add bet was.
+    await toggle.focus()
+    await page.keyboard.press('Tab')
+    await expect(page.locator('.fab')).toBeFocused()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await expect(page.locator('.app-menu')).toHaveCount(0)
 
@@ -151,12 +163,24 @@ test.describe('the top bar', () => {
     await toggle.focus()
     await page.keyboard.press('Enter')
     const items = page.locator('.app-menu [role="menuitem"]')
-    await expect(items).toHaveText(['Import & export', 'Pending bets', 'Settings', 'Switch to light theme', 'Español', 'Sign out'])
+    await expect(items).toHaveText(['Import & export', 'Pending bets', 'Settings', 'Expense settings', 'Switch to light theme', 'Español', 'Sign out'])
     await expect(items.first()).toBeFocused()
     await page.keyboard.press('ArrowDown')
     await expect(items.nth(1)).toBeFocused()
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('ArrowUp')
+    await expect(items.last()).toBeFocused()
+    // Expense settings is one of the items the arrows, Home and End walk.
+    await page.keyboard.press('Home')
+    await expect(items.first()).toBeFocused()
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown')
+    await expect(items.nth(3)).toBeFocused()
+    await expect(items.nth(3)).toHaveClass(/expense-settings-btn/)
+    await page.keyboard.press('ArrowDown')
+    await expect(items.nth(4)).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(items.nth(3)).toBeFocused()
+    await page.keyboard.press('End')
     await expect(items.last()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(page.locator('.app-menu')).toHaveCount(0)
@@ -170,6 +194,19 @@ test.describe('the top bar', () => {
     await expect(page.locator('.settings-modal')).toBeVisible()
     await expect(page.locator('.app-menu')).toHaveCount(0)
     await page.keyboard.press('Escape')
+    await expect(toggle).toBeFocused()
+
+    // Expense settings opens from here on the Bets view too (the same sheet as in the Expenses view), and closing it
+    // lands back on the menu button.
+    await page.keyboard.press('Enter')
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    const expenseSettings = page.locator('.expense-settings-modal')
+    await expect(expenseSettings).toBeVisible()
+    await expect(expenseSettings.locator('h2').first()).toHaveText('Expense settings')
+    await expect(page.locator('.app-menu')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expect(expenseSettings).toHaveCount(0)
     await expect(toggle).toBeFocused()
 
     // A click outside closes it; the theme toggle keeps it open.

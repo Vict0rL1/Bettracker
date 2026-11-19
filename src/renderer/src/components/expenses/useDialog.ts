@@ -8,17 +8,17 @@ const shown = (el: Element | null): el is HTMLElement => el instanceof HTMLEleme
 
 /**
  * Where focus goes when an expense dialog closes: back to what opened it when
- * that is still on the page, else the visible Add expense button, else the
- * + button, else the open view's panel. Never <body>: the + button is
- * unmounted while a dialog is open, and the `t` key opens one from <body>, so
- * "what opened it" is often gone.
+ * that is still on the page, else the + button, else the open view's panel.
+ * Never <body>: the + button is unmounted while a dialog is open (it is back
+ * by the time this runs), and the `t` key opens one from <body>, so "what
+ * opened it" is often gone.
  */
 function restoreFocus(opener: HTMLElement | null): void {
   if (opener && opener !== document.body && shown(opener)) {
     opener.focus({ preventScroll: true })
     return
   }
-  const candidates = [document.querySelector('.add-expense-btn'), document.querySelector('.fab'), document.querySelector('[role="tabpanel"]')]
+  const candidates = [document.querySelector('.fab'), document.querySelector('[role="tabpanel"]')]
   const target = candidates.find((el) => shown(el)) ?? document.querySelector<HTMLElement>('[role="tabpanel"]')
   target?.focus({ preventScroll: true })
 }

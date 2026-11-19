@@ -3,7 +3,7 @@ import type { Expense, ExpenseCard } from '../../../../shared/types'
 import { bankrollAxis } from '../../lib/chartView'
 import { daysInMonth, monthInline, type MonthKey } from '../../lib/dates'
 import { useLang } from '../../lib/i18n'
-import { expensesInMonth, spendChartData } from '../../lib/spend'
+import { expensesInMonth, spendChartData, wholeMonthPoints } from '../../lib/spend'
 import { loadSpendChartView, saveSpendChartView, type SpendChartView } from '../../lib/view'
 
 // Recharts only loads with the chart (the bets' boot path never pulls it).
@@ -12,7 +12,11 @@ const SpendChartInner = lazy(() => import('./SpendChartInner'))
 interface Props {
   expenses: readonly Expense[]
   cards: readonly ExpenseCard[]
+  /** Whether the expenses have loaded on this device: until then the chart says so, never an empty month. */
+  loaded: boolean
   cardsLoaded: boolean
+  /** With `loaded` false: the device is offline (the line says so) rather than still loading. */
+  offline: boolean
   ym: MonthKey
   today: string
   /** The monthly total budget, or null. */
@@ -27,7 +31,7 @@ const VIEWS: readonly SpendChartView[] = ['cumulative', 'daily']
  * by card. Cards are neutral inks (colour is for money states only); "No
  * card" is an outline.
  */
-export default function SpendChart({ expenses, cards, cardsLoaded, ym, today, budget }: Props) {
+export default function SpendChart({ expenses, cards, loaded, cardsLoaded, offline, ym, today, budget }: Props) {
   const { t } = useLang()
   const [view, setViewState] = useState<SpendChartView>(loadSpendChartView)
   const setView = (next: SpendChartView): void => {
@@ -36,6 +40,8 @@ export default function SpendChart({ expenses, cards, cardsLoaded, ym, today, bu
   }
 
   const data = useMemo(() => spendChartData(expenses, cards, ym, today), [expenses, cards, ym, today])
+  // The running total stops at today, but the hover runs over the whole month (days still to come say nothing).
+  const cumulative = useMemo(() => wholeMonthPoints(data.cumulative, ym), [data.cumulative, ym])
   const days = daysInMonth(ym)
   const any = useMemo(() => expensesInMonth(expenses, ym).length > 0, [expenses, ym])
   const showBudget = view === 'cumulative' && budget !== null
@@ -61,7 +67,8 @@ export default function SpendChart({ expenses, cards, cardsLoaded, ym, today, bu
   }, [view, data, showBudget, budget])
 
   let body
-  if (!cardsLoaded) body = <p className="chart-empty">{t('exp.loading')}</p>
+  if (!loaded) body = <p className="chart-empty">{t(offline ? 'exp.offlineNotLoaded' : 'exp.loading')}</p>
+  else if (!cardsLoaded) body = <p className="chart-empty">{t('exp.loading')}</p>
   else if (!any) body = <p className="chart-empty">{t('spend.chartEmpty', { month: monthInline(ym) })}</p>
   else
     body = (
@@ -71,12 +78,13 @@ export default function SpendChart({ expenses, cards, cardsLoaded, ym, today, bu
             <SpendChartInner
               view={view}
               series={data.series}
-              points={view === 'daily' ? data.daily : data.cumulative}
+              points={view === 'daily' ? data.daily : cumulative}
               lo={axis.lo}
               hi={axis.hi}
               ticks={axis.ticks}
               budget={showBudget ? budget : null}
               daysInMonth={days}
+              today={today}
             />
           </Suspense>
         </div>

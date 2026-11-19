@@ -1,5 +1,6 @@
 import type { BankrollMove, Bet, BetStatus } from '../../../shared/types'
 import { inBounds, shiftDays, type Bounds } from './range'
+import { riding } from './stats'
 import { roundCents } from './validate'
 
 /**
@@ -19,7 +20,7 @@ const toCents = (n: number): number => Math.round(roundCents(n) * 100)
 const toDollars = (cents: number): number => cents / 100
 
 export type Bankroll =
-  | { known: false; reason: 'loading' | 'unset' }
+  | { known: false; reason: 'loading' | 'unset'; firstBetDate: string | null }
   | {
       known: true
       /** The starting bankroll, 0 when only moves were logged. */
@@ -37,6 +38,7 @@ export type Bankroll =
       inPlayCount: number
       /** Pending bets with no stake recorded, so `inPlay` leaves them out. */
       unstakedPending: number
+      /** The earliest bet of any status (the Bankroll dialog's hint for the start), null with no bets. */
       firstBetDate: string | null
     }
 
@@ -48,14 +50,18 @@ export type Bankroll =
  * `start` undefined until the settings were; either reads 'loading' rather
  * than a number that would jump once they arrive. With no starting bankroll
  * and no moves there is nothing to count from: 'unset'. Moves without a
- * starting bankroll count from 0.
+ * starting bankroll count from 0. The first bet's date is known either way:
+ * the dialog that sets the start up needs it most while nothing is set.
  *
  * Moves dated in the future count already: the date is the user's label, the
- * money is logged as moved. A pending bet adds nothing until it settles.
+ * money is logged as moved. A pending bet adds nothing until it settles; what
+ * is riding on the pending bets is `riding` from lib/stats, the same figure
+ * the pending card and the pending panel show.
  */
 export function bankrollNow(bets: readonly Bet[], moves: readonly BankrollMove[] | null, start: number | null | undefined): Bankroll {
-  if (moves === null || start === undefined) return { known: false, reason: 'loading' }
-  if (start === null && moves.length === 0) return { known: false, reason: 'unset' }
+  const firstBet = firstBetDate(bets)
+  if (moves === null || start === undefined) return { known: false, reason: 'loading', firstBetDate: firstBet }
+  if (start === null && moves.length === 0) return { known: false, reason: 'unset', firstBetDate: firstBet }
 
   const startC = toCents(start ?? 0)
   let depositC = 0
@@ -74,20 +80,8 @@ export function bankrollNow(bets: readonly Bet[], moves: readonly BankrollMove[]
   }
 
   let plC = 0
-  let inPlayC = 0
-  let inPlayCount = 0
-  let unstakedPending = 0
-  let firstBetDate: string | null = null
-  for (const b of bets) {
-    if (firstBetDate === null || b.date < firstBetDate) firstBetDate = b.date
-    if (b.status === 'pending') {
-      inPlayCount++
-      if (b.stake === null) unstakedPending++
-      else inPlayC += toCents(b.stake)
-    } else {
-      plC += toCents(b.amount ?? 0)
-    }
-  }
+  for (const b of bets) if (b.status !== 'pending') plC += toCents(b.amount ?? 0)
+  const open = riding(bets)
 
   const fundedC = startC + depositC + withdrawC
   return {
@@ -99,10 +93,10 @@ export function bankrollNow(bets: readonly Bet[], moves: readonly BankrollMove[]
     funded: toDollars(fundedC),
     settledPL: toDollars(plC),
     current: toDollars(fundedC + plC),
-    inPlay: toDollars(inPlayC),
-    inPlayCount,
-    unstakedPending,
-    firstBetDate
+    inPlay: open.staked,
+    inPlayCount: open.count,
+    unstakedPending: open.unstaked,
+    firstBetDate: firstBet
   }
 }
 

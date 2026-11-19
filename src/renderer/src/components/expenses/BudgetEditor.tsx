@@ -6,7 +6,7 @@ import { monthInline, type MonthKey } from '../../lib/dates'
 import { budgetCommit } from '../../lib/expenseForm'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
-import type { MonthSpend } from '../../lib/spend'
+import { cardBudget, type MonthSpend } from '../../lib/spend'
 import { useBox } from '../../lib/useBox'
 import FieldError, { describedBy } from '../FieldError'
 import CategoryIcon from './CategoryIcon'
@@ -130,7 +130,7 @@ function BudgetBox({ scope, target, label, category, spent, ym, current, enabled
 export default function BudgetEditor({ cards, budgets, month, ym, enabled, currency, registry, onSet }: Props) {
   const { t } = useLang()
   const limitOf = (scope: BudgetScope, target: string): number | null =>
-    budgets.find((b) => b.scope === scope && (scope === 'card' ? b.target.toLowerCase() === target.toLowerCase() : b.target === target))?.monthlyLimit ?? null
+    (scope === 'card' ? cardBudget(budgets, target) : budgets.find((b) => b.scope === scope && b.target === target))?.monthlyLimit ?? null
   const common = { ym, enabled, currency, registry, onSet }
 
   return (

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { boot, entry, menu, SEED } from './harness'
+import { addBet, boot, entry, menu, SEED } from './harness'
 
 /**
  * Regression tests for the product items of the audits of 2026-10-20 and
@@ -98,7 +98,7 @@ test.describe('quick add: a date, today unless chosen', () => {
 
   test('defaults to today; Yesterday logs it, and says so, for yesterday', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 10, oddsFormat: 'decimal' } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     const today = new Date()
     const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
@@ -118,13 +118,13 @@ test.describe('quick add: a date, today unless chosen', () => {
 
   test('a date typed in keeps with the draft across closing, and More details opens that day', async ({ page }) => {
     await boot(page, { settings: { oddsFormat: 'decimal' } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     await sheet.locator('.quick-date-input').fill('2026-08-15')
     await sheet.locator('.field input').first().fill('33')
     await page.keyboard.press('Escape')
     await expect(page.locator('.toast')).toContainText('kept')
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await expect(sheet.locator('.quick-date-input')).toHaveValue('2026-08-15')
     await expect(sheet.locator('.field input').first()).toHaveValue('33')
     await sheet.locator('.quick-more').click()
@@ -135,7 +135,7 @@ test.describe('quick add: a date, today unless chosen', () => {
 
   test('no date is an inline error on the date, and nothing is logged', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 10 } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     await sheet.locator('.quick-date-input').fill('')
     await sheet.locator('.seg-btn.loss').click()
@@ -159,7 +159,7 @@ test.describe('quick add: a date, today unless chosen', () => {
         // 23:59:30 local time on 2026-11-02.
         await page.clock.install({ time: tz === 'Pacific/Kiritimati' ? new Date('2026-11-02T09:59:30Z') : new Date('2026-11-03T07:59:30Z') })
         await boot(page, { settings: { defaultStake: 10 } })
-        await page.click('.add-bet-btn')
+        await addBet(page)
         const sheet = page.locator('.quick-modal')
         await expect(sheet.locator('.quick-date-input')).toHaveValue('2026-11-02')
         // Midnight passes with the sheet open.
@@ -167,7 +167,7 @@ test.describe('quick add: a date, today unless chosen', () => {
         await sheet.locator('.seg-btn.loss').click()
         await expect(page.locator('.toast')).toContainText('Nov 2, 2026')
         // Opened again now, it is a new day.
-        await page.click('.add-bet-btn')
+        await addBet(page)
         await expect(sheet.locator('.quick-date-input')).toHaveValue('2026-11-03')
         await expect(sheet.locator('.quick-yesterday')).toHaveAttribute('aria-pressed', 'false')
         await sheet.locator('.quick-yesterday').click()
@@ -217,7 +217,7 @@ test.describe('phone actions: short words, full names, one line', () => {
     await page.setViewportSize({ width: 320, height: 700 })
     await boot(page, { settings: { defaultStake: 10 } })
     const wide = (): Promise<number> => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await expect(page.locator('.quick-modal .quick-date-input')).toBeVisible()
     expect(await wide()).toBeLessThanOrEqual(0)
     const date = await page.locator('.quick-modal .quick-date-input').boundingBox()

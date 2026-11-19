@@ -586,11 +586,39 @@ export async function openAdvanced(page: Page): Promise<void> {
 
 /**
  * One of the top bar's menu items (`.data-btn`, `.pending-btn`,
- * `.settings-btn`, `.theme-btn`, `.lang-btn`, `.btn-signout`): the menu is
- * opened if it is closed, then the item clicked.
+ * `.settings-btn`, `.expense-settings-btn`, `.theme-btn`, `.lang-btn`,
+ * `.btn-signout`): the menu is opened if it is closed, then the item clicked.
  */
 export async function menu(page: Page, item: string): Promise<void> {
   const toggle = page.locator('.menu-btn')
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
   await page.locator(`.app-menu ${item}`).click()
+}
+
+/**
+ * The quick add, the way a user opens it: the + button at the bottom right
+ * (the one add button, on every screen size), on the Bets view.
+ */
+export async function addBet(page: Page): Promise<void> {
+  await page.locator('.fab').click()
+  await page.locator('.quick-modal').waitFor()
+}
+
+/** The expense sheet, through the + button, on the Expenses view. */
+export async function addExpense(page: Page): Promise<void> {
+  await page.locator('.fab').click()
+  await page.locator('.expense-modal').waitFor()
+}
+
+/** The AI reading: the + button, then the sheet's Scan receipt (it waits, enabled, until scanning can start). */
+export async function openScan(page: Page): Promise<void> {
+  await addExpense(page)
+  await page.locator('.expense-modal .exp-scan-btn').click()
+  await page.locator('.expense-modal .exp-scan-input').waitFor({ state: 'attached' })
+}
+
+/** Expense settings (cards, budgets, the currency), from the menu, on either view. */
+export async function openExpenseSettings(page: Page): Promise<void> {
+  await menu(page, '.expense-settings-btn')
+  await page.locator('.expense-settings-modal').waitFor()
 }

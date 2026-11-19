@@ -1,25 +1,37 @@
-import type { ExtractResult } from '../../../shared/expenseExtraction'
+import type { ExtractedExpense, ExtractResult } from '../../../shared/expenseExtraction'
 import { isCurrencyCode, type Expense, type ExpenseCard, type ExpenseCategory, type ExpenseInput } from '../../../shared/types'
 import type { Problem } from './betForm'
 import { matchCard } from './cardMatch'
 import { currencyDigits } from './currency'
-import { expenseAmountProblem, expenseDateProblem, formatAmountText, parseAmountText } from './expenseForm'
-import { fxInput, fxView, NO_ORIGINAL, type FxAuto, type FxTyped, type FxView } from './expenseFx'
+import { expenseAmountProblem, expenseDateProblem, formatAmountText, paidInAnother, parseAmountText } from './expenseForm'
+import { chargedFx, fxInput, fxView, NO_ORIGINAL, rateKey, type Charged, type FxAuto, type FxTyped, type FxView } from './expenseFx'
+import { mostRecentFirst } from './spend'
 
 /**
  * What an AI reading becomes before anything is saved: one editable row per
  * expense read, ticked unless it looks like an expense already saved. The
  * person checks and adds; nothing is added unseen.
  *
- * A picture is in one currency (the review's "Currency of the picture": what
- * the reading says, or the main currency when it doesn't; a bare "$" on an
- * Apple Wallet screen can be any dollar, so the person can say which). When
- * that is not the main currency, every row is an expense paid in another
- * currency: what was read is the original, and the amount in the main
- * currency comes from its day's rate, the rate typed for the rows without
- * one, or what the person types on the row (lib/expenseFx.ts). A row with no
- * rate is not added until it has one.
+ * Each row is in its own currency: a Wallet list can mix purchases in CAD and
+ * in USD, and a bare "$" can be any dollar. A row's currency is the one the
+ * image shows for it (its code, or the place a bare "$" was paid in); else
+ * the one the person last paid in at the same merchant; else the picture's
+ * one currency; else the main currency (rowCurrency). The person can change
+ * it on the row, or for every row at once. A row in a currency that is not
+ * the main one is an expense paid in another currency: what was read is the
+ * original, and the amount in the main currency is what the picture says the
+ * card was charged in it, its day's rate, the rate typed for that currency's
+ * rows without one, or what the person types on the row (lib/expenseFx.ts).
+ * A row with no rate is not added until it has one.
  */
+
+/**
+ * How a row's currency was chosen: the image shows it ('read'); the merchant's
+ * last expense was paid in it ('memory'); the reading's one currency for the
+ * picture ('picture'); the main currency, for want of any ('main'); the person
+ * ('user').
+ */
+export type CurrencyHow = 'read' | 'memory' | 'picture' | 'main' | 'user'
 
 export interface ReviewRow {
   /** `r${index}`, stable for the review. */
@@ -30,10 +42,17 @@ export interface ReviewRow {
   /** YYYY-MM-DD; today when the model gave none or an implausible one. */
   date: string
   dateGuessed: boolean
-  /** Unsigned, as typed (parseAmountText), in the currency of the picture. */
+  /** Unsigned, as typed (parseAmountText), in the row's currency. */
   amount: string
   /** The sheet's Spent/Refund model: true = a negative amount. */
   refund: boolean
+  /** The currency the row was paid in: what `amount` is in. */
+  currency: string
+  currencyHow: CurrencyHow
+  /** Neither read nor remembered, in a review where that matters (see buildReview): the row says its currency was assumed. */
+  currencyAssumed: boolean
+  /** What the picture says the card was charged for it in another currency (as read; used when that is the main one). */
+  charged: Charged | null
   /** In another currency: what the person typed on this row as its rate or its amount in the main currency (null: nothing). */
   fx: FxTyped | null
   merchant: string
@@ -49,22 +68,20 @@ export interface ReviewRow {
   duplicateOf: Expense | null
 }
 
-/** The currencies of a review and the rates it has. */
+/** The main currency of a review and the rates it has. */
 export interface ReviewMoney {
-  /** The currency of the picture: what the rows' amounts are in. */
-  currency: string
   /** The user's main currency: what is saved as `amount`. */
   main: string
-  /** The rate fetched for each date (YYYY-MM-DD) that has one. */
+  /** The rate fetched for each currency and date (rateKey('USD', '2026-11-13')) that has one. */
   rates: Readonly<Record<string, FxAuto | undefined>>
-  /** The rate typed for every row without one, when it is one. */
-  all: number | null
+  /** The rate typed for every row of a currency that has none, by currency, when it is one. */
+  all: Readonly<Record<string, number | undefined>>
 }
 
-/** A review in the main currency: nothing to convert. */
-export const sameMoney = (main: string): ReviewMoney => ({ currency: main, main, rates: {}, all: null })
+/** A review with no rate yet: rows in the main currency need none. */
+export const sameMoney = (main: string): ReviewMoney => ({ main, rates: {}, all: {} })
 
-/** The currency a picture's amounts are in until the person says otherwise: the one the reading names, else the main one. */
+/** The one currency of a picture, as the reading names it; else the main one. */
 export const pictureCurrency = (result: Pick<ExtractResult, 'currency'>, main: string): string => (isCurrencyCode(result.currency) ? result.currency : main)
 
 const NOISE_START = new Set(['sq', 'tst', 'pp'])
@@ -103,6 +120,56 @@ export function similarMerchant(a: string, b: string): boolean {
   return shorter.length >= 4 && longer.startsWith(shorter)
 }
 
+/** The currency each merchant was last paid in, by its normalized name (normalizeMerchant). */
+export type MerchantMemory = ReadonlyMap<string, string>
+
+/**
+ * What the saved expenses remember of each merchant's currency: the currency
+ * of the latest expense (by date, then by when it was added) of each
+ * normalized merchant name, its original currency when it was paid in
+ * another one, else the main currency. "SQ *Blue Bottle Coffee #12" and
+ * "Blue Bottle Coffee" are one merchant; an expense with no merchant is none.
+ * One pass over the expenses, so a long history costs one normalization each.
+ */
+export function merchantMemory(existing: readonly Expense[], main: string): MerchantMemory {
+  const latest = new Map<string, Expense>()
+  for (const e of existing) {
+    const key = normalizeMerchant(e.merchant)
+    if (key === '') continue
+    const seen = latest.get(key)
+    if (seen === undefined || mostRecentFirst(e, seen) < 0) latest.set(key, e)
+  }
+  const memory = new Map<string, string>()
+  for (const [key, e] of latest) memory.set(key, paidInAnother(e, main) ? e.originalCurrency : main)
+  return memory
+}
+
+/** The currency a merchant was last paid in, or null when none of the saved expenses is at that merchant. */
+export function rememberedCurrency(memory: MerchantMemory, merchant: string): string | null {
+  const key = normalizeMerchant(merchant)
+  return key === '' ? null : (memory.get(key) ?? null)
+}
+
+/**
+ * The currency a row read starts in, and how it was chosen: the one the image
+ * shows for it (its code, or the place a bare "$" was paid in); else the one
+ * the merchant was last paid in; else the picture's one currency; else the
+ * main currency.
+ */
+export function rowCurrency(read: Pick<ExtractedExpense, 'currency' | 'currencyBasis'>, o: { remembered: string | null; picture: string | null; main: string }): { currency: string; how: CurrencyHow } {
+  if (read.currencyBasis !== 'none' && isCurrencyCode(read.currency)) return { currency: read.currency, how: 'read' }
+  if (isCurrencyCode(o.remembered)) return { currency: o.remembered, how: 'memory' }
+  if (isCurrencyCode(o.picture)) return { currency: o.picture, how: 'picture' }
+  return { currency: o.main, how: 'main' }
+}
+
+/** What the picture says the card was charged, as a row keeps it (unsigned, with what was paid as read). */
+export const chargedOf = (e: Pick<ExtractedExpense, 'amount' | 'chargedAmount' | 'chargedCurrency'>): Charged | null =>
+  e.chargedAmount !== null && e.chargedCurrency !== null && isCurrencyCode(e.chargedCurrency) ? { amount: Math.abs(e.chargedAmount), currency: e.chargedCurrency, paid: Math.abs(e.amount) } : null
+
+/** The row is paid in another currency and the picture says what it was charged in the main one: no rate is asked for. */
+export const rowAsCharged = (row: Pick<ReviewRow, 'currency' | 'charged'>, main: string): boolean => row.currency !== main && chargedFx(row.charged, main) !== null
+
 const cents = (n: number): number => Math.round(n * 100)
 
 /** What a row would be saved as, as far as it is known, for telling a duplicate. */
@@ -139,7 +206,7 @@ export function findDuplicate(c: DuplicateCandidate, existing: readonly Expense[
 
 /** What a row's amount comes to. */
 export interface RowMoney {
-  /** The row is an expense paid in another currency (the picture's is not the main one). */
+  /** The row is an expense paid in another currency (its currency is not the main one). */
   foreign: boolean
   /** What was read, unsigned, when the box holds a usable number. */
   paid: number | null
@@ -149,32 +216,32 @@ export interface RowMoney {
   amount: number | null
 }
 
-export function rowMoney(row: Pick<ReviewRow, 'amount' | 'refund' | 'date' | 'fx'>, m: ReviewMoney): RowMoney {
-  const n = parseAmountText(row.amount, currencyDigits(m.currency))
-  const paid = typeof n === 'number' && expenseAmountProblem(row.amount, m.currency) === null ? n : null
+export function rowMoney(row: Pick<ReviewRow, 'amount' | 'refund' | 'date' | 'fx' | 'currency' | 'charged'>, m: ReviewMoney): RowMoney {
+  const n = parseAmountText(row.amount, currencyDigits(row.currency))
+  const paid = typeof n === 'number' && expenseAmountProblem(row.amount, row.currency) === null ? n : null
   const sign = row.refund ? -1 : 1
-  if (m.currency === m.main) return { foreign: false, paid, view: null, amount: paid === null ? null : sign * paid }
-  const view = fxView({ typed: row.fx, auto: m.rates[row.date] ?? null, all: m.all, amount: paid, main: m.main })
+  if (row.currency === m.main) return { foreign: false, paid, view: null, amount: paid === null ? null : sign * paid }
+  const view = fxView({ typed: row.fx, charged: chargedFx(row.charged, m.main), auto: m.rates[rateKey(row.currency, row.date)] ?? null, all: m.all[row.currency] ?? null, amount: paid, main: m.main })
   return { foreign: true, paid, view, amount: paid === null || view.converted === null || view.rate === null ? null : sign * view.converted }
 }
 
 /** What a row is compared with the saved expenses by. */
-function candidate(row: Pick<ReviewRow, 'amount' | 'refund' | 'date' | 'fx' | 'cardId' | 'merchant'>, m: ReviewMoney): DuplicateCandidate | null {
+function candidate(row: Pick<ReviewRow, 'amount' | 'refund' | 'date' | 'fx' | 'currency' | 'charged' | 'cardId' | 'merchant'>, m: ReviewMoney): DuplicateCandidate | null {
   const money = rowMoney(row, m)
   if (money.paid === null) return null
   const sign = row.refund ? -1 : 1
-  return { date: row.date, amount: money.amount, original: money.foreign ? { amount: sign * money.paid, currency: m.currency } : null, cardId: row.cardId, merchant: row.merchant }
+  return { date: row.date, amount: money.amount, original: money.foreign ? { amount: sign * money.paid, currency: row.currency } : null, cardId: row.cardId, merchant: row.merchant }
 }
 
 /**
  * What keeps a ticked row from being added and needs the person: the amount box, then the date, then (paid in another
  * currency) a rate or a main-currency amount typed on the row that can't be read. A row that simply has no rate yet
- * is not a problem to fix on the row: see rowReady.
+ * is not a problem to fix on the row: see rowReady. `m` may be the main currency alone.
  */
 export function reviewRowProblem(row: ReviewRow, m: ReviewMoney | string): Problem | null {
   const money = typeof m === 'string' ? sameMoney(m) : m
-  const basic = expenseAmountProblem(row.amount, money.currency) ?? expenseDateProblem(row.date)
-  if (basic || money.currency === money.main || row.fx === null) return basic
+  const basic = expenseAmountProblem(row.amount, row.currency) ?? expenseDateProblem(row.date)
+  if (basic || row.currency === money.main || row.fx === null) return basic
   const view = rowMoney(row, money).view
   if (view === null) return null
   // Emptied and not left yet: it will fall back to the day's rate; nothing to fix.
@@ -188,11 +255,28 @@ export function rowReady(row: ReviewRow, m: ReviewMoney): boolean {
   return rowMoney(row, m).amount !== null
 }
 
-/** A row paid in another currency that has no rate from anywhere yet (nothing typed, none fetched, none typed for all). */
+/** A row paid in another currency that has no rate from anywhere yet (nothing typed or charged, none fetched, none typed for its currency). */
 export function rowLacksRate(row: ReviewRow, m: ReviewMoney): boolean {
-  if (m.currency === m.main) return false
+  if (row.currency === m.main) return false
   const view = rowMoney(row, m).view
   return view !== null && view.rate === null && view.rateProblem?.key === 'field.rateRequired' && (row.fx === null || row.fx.text.trim() === '')
+}
+
+/**
+ * The rates a review asks for: one per currency and date of the rows paid in another currency that the person has not
+ * typed a rate or an amount for, and whose charge in the main currency the picture doesn't show. Each once.
+ */
+export function wantedRates(rows: readonly ReviewRow[], main: string): { from: string; date: string }[] {
+  const out: { from: string; date: string }[] = []
+  const seen = new Set<string>()
+  for (const r of rows) {
+    if (r.currency === main || (r.fx !== null && r.fx.text.trim() !== '') || rowAsCharged(r, main)) continue
+    const key = rateKey(r.currency, r.date)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ from: r.currency, date: r.date })
+  }
+  return out
 }
 
 /**
@@ -200,16 +284,27 @@ export function rowLacksRate(row: ReviewRow, m: ReviewMoney): boolean {
  * active card rule out a card found by name only when that card has digits of its own recorded (they differ); last 4
  * is optional, so a card saved without them is still found by its name. A row left without a card by such digits says
  * so (`cardUnknownLast4`). A row like an expense already saved (queued ones too) starts unticked, next to its match; a
- * guessed date, low confidence or a problem opens the row. `currency` is the main currency: the amounts are written
- * in the picture's own (pictureCurrency), and no rate is known yet, so a row paid in another currency is matched with
- * the saved expenses by what was paid alone until its rate comes (refreshDuplicates).
+ * guessed date, low confidence or a problem opens the row.
+ *
+ * Currency: rowCurrency, with the merchant memory of `existing`; the amounts are written in each row's own. A row
+ * whose currency was neither read nor remembered is marked `currencyAssumed` when that matters: the person has
+ * expenses paid in another currency, the rows are not all in one currency, or the picture shows what the row was
+ * charged in another one. A picture that is all in the main currency, for someone who never pays in another, says
+ * nothing.
+ * `currency` is the main currency. No rate is known yet, so a row paid in another currency is matched with the saved
+ * expenses by what was paid (and by what it was charged in the main currency, when the picture says) until its rate
+ * comes (refreshDuplicates).
  */
 export function buildReview(result: ExtractResult, ctx: { today: string; cards: readonly ExpenseCard[]; existing: readonly Expense[]; currency: string }): ReviewRow[] {
+  const main = ctx.currency
   const active = ctx.cards.filter((c) => !c.archived)
   const taken = new Set<string>()
-  const paidIn = pictureCurrency(result, ctx.currency)
-  const money: ReviewMoney = { currency: paidIn, main: ctx.currency, rates: {}, all: null }
+  const memory = merchantMemory(ctx.existing, main)
+  const picture = isCurrencyCode(result.currency) ? result.currency : null
+  const chosen = result.expenses.map((e) => rowCurrency(e, { remembered: rememberedCurrency(memory, e.merchant), picture, main }))
+  const matters = ctx.existing.some((e) => paidInAnother(e, main)) || new Set(chosen.map((c) => c.currency)).size > 1
   return result.expenses.map((e, i) => {
+    const { currency, how } = chosen[i]
     const unknownDigits = e.cardLast4 !== null && !active.some((c) => c.last4 === e.cardLast4)
     const found = matchCard({ last4: e.cardLast4, name: e.cardHint }, ctx.cards)
     // Unknown digits leave only a name match, and veto it when the card named has other digits on record.
@@ -217,20 +312,29 @@ export function buildReview(result: ExtractResult, ctx: { today: string; cards: 
     const match = vetoed ? null : found
     const date = e.date ?? ctx.today
     const cardId = match?.cardId ?? null
-    const foreign = paidIn !== ctx.currency
+    const charged = chargedOf(e)
+    const foreign = currency !== main
+    const asCharged = foreign ? chargedFx(charged, main) : null
+    const sign = e.amount < 0 ? -1 : 1
     const duplicateOf = findDuplicate(
-      { date, amount: foreign ? null : e.amount, original: foreign ? { amount: e.amount, currency: paidIn } : null, cardId, merchant: e.merchant },
+      { date, amount: foreign ? (asCharged ? sign * asCharged.converted : null) : e.amount, original: foreign ? { amount: e.amount, currency } : null, cardId, merchant: e.merchant },
       ctx.existing,
       taken
     )
+    const unread = how === 'picture' || how === 'main'
     const row: ReviewRow = {
       key: `r${i}`,
       include: duplicateOf === null,
       open: false,
       date,
       dateGuessed: e.date === null,
-      amount: formatAmountText(Math.abs(e.amount), paidIn),
+      amount: formatAmountText(Math.abs(e.amount), currency),
       refund: e.amount < 0,
+      currency,
+      currencyHow: how,
+      // A charge in another currency means the purchase wasn't in that one: the currency matters even when it is the default.
+      currencyAssumed: unread && (matters || charged !== null),
+      charged,
       fx: null,
       merchant: e.merchant,
       category: e.category,
@@ -242,15 +346,35 @@ export function buildReview(result: ExtractResult, ctx: { today: string; cards: 
       confidence: e.confidence,
       duplicateOf
     }
-    row.open = row.dateGuessed || row.confidence === 'low' || reviewRowProblem(row, money) !== null
+    row.open = row.dateGuessed || row.confidence === 'low' || reviewRowProblem(row, main) !== null
     return row
   })
 }
 
 /**
+ * The row in another currency, as the person chose it: no longer assumed. A rate typed on it was for the other
+ * currency and goes; an amount typed in the main currency (what the bank charged) stays, unless the row is now in the
+ * main currency itself. Choosing the currency it already has only confirms it.
+ */
+export function setRowCurrency(row: ReviewRow, currency: string, main: string): ReviewRow {
+  if (currency === row.currency) return row.currencyHow === 'user' && !row.currencyAssumed ? row : { ...row, currencyHow: 'user', currencyAssumed: false }
+  const fx = currency !== main && row.fx?.lead === 'converted' ? row.fx : null
+  return { ...row, currency, currencyHow: 'user', currencyAssumed: false, fx }
+}
+
+/** "Currency of all rows": every row in that one. */
+export const setAllCurrencies = (rows: readonly ReviewRow[], currency: string, main: string): ReviewRow[] => rows.map((r) => setRowCurrency(r, currency, main))
+
+/** The currency every row is in, or null when they differ (or there are none). */
+export function commonCurrency(rows: readonly Pick<ReviewRow, 'currency'>[]): string | null {
+  const first = rows[0]?.currency ?? null
+  return first !== null && rows.every((r) => r.currency === first) ? first : null
+}
+
+/**
  * The rows with their duplicates looked up again: the saved expenses changed (one was added or deleted elsewhere), a
- * row was edited, the currency of the picture changed or a rate arrived. A row that gains or loses its match is
- * unticked or ticked with it; the others keep what the person chose. The same array when nothing changed.
+ * row's currency changed or a rate arrived. A row that gains or loses its match is unticked or ticked with it; the
+ * others keep what the person chose. The same array when nothing changed.
  */
 export function refreshDuplicates(rows: readonly ReviewRow[], existing: readonly Expense[], m: ReviewMoney): readonly ReviewRow[] {
   if (rows.length === 0) return rows
@@ -288,13 +412,13 @@ export function reviewAdds(rows: readonly ReviewRow[], m: ReviewMoney): { inputs
     if (money.paid === null || money.amount === null) continue
     const rest = { date: r.date, cardId: r.cardId, merchant: r.merchant, category: r.category, note: r.note, source: 'ai' as const }
     if (!money.foreign || money.view === null) inputs.push({ ...rest, amount: money.amount, ...NO_ORIGINAL })
-    else inputs.push({ ...rest, ...fxInput(money.view, money.paid, m.currency, r.refund) })
+    else inputs.push({ ...rest, ...fxInput(money.view, money.paid, r.currency, r.refund) })
     keys.push(r.key)
   }
   return { inputs, keys }
 }
 
-/** Included rows only; amount = ±parseAmountText; source 'ai'. Call once no included row has a problem. In the main currency (see reviewAdds for a picture in another). */
+/** Included rows only; amount = ±parseAmountText; source 'ai'. Call once no included row has a problem. Rows in the main currency (see reviewAdds for the others, which need a rate). */
 export function reviewInputs(rows: readonly ReviewRow[], currency: string): ExpenseInput[] {
   return reviewAdds(rows, sameMoney(currency)).inputs
 }

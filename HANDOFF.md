@@ -76,8 +76,11 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    002 a la 009 con «yes» o «NO».
 2. **Lectura con IA (opcional)**, después de la 008 y la 009 y antes de
    publicar la app. Es la Edge Function `extract-expenses`; se despliega con la CLI de
-   Supabase desde la raíz del repositorio (importa
-   `src/shared/expenseExtraction.ts`, así que el editor del panel no sirve).
+   Supabase desde la raíz del repositorio (todo lo que necesita está bajo
+   `supabase/functions`: su `index.ts` y `_shared/expenseExtraction.ts`, copia
+   exacta de `src/shared/expenseExtraction.ts` que escribe `npm run
+   sync:function` y vigila un test). Los secretos también se pueden poner en
+   el panel (Edge Functions → Secrets).
    Pasos, coste y privacidad en el README, «AI reading of receipts
    (optional)»; en corto:
 
@@ -101,6 +104,12 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    dice que la lectura con IA no está configurada y escribir el gasto a mano
    funciona. La CLI 3.2.0 acepta `supabase/config.toml` (comprobado en la
    etapa 2) y los parámetros de arriba (etapa 4); no se ha desplegado nada.
+   **Si la función ya estaba desplegada, hay que volver a desplegarla** (el
+   mismo `functions deploy`, sin tocar los secretos) para que lea la moneda
+   de cada gasto y lo cobrado en la moneda principal: la función de antes
+   sigue funcionando con la app nueva, pero da una sola moneda por imagen.
+   Una app de antes con la función nueva también funciona (ver
+   `docs/expenses-2026-11.md`, «La moneda de cada gasto»).
 3. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
    el proyecto que ya existe: Settings → Git, conectar este repositorio y
    poner el directorio raíz en `/`. Así se conservan el dominio y las
@@ -227,10 +236,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 1575 tests unitarios en 59 archivos (vitest)
+npm test            # 1707 tests unitarios en 62 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 267 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 315 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
@@ -307,10 +316,206 @@ presupuestos (con `moves` y sin ellas valen `[]`; `null`, ninguna caché);
 `view: 'expenses'` abre en la vista Gastos; `ai` dirige la lectura con IA
 falsa (`rows`, `fail` con un código, `hold`, `ignoreAbort`), y el harness
 exporta `TINY_PNG`, `scanFile` y `bigPng` (un recibo de 1200×1600 dibujado en
-la página). En este entorno hizo falta `NO_PROXY='*'` para que
+la página). Para abrir cada cosa como lo hace el usuario: `addBet` y
+`addExpense` (el + de abajo a la derecha), `openScan` (el + y el «Escanear
+recibo» de la hoja) y `openExpenseSettings` (menú ☰ → Ajustes de gastos). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Pulido 2.0: Gastos (noviembre 2026)
+
+Del master prompt de BetTracker 2.0 (mejorar sin rediseñar, menos es más,
+exactitud antes que analítica) y de las dos auditorías de solo lectura. Sin
+migración ni cambios en la sincronización. Detalle en
+`docs/expenses-2026-11.md`, «Pulido 2.0».
+
+- **Media diaria y proyección** (`pace` en `lib/spend.ts`): la media es el
+  neto fechado hasta hoy entre el día de hoy (lo fechado por delante ya no la
+  infla) y la proyección, esa media por los días del mes más lo fechado
+  después de hoy. La línea de la ficha dice cómo («19 días · a este ritmo,
+  $1,685.40»; en un mes pasado, «En 31 días») y su `title`, la cifra de la
+  que sale. La proyección solo vive ahí.
+- **Nada es cero antes de cargar**: la franja, los presupuestos y las
+  categorías muestran «—»; la frase de carga o de sin conexión se dice una
+  vez bajo el total, en el gráfico y en la lista.
+- **Por categoría suma 100 %** (denominador: los netos positivos); el
+  presupuesto de una tarjeta archivada no se lista; `compact` y `axis` de
+  `lib/currency.ts` tienen tramo M («$1.5M»).
+- **Presupuestos**: dos renglones por línea (el nombre; «$338.81 de $400.00 ·
+  Quedan $61.19») y la barra; sin presupuestos, una línea y «Ponerlo».
+- **«+n más»** es un botón que enseña todas las tarjetas; **teléfono**: la
+  franja en dos columnas (Presupuesto restante y Media diaria lado a lado);
+  las cuatro cifras comparten línea base; el acumulado del gráfico con
+  segmentos rectos y margen para la última fecha; «Por categoría» vacío es
+  una línea.
+- Código: `cardInk`, `cardLines`, `cardBudget` y `levelClass` en
+  `lib/spend.ts` (se borra `components/expenses/inks.ts`), `monthOrder` en
+  `lib/dates.ts`, `monthSpend` memoizado en `App.tsx` para la vista y los
+  ajustes.
+
+**Cómo se probó.** Unitarias nuevas en `spend.test.ts` y `currency.test.ts`
+para todo lo anterior; `e2e/expenses-summary.spec.ts` (8); typecheck, build y
+la suite e2e completa en verde. **Expectativas que cambiaron**: en
+`spend.test.ts`, `pace` recibe filas en vez del total y las dos cuotas de
+`categoryShares` pasan de 55 (lo gastado) a 50 (los netos positivos) de
+denominador. Ninguna e2e anterior cambió. Capturas a 1280, 390 y 320 px, en
+oscuro y claro, en español, con y sin presupuestos, un mes pasado y cargando.
+
+### Gastos: tocar una tarjeta o una categoría (noviembre 2026)
+
+Petición del dueño: «al presionar una tarjeta que me salga los gastos que
+usé con esta tarjeta y así con lo demás». Detalle en
+`docs/expenses-2026-11.md` («Tocar una tarjeta o una categoría»).
+
+- «Por tarjeta» (con «Sin tarjeta»), cada línea de presupuesto y «Por
+  categoría» son botones sin adornos (`.drill-row` / `.drill`): filtran la
+  lista del mes a esa tarjeta o categoría (`drillFilter` en `lib/spend.ts`
+  limpia la otra y la búsqueda), la suben a la vista y llevan el foco a su
+  título. «Total del mes» muestra todo el mes.
+- Encima de la lista, `.exp-active`: «Promerica ×», número de gastos, total
+  y «Ver todo».
+- Gráfico de gastos: cursor propio (sin la línea `#ccc` de Recharts), nada
+  en los días futuros, y un toque ya no deja el anillo de foco de Recharts
+  (también en el gráfico de apuestas).
+- Pruebas: 11 unitarias en `spend.test.ts` y `e2e/expenses-drill.spec.ts`
+  (5).
+
+### Jugadas de casino en Apuestas (noviembre 2026)
+
+Petición del dueño: «no solo estoy haciendo apuestas deportivas sino también
+jugando juegos de Stake como Dice, Limbo y Mines etc., quiero también que
+agregues la opción de ganar o perder […] que se mire todo limpio y
+minimalista». Detalle en `docs/casino-2026-11.md`. **Sin migración** y sin
+tocar la sincronización.
+
+- **Una jugada es una apuesta**: deporte `Casino` (`lib/casino.ts`; una
+  etiqueta «casino» escrita a mano cuenta igual), el juego como tipo, el
+  sitio como casa, sin cuota, el resultado neto como importe y lo apostado,
+  si se escribe, como stake (si no, nulo: fuera del ROI).
+- **Registro rápido**: arriba, **Deportes | Casino** (grupo de radio con
+  flechas, Inicio y Fin). Se abre en el tipo de la última apuesta, o en el
+  lado del borrador. Deportes es la hoja de antes, con las etiquetas y el
+  stake de la última apuesta **deportiva**. Casino: fecha, juego (diez
+  fichas de Stake y «Otro juego»; viene el último), importe y **Gané** /
+  **Perdí**; debajo, sitio (el último, o Stake) y lo apostado, opcional. Una
+  pérdida no puede superar lo apostado. El borrador guarda los dos lados.
+- **Dónde se ve**: «Casino · Limbo · Stake» en el historial, la lista del
+  día y las pendientes (`betTags`); en el móvil, sin «stake sin registrar»
+  ni filas de cuota vacías. En el desglose, Casino es una fila por deporte y
+  cada juego una por tipo. El formulario completo edita una jugada sin pedir
+  cuota, con el stake opcional, y conserva el deporte.
+- **Resolver una pendiente como perdida sin stake** (puede pasar con una
+  jugada) abre su formulario para escribir lo que costó, en vez de fallar;
+  la resolución en bloque la omite y lo dice (texto del aviso ampliado).
+- **Demo**: «Cargar datos de ejemplo» añade seis jugadas en Stake que suman
+  0 (la banca de la demo no cambia).
+
+**Cómo se probó.** Unitarios: `casino.test.ts` (nuevo) y casos en `quick`,
+`drafts`, `bulk`, `stats`, `csv` y `sample` (1654 tests en 61 archivos).
+e2e: `casino.spec.ts` (12; la suite pasa a 287). Capturas a 320, 390 y 1280
+px, en oscuro y claro. **Expectativas que cambian a propósito**:
+`demo.spec.ts` cuenta 66 apuestas tras cargar el ejemplo (antes 60; 67 tras
+añadir una) y `sample.test.ts` separa las 60 deportivas de las 6 jugadas
+(el español añade «Casino» a los deportes). El texto de
+`toast.settleSkipped` cambia (ninguna prueba lo leía).
+
+### Pulido 2.0: Apuestas (noviembre 2026)
+
+La parte de Apuestas del encargo «BetTracker 2.0» (mejorar lo que hay sin
+rediseñar; la precisión de los cálculos por delante). Detalle en
+`docs/bets-polish-2026-11.md`. **Sin migración**, sin dependencias nuevas y
+sin tocar la sincronización.
+
+- **ROI al céntimo**: el porcentaje sale del beneficio y lo apostado
+  redondeados como se muestran; un P/L de $0.00 es 0.0 % en tinta neutra,
+  nunca «+0.0%» en verde por polvo de coma flotante (`roi` en
+  `lib/stats.ts`, `fmtPctSigned` pone el signo sobre la cifra redondeada).
+- **Un solo origen** para el dinero en juego (`riding`), el retorno por
+  apuesta (`returnPct`), la probabilidad implícita (`lib/odds.ts`) y la fecha
+  de la primera apuesta (`bankroll.firstBetDate`, también sin bankroll
+  conocido). Fuera `riskedOf`, `isSettled`, `hasStake`, `SettledBet`,
+  `StakedBet` y la insignia `cal-count`.
+- **La franja dice cada cosa una vez**: lo en juego solo en pendientes
+  («$40.00 en juego»), el bankroll siempre lo aportado («$1,380 aportados» /
+  «contributed»), el P/L apuestas y días; pendientes a 0 en tinta neutra; la
+  media del stake pasa de la cabecera a la línea del ROI («… · media $55.00
+  · …»); un rango sin apuestas dice «Sin apuestas en este rango» en P/L, ROI y
+  gráfico, y «Registra tu primera apuesta» solo sin apuestas; las etiquetas
+  «Todas las fechas» y la nota del rango solo con un rango distinto de Todo
+  (la nota queda oculta para el lector de pantalla); plurales con `tn()`
+  («1 pendiente», «1 día ganador»); «30 días» en vez de «Últimos 30 días».
+- **Gráfico**: líneas rectas en P/L y bankroll (lo aportado sigue en
+  escalón), punto de apertura en $0 para el P/L (una apuesta ya dibuja; el
+  texto de «al menos dos días» desaparece), eje del P/L con marcas redondas
+  (nunca `[0, 0]`), burbuja con signo, 24 px a la derecha para la última
+  fecha. La lógica pura en `lib/chartView.ts` (`xTicks`, `yAxisFor`,
+  `withOpening`), con tests. Y un *error boundary* (`ChartBoundary`): si el
+  trozo del gráfico no se puede descargar (primera ejecución sin conexión),
+  la tarjeta lo dice y el resto del panel sigue en pie; antes React
+  desmontaba toda la app (la suite lo destapó al bastar una apuesta para
+  pedir el gráfico). Sin reintento en la página: Chromium recuerda el módulo
+  que falló; llega con la siguiente carga.
+- **Calendario**: desde $1.000 miles enteros en la celda («-$1k», «+$12k»,
+  `fmtMoneyCell`), que caben a 320 px; la cifra exacta en el `title` y el
+  día. `heatOf`/`heatSizes` en `lib/stats.ts`, con tests.
+- **Teléfono**: ROI antes que el mes (CSS `order`; el DOM no cambia), para
+  que el mes quede sobre el calendario.
+
+**Cómo se probó.** `npm run typecheck`, 1695 unitarios en 62 archivos
+(nuevos `dates.test.ts` y casos en `stats`, `format`, `bankroll`,
+`chartView`, `i18n`), `npm run build` y la suite e2e completa (306, con
+`e2e/hero.spec.ts` nuevo, 15). Capturas a 320, 390 y 1280 px, en oscuro y
+claro y en español: todo, un rango sin apuestas, pendientes a 0 y un día de
+más de $1.000. **Expectativas que cambian a propósito**: `dashboard.spec`
+(sin rango no hay «All dates» ni nota visible; «1 winning day, 1 losing
+day»), `history.spec` (sin etiqueta sin rango), `pending.spec` (la línea del
+P/L ya no dice «riding»; «$70.00 at risk · 2 past their date» en
+pendientes), `bankroll.spec` («$1,000 contributed»), `stats.spec` («avg
+$55.00» en la línea del ROI; el mes dibuja con un día), `units.spec` («avg
+2.75u»), `bankroll.test` (`firstBetDate` en el bankroll no conocido),
+`stats.test` (fuera `riskedOf`).
+
+### Cabecera y barras más simples (noviembre 2026)
+
+Petición del dueño tras usar la app: «puedes quitar el botón de add bet
+arriba porque es más conveniente usar el botón que está a la derecha, lo
+mismo en expenses quitar scan receipt y expense settings y ponerlo en otro
+lado». Sin migración y sin tocar la sincronización.
+
+- **Cabecera**: el nombre, la insignia de sincronización y el menú ☰. Ya no
+  lleva «Añadir apuesta» ni «Añadir gasto».
+- **El + de abajo a la derecha es el botón de añadir en cualquier tamaño de
+  pantalla**, también en el ordenador (antes se ocultaba desde 641 px): en
+  Apuestas abre el registro rápido y en Gastos la hoja de gasto; `T` sigue
+  igual. En el DOM va justo después de la cabecera, así que con el teclado
+  llega tras el botón del menú, donde estaba «Añadir apuesta». Queda por
+  debajo del menú abierto y de los diálogos (`z-index` 40); el aviso
+  (toast) sube por encima de él también en el ordenador, y el relleno
+  inferior de la página (96 px; 88 en el móvil) deja libres el paginador del
+  historial, las últimas filas y «Mostrar más» de la lista de gastos. Solo
+  anima al aparecer.
+- **Barra de Gastos**: solo el mes, su moneda, «Hoy» y ‹ ›. «Escanear
+  recibo» queda en la hoja de gasto (ya era lo primero) y la hoja ya no se
+  abre directamente en el escaneo; **«Ajustes de gastos» pasa al menú ☰**,
+  justo después de «Ajustes», en las dos vistas (abre la misma hoja que
+  «Editar presupuestos»; flechas, Inicio/Fin y Escape la incluyen).
+- **Textos** (en y es): el historial vacío, la guía de primeros pasos, la
+  lista de gastos vacía y la pista de «sin tarjetas» hablan del botón + y
+  del menú; el README y `docs/expenses-2026-11.md` también.
+
+**Cómo se probó.** e2e: el harness tiene `addBet`, `addExpense`, `openScan`
+y `openExpenseSettings` (el +, el + y «Escanear recibo», el menú), que usan
+todas las pruebas que pulsaban los botones quitados. Expectativas que
+cambian: la cabecera tiene un botón visible (antes dos) y el menú siete
+entradas con «Ajustes de gastos» (`dashboard.spec.ts`, que además recorre
+la nueva con el teclado y comprueba que Tab desde el menú llega al +); el +
+se ve también a 1280 px y su `title` es el que tenía «Añadir apuesta»
+(`audit-nov5.spec.ts`); en Gastos el foco vuelve al + al cerrar la hoja
+(`expenses.spec.ts`); «el + deja libre el paginador» se comprueba a 390 y a
+1280 px, y a los dos tamaños el final de la lista de gastos con «Mostrar
+más» (`mobile.spec.ts`); el menú no queda tapado por el + en una ventana
+baja (`language.spec.ts`, 1024×440). Capturas a 1280 y 390 px.
 
 ### Pulido de Gastos y datos de ejemplo (noviembre 2026)
 
@@ -383,7 +588,9 @@ registrara los gastos y los convierta a cad». Detalle completo en
 - **Listas**: la moneda principal se escribe con su símbolo estrecho (`$`
   para CAD; el código va junto al título del mes) y lo pagado en otra moneda,
   pequeño y con su código («USD 12.00»).
-- **Revisión del escaneo**: selector «Moneda de la imagen» arriba (Wallet
+- **Revisión del escaneo** (así quedó con la 009; desde noviembre cada fila
+  tiene su moneda, ver `docs/expenses-2026-11.md`, «La moneda de cada
+  gasto»): selector «Moneda de la imagen» arriba (Wallet
   enseña `$` a secas para CAD y USD); en otra moneda cada fila se convierte
   con la tasa de su día, una fila sin tasa no entra en «Añadir N» y un campo
   da una tasa a todas las que no tienen. Los duplicados se reconocen por lo
@@ -427,8 +634,9 @@ una captura de Apple Wallet. Detalle completo en `docs/expenses-2026-11.md`.
 En corto:
 
 - **Vista Gastos** junto a Apuestas (pestañas bajo la cabecera, recordadas
-  por dispositivo; solo se monta la activa). En ella el botón principal es
-  **Añadir gasto**, y `T` y el **+** del móvil abren la hoja de gasto. Mes
+  por dispositivo; solo se monta la activa). En ella el **+** de abajo a la
+  derecha y `T` abren la hoja de gasto (antes había además «Añadir gasto»
+  en la cabecera: ver «Cabecera y barras más simples»). Mes
   con flechas (compartido con el calendario de apuestas), resumen (gastado,
   presupuesto restante, por tarjeta, media diaria y proyección), un gráfico
   que apila el gasto de cada tarjeta (acumulado contra la línea del
@@ -649,10 +857,11 @@ estaban en este contenedor; se trabajó con la lista de hallazgos):
   **¿Olvidaste la contraseña?** y pantalla de contraseña nueva
   (`auth/NewPassword.tsx`).
 - **Panel**: P/L, bankroll y pendientes primero; analítica avanzada
-  plegable; guía de primeros pasos para cuentas nuevas; **Añadir apuesta**
-  y el **+** del móvil abren la misma hoja.
-- **Cabecera**: solo **Añadir apuesta** (y la insignia de sincronización);
-  lo demás (cuenta, Importar y exportar, Pendientes, Ajustes, tema, idioma
+  plegable; guía de primeros pasos para cuentas nuevas; el **+** abre el
+  registro rápido (entonces también **Añadir apuesta** en la cabecera, hoy
+  quitado: ver «Cabecera y barras más simples»).
+- **Cabecera**: el nombre y la insignia de sincronización; lo demás (cuenta,
+  Importar y exportar, Pendientes, Ajustes, Ajustes de gastos, tema, idioma
   y Salir) está en el menú ☰ (`Header.tsx`), que cuenta las pendientes y se
   maneja con el teclado.
 
@@ -1138,7 +1347,8 @@ src/renderer/src/lib/
   format.ts     formato de dinero en dólares o unidades (+ money.ts, el contexto)
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
-  quick.ts      valores por defecto del registro rápido
+  quick.ts      valores por defecto del registro rápido (cada lado: deportes y casino)
+  casino.ts     jugadas de casino: cuándo una apuesta lo es, el juego, sus etiquetas, la apuesta que se guarda
   uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
@@ -1197,7 +1407,7 @@ src/renderer/src/components/expenses/
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
   BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
   CategoryIcon (los once iconos de categoría)
-e2e/*.spec.ts                       267 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       315 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;
@@ -1211,5 +1421,6 @@ scripts/check-rates.mjs             `npm run check:rates`: el servicio de tasas 
 supabase/functions/extract-expenses/ la Edge Function de la lectura con IA (index.ts, deno.json)
 supabase/config.toml                ajustes de la CLI: sin la comprobación JWT de la pasarela para esa función
 docs/expenses-2026-11.md            los gastos: decisiones, datos, sincronización, IA, pruebas, pendientes
+docs/casino-2026-11.md              las jugadas de casino en Apuestas: datos, qué se comprobó, decisiones
 supabase/tests/                     el esquema contra un Postgres real
 ```

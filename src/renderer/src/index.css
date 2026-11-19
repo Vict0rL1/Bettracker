@@ -487,6 +487,9 @@ h2 {
 }
 
 /* ---------- app frame ---------- */
+/* The bottom padding keeps the end of the page (the history's pager, the
+   expense list's last row and Show more) clear of the + button: 96px is its
+   24px offset, its 56px and 16px of air (88px on a phone, below). */
 .app {
   max-width: 1400px;
   margin: 0 auto;
@@ -1563,11 +1566,6 @@ input[type='number']::-webkit-outer-spin-button {
   font-weight: 600;
 }
 
-/* The bet count stays in the cell's title; no badge on every day. */
-.cal-count {
-  display: none;
-}
-
 .cal-amt {
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -1659,6 +1657,16 @@ input[type='number']::-webkit-outer-spin-button {
    The series never draw in (isAnimationActive={false}). */
 .chart-wrap .recharts-wrapper {
   animation: fade-in 240ms var(--ease-out);
+}
+
+/* Recharts puts each layer of a chart in a <g tabindex="-1"> and makes the
+   drawing itself focusable (for its arrow keys). A click or a tap focuses
+   one of them and the browser rings it: a box round the bars, or round the
+   whole plot. Only the keyboard's ring stays (on the drawing, the app's own
+   neutral one). */
+.chart-wrap .recharts-wrapper :focus:not(:focus-visible),
+.chart-wrap .recharts-wrapper [tabindex='-1']:focus {
+  outline: none;
 }
 
 /* One sentence, centred in the space it fills; no extra Add bet button. */
@@ -2243,7 +2251,7 @@ tbody tr:last-child td {
     gap: 12px;
   }
 
-  /* The name and the menu button on one row, Add bet across the next. */
+  /* The name and the menu button on one row (adding is the + button). */
   .topbar-actions {
     display: contents;
   }
@@ -2261,22 +2269,6 @@ tbody tr:last-child td {
   .btn {
     flex: 1;
     justify-content: center;
-  }
-
-  /* Tonal here, so the + button is the one solid primary on a phone. */
-  .topbar-actions :is(.add-bet-btn, .add-expense-btn) {
-    order: 3;
-    flex: 1 1 100%;
-    min-height: 44px;
-    background: var(--tint-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .topbar-actions :is(.add-bet-btn, .add-expense-btn):hover:not(:disabled) {
-      background: var(--tint-3);
-    }
   }
 
   .hero {
@@ -2392,7 +2384,8 @@ tbody tr:last-child td {
 .toast {
   position: fixed;
   right: calc(24px + env(safe-area-inset-right));
-  bottom: calc(24px + env(safe-area-inset-bottom));
+  /* Above the + button (24px + its 56px + 16px), never over it. */
+  bottom: calc(96px + env(safe-area-inset-bottom));
   z-index: 60;
   display: flex;
   align-items: center;
@@ -2992,11 +2985,14 @@ tr.is-pending td:first-child {
 }
 
 /* ---------- quick add ---------- */
+/* The one add button, on every screen size: the open view's sheet. Under the
+   open menu (45) and a dialog's shade (50), which it must never cover; App
+   unmounts it while a dialog is open anyway. */
 .fab {
   position: fixed;
   right: calc(24px + env(safe-area-inset-right));
   bottom: calc(24px + env(safe-area-inset-bottom));
-  z-index: 55;
+  z-index: 40;
   width: 56px;
   height: 56px;
   border-radius: 50%;
@@ -3061,6 +3057,91 @@ tr.is-pending td:first-child {
 .quick-profit {
   grid-template-columns: 1fr auto auto;
   align-items: end;
+}
+
+/* Sports | Casino: the sheet's two sides, one full-width track (the chosen
+   side its raised thumb, as every segmented control). */
+.quick-kind {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.quick-kind .scope-btn {
+  height: auto;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: var(--fs-md);
+}
+
+/* A casino play's game: the common ones a tap away in one track (the
+   chosen chip raised, as Today / Yesterday), filling each row evenly, and
+   anything else typed under them. */
+.quick-games {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-md);
+  background: var(--tint-2);
+}
+
+.quick-game-chip {
+  flex: 1 0 auto;
+  height: 32px;
+  border: 0;
+  font-size: var(--fs-md);
+}
+
+.quick-game-chip:not([aria-pressed='true']):hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.quick-games > :focus-visible {
+  outline-offset: -2px;
+}
+
+/* The free box a little apart from the track: another way to say the game. */
+.quick-game-other {
+  margin-top: 4px;
+}
+
+/* Site and wagered: small, optional, side by side; the labels sit on their
+   boxes so the two boxes line up whichever label wraps. */
+.quick-casino-more {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quick-casino-more .field-label {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 34px;
+}
+
+/* Won / Lost: neutral (the colour is the money's, not the button's). */
+.quick-casino-results {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.quick-casino-results .seg-btn {
+  font-weight: 600;
+}
+
+.quick-casino-results .seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 640px) {
+  /* Thumb-sized on a phone. */
+  .quick-kind .scope-btn,
+  .quick-game-chip {
+    min-height: 44px;
+  }
 }
 
 /* ---- settings ---- */
@@ -3888,6 +3969,11 @@ tr.is-pending td:first-child {
   content: '·';
   content: '·' / '';
   margin-right: 4px;
+}
+
+/* With all time there is no scope tag before the count, and no dot either. */
+.hist-count:first-child::before {
+  content: none;
 }
 
 /* Sits on the toggle's row on a wide screen; its words are asserted. */
@@ -4865,14 +4951,25 @@ tr.is-pending td:first-child {
     right: 16px;
   }
 
-  /* Stacked: ROI's divider lies on top. */
+  /* Stacked, ROI first and the month under it, right above the calendar it
+     drives (the DOM, and so the keyboard, keep month then ROI). The divider
+     goes with the card drawn second, as a line along its top. */
+  .hero.hero-2 > .month-card {
+    order: 2;
+  }
+
   .hero.hero-2 > .roi-card::before {
+    content: none;
+  }
+
+  .hero.hero-2 > .month-card::before {
+    content: '';
+    position: absolute;
     top: 0;
-    bottom: auto;
     left: 16px;
     right: 16px;
-    width: auto;
     height: 1px;
+    background: var(--divider);
   }
 
   .hero .hero-value,
@@ -4941,17 +5038,6 @@ tr.is-pending td:first-child {
     right: 16px;
     width: auto;
     height: 1px;
-  }
-}
-
-/* The + button is the quick add on a phone, where the header's Add bet has scrolled away. */
-@media (min-width: 641px) {
-  .fab {
-    display: none;
-  }
-
-  .toast {
-    right: calc(24px + env(safe-area-inset-right));
   }
 }
 
@@ -5090,8 +5176,8 @@ tr.is-pending td:first-child {
 }
 
 /* ---------- expenses: bar, banner, first run, summary, chart, budgets, categories ---------- */
-/* The month and its currency at the left; the arrows, then the view's own
-   actions, at the right (the top bar keeps its two buttons). */
+/* The month and its currency at the left, the arrows at the right; nothing
+   else (adding and scanning are the + button, Expense settings the menu). */
 .exp-bar {
   display: flex;
   flex-wrap: wrap;
@@ -5123,17 +5209,6 @@ tr.is-pending td:first-child {
 .month-nav.exp-month-nav {
   margin: 0 0 0 auto;
   align-self: center;
-}
-
-.exp-bar-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.exp-bar > .exp-scan-off {
-  flex-basis: 100%;
-  margin: 0;
-  text-align: right;
 }
 
 .draft-note.exp-migration {
@@ -5179,6 +5254,17 @@ tr.is-pending td:first-child {
   grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
 }
 
+/* The four values share a baseline: each sits right under its label and the
+   sub line is pushed to the tile's bottom, whatever the tile beside it holds
+   (a stat card otherwise spaces its three parts out). */
+.hero.spend-strip > .stat-card {
+  justify-content: flex-start;
+}
+
+.hero.spend-strip > .stat-card > .life-value + .stat-sub {
+  margin-top: auto;
+}
+
 .spend-total-card .life-value {
   font-size: var(--fs-display);
   line-height: 1.05;
@@ -5190,7 +5276,11 @@ tr.is-pending td:first-child {
   color: var(--amber);
 }
 
-.spend-refunded::before {
+/* "12 expenses · $8.20 refunded"; "19 days · on pace for $1,685.40": the
+   projection lives in the average's sub line alone, apart from the actual
+   figures, and says how the average is made (the days it is over). */
+.spend-refunded::before,
+.spend-pace-proj::before {
   content: '·';
   content: '·' / '';
   margin: 0 6px;
@@ -5222,11 +5312,83 @@ tr.is-pending td:first-child {
   display: block;
 }
 
+/* A line that shows its expenses when tapped: By card, the budgets, By
+   category (ExpensesView narrows the list to it). Its name is a real button
+   with no chrome, and the button's ::after covers the whole line, so a tap
+   anywhere on it counts while the figures and a budget's bar stay plain
+   text and a real progress bar for a screen reader. The tint is the line's
+   ::before, behind its text: one on hover (hover devices only), a firmer one
+   pressed (never a scale) and on the line the list shows; a neutral ring
+   round the line on keyboard focus. Nothing moves. --drill-inset lets the
+   tint and the target reach past a line whose text sits flush with its
+   card's title. */
+.drill-row {
+  position: relative;
+  isolation: isolate;
+}
+
+.drill-row::before {
+  content: '';
+  position: absolute;
+  inset: var(--drill-inset, 0);
+  z-index: -1;
+  border-radius: var(--r-sm);
+  pointer-events: none;
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .drill-row:has(.drill:hover)::before {
+    background: var(--row-hover);
+  }
+}
+
+.drill-row:has(.drill[aria-current='true'])::before,
+.drill-row:has(.drill:active)::before {
+  background: var(--row-selected);
+}
+
+.drill-row:has(.drill:active)::before {
+  transition-duration: var(--dur-press);
+}
+
+.drill {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drill::after {
+  content: '';
+  position: absolute;
+  inset: var(--drill-inset, 0);
+  border-radius: var(--r-sm);
+}
+
+.drill:focus-visible {
+  outline: none;
+}
+
+.drill:focus-visible::after {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Each card's line is 24px tall, the tint 6px past its ends: the same rhythm
+   as the 18px lines 6px apart it replaced, with no gap between targets. */
 .spend-card-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 10px 0 0;
+  margin: 7px 0 -3px;
   padding: 0;
   list-style: none;
   font-size: var(--fs-md);
@@ -5234,10 +5396,12 @@ tr.is-pending td:first-child {
 }
 
 .spend-card-item {
+  --drill-inset: 0 -6px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+  min-height: 24px;
 }
 
 .spend-card-name {
@@ -5248,15 +5412,52 @@ tr.is-pending td:first-child {
   color: var(--text-2);
 }
 
+.spend-card-name[aria-current='true'] {
+  color: var(--text);
+}
+
 .spend-card-amount {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+/* "+n more" is a button that lists every card: quiet text, no chrome, as
+   tall as a card's line (a finger's worth on a phone), the list staying
+   largest first. */
+.spend-card-more-item {
+  display: flex;
+  min-height: 24px;
+}
+
 .spend-card-more {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
   color: var(--text-3);
+  font: inherit;
   font-size: var(--fs-sm);
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .spend-card-more:hover {
+    color: var(--text);
+  }
+}
+
+.spend-card-more:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 /* A card's ink (set inline as --swatch): neutral greys, never a money colour.
@@ -5352,6 +5553,23 @@ tr.is-pending td:first-child {
   padding: 4px 12px;
 }
 
+/* No budgets, nothing to break down, or not loaded yet: one quiet line, not
+   a 160px well (the chart keeps its own empty state: it holds the row's
+   height). */
+.budget-empty,
+.spend-cats-empty {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-md);
+  line-height: 20px;
+}
+
+/* With nothing to list the card is as tall as that line, not as the chart
+   beside it; "Set one" sits in its head. */
+.budgets-card.is-compact {
+  align-self: start;
+}
+
 .budget-list {
   display: flex;
   flex-direction: column;
@@ -5360,21 +5578,20 @@ tr.is-pending td:first-child {
   list-style: none;
 }
 
+/* Two lines a budget: its name, then "$338.81 of $400.00 · $61.19 left",
+   with the bar under them. */
 .budget-row {
+  --drill-inset: 0 -8px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    'name figures'
-    'bar bar'
-    'left left';
-  align-items: baseline;
-  gap: 6px 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px 0;
   padding: 12px 0;
   border-bottom: 1px solid var(--divider);
   min-width: 0;
 }
 
 .budget-row:first-child {
+  --drill-inset: -6px -8px 0;
   padding-top: 0;
 }
 
@@ -5383,32 +5600,38 @@ tr.is-pending td:first-child {
 }
 
 .budget-name {
-  grid-area: name;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-base);
   font-weight: 500;
+  line-height: 20px;
 }
 
+/* The figures wrap only where even a 320px phone can't hold them. */
 .budget-figures {
-  grid-area: figures;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   color: var(--text-2);
   font-size: var(--fs-sm);
+  line-height: 16px;
   font-variant-numeric: tabular-nums;
+}
+
+.budget-figures > span {
   white-space: nowrap;
 }
 
-.budget-row .bd-bar {
-  grid-area: bar;
+.budget-left::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
 }
 
-.budget-left {
-  grid-area: left;
-  color: var(--text-3);
-  font-size: var(--fs-sm);
-  font-variant-numeric: tabular-nums;
+.budget-row .bd-bar {
+  margin-top: 4px;
 }
 
 .bd-fill.ink {
@@ -5431,7 +5654,7 @@ tr.is-pending td:first-child {
   color: var(--red-text);
 }
 
-/* Where the money went: each row is a toggle that filters the list. */
+/* Where the money went: each line shows its category's expenses (.drill-row). */
 .spend-cat-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -5442,41 +5665,12 @@ tr.is-pending td:first-child {
 }
 
 .spend-cat-row {
-  min-width: 0;
-  border-bottom: 1px solid var(--divider);
-}
-
-.spend-cat-btn {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 100%;
+  min-width: 0;
   padding: 10px 8px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--dur-hover) var(--ease-out);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .spend-cat-btn:hover {
-    background: var(--row-hover);
-  }
-}
-
-/* Pressed, and the category the list is narrowed to: a background, never a scale. */
-.spend-cat-btn:active,
-.spend-cat-btn[aria-pressed='true'] {
-  background: var(--row-selected);
-}
-
-.spend-cat-btn:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
+  border-bottom: 1px solid var(--divider);
 }
 
 .spend-cat-main {
@@ -5505,7 +5699,7 @@ tr.is-pending td:first-child {
   color: var(--green);
 }
 
-.spend-cat-btn .bd-bar {
+.spend-cat-row .bd-bar {
   display: block;
 }
 
@@ -5516,6 +5710,17 @@ tr.is-pending td:first-child {
 }
 
 /* ---------- expenses: list ---------- */
+/* A line above that shows its expenses scrolls the card to the window's top,
+   clear of the phone's status bar (black-translucent: the page runs under
+   it); nothing else is fixed up there. Its heading takes the focus. */
+.expense-list-card {
+  scroll-margin-top: calc(12px + env(safe-area-inset-top));
+}
+
+.exp-list-title {
+  border-radius: var(--r-xs);
+}
+
 .expense-list-card .card-head h2 .scope-tag {
   margin-left: 6px;
   font-weight: 400;
@@ -5524,6 +5729,94 @@ tr.is-pending td:first-child {
 .exp-filters select {
   max-width: 220px;
   text-overflow: ellipsis;
+}
+
+/* While the list is filtered: by what (a chip for the card, one for the
+   category; the chip takes its filter off), how many and how much, and Show
+   all. Quiet: neutral inks, no box round the line; it fades in once. */
+.exp-active {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: -4px 0 12px;
+  animation: fade-in var(--dur-sm) var(--ease-out);
+}
+
+.exp-active-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 8px 0 10px;
+  color: var(--text);
+}
+
+.exp-active-chip > svg {
+  flex: none;
+  color: var(--text-3);
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .exp-active-chip:hover > svg {
+    color: var(--text);
+  }
+}
+
+.exp-active-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exp-active-sum {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.exp-active-sum > span + span::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+  color: var(--text-3);
+}
+
+.exp-show-all {
+  position: relative;
+  height: 28px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .exp-show-all:hover {
+    color: var(--text);
+    background: var(--tint-2);
+  }
+}
+
+.exp-show-all:active {
+  background: var(--tint-3);
+  transition-duration: var(--dur-press);
 }
 
 .exp-table tbody tr.exp-row {
@@ -6299,7 +6592,7 @@ tr.is-pending td:first-child {
   max-width: 320px;
 }
 
-/* The currency of the picture and, when rows lack a rate, one rate for them. */
+/* The currency of all rows and, when rows of a currency lack a rate, one rate for them. */
 .exp-review-money-bar {
   display: flex;
   flex-wrap: wrap;
@@ -6309,7 +6602,13 @@ tr.is-pending td:first-child {
 
 .exp-review-currency-field {
   flex: none;
-  width: 160px;
+  width: 200px;
+}
+
+/* A row's own currency: on its own line, before its conversion (a select a code wide, not a box across the row). */
+.exp-review-field-currency {
+  grid-column: 1 / -1;
+  max-width: 200px;
 }
 
 .exp-review-rateall-field {
@@ -6621,9 +6920,30 @@ tr.is-pending td:first-child {
     padding: 0 4px;
   }
 
-  /* One column: every tile after the first under an inset hairline. */
+  /* Two columns: what was spent across the top, Budget left and Daily average
+     side by side under it (the two figures a glance wants together), By card
+     across the bottom. The DOM, and so the keyboard, keep their order. Every
+     tile after the first sits under an inset hairline; the right half has
+     one at its left too. */
   .hero.spend-strip {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hero.spend-strip > .spend-total-card,
+  .hero.spend-strip > .spend-cards-card {
+    grid-column: 1 / -1;
+  }
+
+  .hero.spend-strip > .spend-budget-card {
+    order: 1;
+  }
+
+  .hero.spend-strip > .spend-pace-card {
+    order: 2;
+  }
+
+  .hero.spend-strip > .spend-cards-card {
+    order: 3;
   }
 
   .hero.spend-strip > .stat-card + .stat-card::before {
@@ -6636,6 +6956,16 @@ tr.is-pending td:first-child {
     height: 1px;
   }
 
+  .hero.spend-strip > .spend-pace-card::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 16px;
+    bottom: 16px;
+    width: 1px;
+    background: var(--divider);
+  }
+
   .hero.spend-strip > .spend-total-card::after {
     content: none;
   }
@@ -6644,16 +6974,40 @@ tr.is-pending td:first-child {
     font-size: 32px;
   }
 
-  .exp-bar > .exp-scan-off {
-    text-align: left;
-  }
-
-  .exp-bar-actions {
-    flex-basis: 100%;
+  /* Half-width tiles: the figure keeps to one line at 320px ("$1,685.40"). */
+  .hero.spend-strip > :is(.spend-budget-card, .spend-pace-card) .life-value {
+    font-size: 20px;
   }
 
   .exp-filters select {
     max-width: none;
+  }
+
+  /* A finger's worth: each card's line 44px tall, the filter chips and Show
+     all 44px to the touch (their look stays small). */
+  .spend-card-list {
+    margin: 2px 0 -8px;
+  }
+
+  .spend-card-item {
+    --drill-inset: 0 -8px;
+    min-height: 44px;
+  }
+
+  .spend-card-more-item,
+  .spend-card-more {
+    min-height: 44px;
+  }
+
+  :is(.exp-active-chip, .exp-show-all)::before {
+    content: '';
+    position: absolute;
+    inset: -8px -4px;
+  }
+
+  /* From inside the chip's 1px border. */
+  .exp-active-chip::before {
+    inset: -9px -5px;
   }
 
   .exp-paycard-seg {
@@ -6717,6 +7071,10 @@ tr.is-pending td:first-child {
 
   .exp-review-fields > .field:not(.exp-review-field-date):not(.exp-review-field-amount) {
     grid-column: 1 / -1;
+  }
+
+  .exp-review-field-currency {
+    max-width: none;
   }
 
   .exp-review-cardall {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   axisMoney,
   fmtMoney,
+  fmtMoneyCell,
   fmtMoneyCompact,
   fmtMoneyPlain,
   fmtOdds,
@@ -46,6 +47,35 @@ describe('the dollar formatters (unchanged by units)', () => {
     expect(fmtStake(999.99)).toBe('$999.99')
     expect(fmtOdds(2.5)).toBe('2.50')
     expect(fmtProb(52.4)).toBe('52%')
+  })
+})
+
+describe('fmtPctSigned', () => {
+  it('puts the sign on the rounded figure: float dust and a true +/-0.04% both read 0.0%', () => {
+    expect(fmtPctSigned(1e-15)).toBe('0.0%')
+    expect(fmtPctSigned(-1e-15)).toBe('0.0%')
+    expect(fmtPctSigned(-0.04)).toBe('0.0%')
+    expect(fmtPctSigned(0.04)).toBe('0.0%')
+    expect(fmtPctSigned(0.05)).toBe('+0.1%')
+    expect(fmtPctSigned(-0.05)).toBe('-0.1%')
+    expect(fmtPctSigned(-18.18)).toBe('-18.2%')
+  })
+})
+
+describe('fmtMoneyCell: a calendar cell on a 320px phone', () => {
+  it('is the compact amount under $1,000', () => {
+    for (const n of [0, 0.4, 12.5, -335, 999.4]) expect(fmtMoneyCell(n)).toBe(fmtMoneyCompact(n))
+    expect(fmtMoneyCell(-335)).toBe('-$335')
+  })
+
+  it('drops the tenth from $1,000 up: whole thousands, rounded', () => {
+    expect(fmtMoneyCell(-1234.5)).toBe('-$1k')
+    expect(fmtMoneyCell(1000)).toBe('+$1k')
+    expect(fmtMoneyCell(1499.99)).toBe('+$1k')
+    expect(fmtMoneyCell(1500)).toBe('+$2k')
+    expect(fmtMoneyCell(12_345)).toBe('+$12k')
+    expect(fmtMoneyCell(-150_000)).toBe('-$150k')
+    for (const n of [-1234.5, 1000, 12_345, -99_999]) expect(fmtMoneyCell(n)).not.toMatch(/\./)
   })
 })
 

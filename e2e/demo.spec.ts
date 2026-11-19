@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
-import { forbidRates, menu, scanFile } from './harness'
+import { addBet, forbidRates, menu, openScan, scanFile } from './harness'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
@@ -16,7 +16,7 @@ const storedExpenses = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:expenses') ?? '[]') as unknown[]).length)
 
 async function addLoss(page: Page, stake: string): Promise<void> {
-  await page.click('.add-bet-btn')
+  await addBet(page)
   const sheet = page.locator('.quick-modal')
   await sheet.locator('.field input').first().fill(stake)
   await sheet.locator('.seg-btn.loss').click()
@@ -171,7 +171,7 @@ test.describe('demo', () => {
     await page.goto('/')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
     await page.locator('.view-tab-expenses').click()
-    await page.locator('.exp-scan-open').click()
+    await openScan(page)
     // No Anthropic and no Supabase here: the demo says so before anything is picked.
     await expect(page.locator('.exp-privacy')).toHaveText('Demo: the image stays on this device and a sample result is shown.')
     await page.setInputFiles('.exp-scan-input', scanFile)
@@ -195,7 +195,7 @@ test.describe('demo', () => {
     await page.waitForSelector('.exp-bar')
     await expect(page.locator('.view-tab-expenses')).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
-    expect(await storedBets(page)).toBe(60)
+    expect(await storedBets(page)).toBe(66)
     // Last month whole (28) and this one up to today (4 on its 1st alone).
     expect(await storedExpenses(page)).toBeGreaterThanOrEqual(32)
 
@@ -224,10 +224,10 @@ test.describe('demo', () => {
     await expect(page.locator('.exp-row .exp-amount.refund')).toHaveText(/-\$25\.00/)
     await expect(page.locator('.exp-row .exp-ai')).toHaveCount(2)
 
-    // The bets: sixty of them, four still open, the bankroll from its start, the deposit and what was won.
+    // The bets: sixty, four still open, and six casino plays that net to nothing; the bankroll from its start, the deposit and what was won.
     await page.locator('.view-tab-bets').click()
     await expect(page.locator('.history-card tbody tr')).toHaveCount(25)
-    await expect(page.locator('.history-card')).toContainText('60 bets')
+    await expect(page.locator('.history-card')).toContainText('66 bets')
     await expect(page.locator('.bankroll-card .key-value')).toHaveText('$836.40')
     expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as { status: string }[]).filter((r) => r.status === 'pending').length)).toBe(4)
     expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:moves') ?? '[]') as unknown[]).length)).toBe(1)
@@ -235,9 +235,9 @@ test.describe('demo', () => {
     // It is ordinary data from here on: an edit syncs, and survives a reload.
     await addLoss(page, '20')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
-    expect(await storedBets(page)).toBe(61)
+    expect(await storedBets(page)).toBe(67)
     await page.reload()
-    await expect(page.locator('.history-card')).toContainText('61 bets')
+    await expect(page.locator('.history-card')).toContainText('67 bets')
   })
 
   test('Load sample data asks first when the demo already holds data, takes its question back, and then replaces everything', async ({ page }) => {
@@ -260,19 +260,19 @@ test.describe('demo', () => {
     await sample.click()
     await expect(sample).toHaveText('Replace everything?')
     await sample.click()
-    await expect(page.locator('.history-card')).toContainText('60 bets')
+    await expect(page.locator('.history-card')).toContainText('66 bets')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
-    expect(await storedBets(page)).toBe(60)
+    expect(await storedBets(page)).toBe(66)
     // The bet that was there is gone, on the server and on this device.
     await expect(page.locator('.history-card tbody tr', { hasText: '-$77.00' })).toHaveCount(0)
     expect(await page.evaluate(() => (JSON.parse(localStorage.getItem('demo:rows') ?? '[]') as { amount: number }[]).some((r) => r.amount === -77))).toBe(false)
 
-    // Loaded again over itself: the same sixty, never a second set.
+    // Loaded again over itself: the same sixty-six, never a second set.
     await sample.click()
     await expect(sample).toHaveText('Replace everything?')
     await sample.click()
-    await expect(page.locator('.history-card')).toContainText('60 bets')
-    expect(await storedBets(page)).toBe(60)
+    await expect(page.locator('.history-card')).toContainText('66 bets')
+    expect(await storedBets(page)).toBe(66)
     // And Start over still empties it all.
     await page.locator('.demo-reset').click()
     await page.locator('.demo-reset').click()
@@ -289,7 +289,7 @@ test.describe('demo', () => {
     await expect(page.locator('.sync-badge')).toHaveText('Sincronizado')
     await expect(page.locator('.demo-sample')).toHaveText('Cargar datos de ejemplo')
     await page.locator('.demo-sample').click()
-    await expect(page.locator('.history-card')).toContainText('60 apuestas')
+    await expect(page.locator('.history-card')).toContainText('66 apuestas')
     await page.locator('.view-tab-expenses').click()
     await expect(page.locator('.exp-row', { hasText: 'Ticketmaster' }).locator('.exp-note')).toHaveText('entradas del concierto')
     // Now there is something to lose: it asks, in Spanish.

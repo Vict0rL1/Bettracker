@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { boot, entry, reload } from './harness'
+import { addBet, boot, entry, reload } from './harness'
 
 const sheet = (page: Page) => page.locator('.quick-modal')
 const stakeBox = (page: Page) => sheet(page).locator('.quick-row').first().locator('input').first()
@@ -12,7 +12,7 @@ test.describe('quick add: free bets and results that can’t be worked out', () 
   test('a free bet’s win asks for the promotional profit, and counts as bonus, not ROI', async ({ page }) => {
     await boot(page, { settings: { oddsFormat: 'decimal' } })
     const roiBefore = await page.locator('.roi-card .life-value').textContent()
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('0')
     await expect(sheet(page).locator('.free-bet-note')).toContainText('Free bet: no cash at risk.')
     await oddsBox(page).fill('2.0')
@@ -40,7 +40,7 @@ test.describe('quick add: free bets and results that can’t be worked out', () 
 
   test('a free bet that loses is logged as lost at $0', async ({ page }) => {
     await boot(page)
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('0')
     await sheet(page).locator('.seg-btn.loss').click()
     await expect(sheet(page)).toHaveCount(0)
@@ -51,7 +51,7 @@ test.describe('quick add: free bets and results that can’t be worked out', () 
 
   test('a profit that rounds to $0.00 is asked for, saying why', async ({ page }) => {
     await boot(page, { settings: { oddsFormat: 'decimal' } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('0.01')
     await oddsBox(page).fill('1.2')
     await sheet(page).locator('.seg-btn.win').click()
@@ -68,7 +68,7 @@ test.describe('quick add: free bets and results that can’t be worked out', () 
 test.describe('quick add: problems in words, and nothing lost on the way', () => {
   test('a result tapped without a stake says so next to the stake, which takes the focus', async ({ page }) => {
     await boot(page)
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('')
     await oddsBox(page).fill('+abc')
     await sheet(page).locator('.seg-btn.win').click()
@@ -89,7 +89,7 @@ test.describe('quick add: problems in words, and nothing lost on the way', () =>
 
   test('a bet refused on the way in keeps the sheet open with everything typed, and says why', async ({ page }) => {
     await boot(page, { settings: { oddsFormat: 'american' } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('40')
     await oddsBox(page).fill('+120')
     // The outbox can't take the change (here: no ids to give it).
@@ -117,14 +117,14 @@ test.describe('quick add: problems in words, and nothing lost on the way', () =>
 
   test('closed by accident, the sheet keeps what was typed, across a reload, until saved or discarded', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 25 } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('70')
     await oddsBox(page).fill('-110')
     await page.keyboard.press('Escape')
     await expect(page.locator('.toast')).toContainText('Not saved yet: what you typed is kept.')
 
     await reload(page)
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await expect(sheet(page).locator('.draft-note')).toContainText('Your unfinished bet is back.')
     await expect(stakeBox(page)).toHaveValue('70')
     await expect(oddsBox(page)).toHaveValue('-110')
@@ -133,20 +133,20 @@ test.describe('quick add: problems in words, and nothing lost on the way', () =>
     await expect(stakeBox(page)).toHaveValue('25')
     await expect(oddsBox(page)).toHaveValue('')
     await page.keyboard.press('Escape')
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await expect(sheet(page).locator('.draft-note')).toHaveCount(0)
 
     // Saved, the draft is gone too.
     await stakeBox(page).fill('15')
     await sheet(page).locator('.seg-btn.pending').click()
     await expect(sheet(page)).toHaveCount(0)
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await expect(sheet(page).locator('.draft-note')).toHaveCount(0)
   })
 
   test('More details carries what was typed to the full form for today', async ({ page }) => {
     await boot(page, { settings: { oddsFormat: 'decimal' } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await stakeBox(page).fill('12')
     await oddsBox(page).fill('2.4')
     await sheet(page).locator('.quick-more').click()

@@ -15,6 +15,10 @@ to see which of them earn their keep. All four fields are optional: bets logged
 without a stake still count toward P/L and win rate, and the app tells you how
 many are missing one instead of quietly guessing.
 
+Play **casino games** too (Stake's Dice, Limbo, Mines …)? Log each session
+as a **casino play**: the game, what it won or lost, and **Won** or **Lost**
+(see [Casino plays](#casino-plays)).
+
 Track your **bankroll** too: a starting figure plus every **deposit and
 withdrawal**, so the current bankroll adds up to the cent, a chart view of it
 over time, and a quiet warning when a stake is more than **5%** of it. And if
@@ -107,12 +111,16 @@ keyboard shortcuts — `←`/`→` to change month, `T` to log today (an expense
 in the Expenses view), `Esc` to close a dialog.
 
 The **Bets | Expenses** tabs under the header switch between the two views
-(each device remembers the last one). The top bar holds only **Add bet**
-(**Add expense** in the Expenses view), next to the sync badge. Everything else
-is in the menu (☰): the account, **Import & export**, **Pending bets**,
-**Settings**, the theme, the language and **Sign out**. The menu button
-shows how many bets are waiting for a result; the menu works from the
-keyboard (arrows, Home/End, Escape back to the button).
+(each device remembers the last one). The top bar holds only the name, the
+sync badge and the menu (☰): the account, **Import & export**, **Pending
+bets**, **Settings**, **Expense settings** (cards, budgets and the expense
+currency, from either view), the theme, the language and **Sign out**. The
+menu button shows how many bets are waiting for a result; the menu works
+from the keyboard (arrows, Home/End, Escape back to the button). Adding is
+the round **+** button at the bottom right, on a computer as on a phone: a
+bet in the Bets view, an expense in the Expenses view (`T` does the same).
+The end of the page keeps clear of it, so the history's pager and the last
+rows are never under it.
 
 ## What you'll need
 
@@ -396,16 +404,27 @@ and withdrawals** are logged there (amount, date, an optional note) and can
 be edited or deleted, with Undo; they work offline and sync like bets. They
 are not bets: they never count in P/L, ROI, streaks or the loss limit, and
 they are never painted as wins or losses. Pending bets add nothing until they
-settle; their stakes show as *riding*. The bankroll always covers every bet,
-whatever date range is chosen. With no starting bankroll and no deposit or
-withdrawal it reads *—*; on a device that has not loaded your settings or
-your deposits and withdrawals yet (a first start offline) it reads *…*
-rather than a wrong figure.
+settle; what is riding on them is said once, on the **Pending bets** card
+("$40.00 at risk"), while the bankroll tile's own line always says what was
+**contributed** (the start plus deposits less withdrawals; "taken out" when
+that is below zero). The bankroll always covers every bet, whatever date
+range is chosen. With no starting bankroll and no deposit or withdrawal it
+reads *—*; on a device that has not loaded your settings or your deposits
+and withdrawals yet (a first start offline) it reads *…* rather than a wrong
+figure.
 
-**The chart** switches between **P/L** (the running result, from 0) and
-**Bankroll** (the bankroll as a level, with the money put in — start plus
-deposits less withdrawals — as a dashed line; the gap between them is the
-P/L). One axis either way. The choice is remembered on the device.
+**The chart** switches between **P/L** (the running result, from an opening
+point at $0 the day before the first settled day, so one settled day already
+draws) and **Bankroll** (the bankroll as a level, with the money put in —
+start plus deposits less withdrawals — as a dashed step line; at each point
+the gap between the two is the P/L to that day). Points are joined straight
+in both views: a curve between two days would suggest money moving on days
+nothing was settled; the money put in is a step because a deposit is
+instantaneous. One axis either way, on round ticks ($0 · $500 · $1k); the
+tooltip gives the running P/L signed, or the bankroll. The choice is
+remembered on the device. The chart's code is downloaded apart from the
+rest; if it can't be (a first run offline), the card says so and the rest of
+the dashboard stands — it loads the next time the app opens online.
 
 **The 5% note.** Under the stake box in quick add and in the day form, a
 quiet line says what share of the current bankroll the stake is, and turns
@@ -440,15 +459,38 @@ streaks, best and worst day, drawdown and the breakdowns are under
 **Advanced analytics**, closed until opened (remembered on the device).
 Bets and days are kept apart in the words: "bets won" is the strike rate,
 "winning days" the share of days that ended up; each figure says how many
-bets it covers (the break-even rate covers only those with odds).
+bets it covers (the break-even rate covers only those with odds). Counts
+read in the singular when there is one ("1 pending", "1 winning day").
+
+Each figure says what it means to say, once: what is riding on pending bets
+is on the Pending bets card alone ("$40.00 at risk"; with nothing pending
+its 0 is quiet), the bankroll line says what was contributed, and the ROI
+line reads "−$20.00 on $110.00 staked · avg $55.00 · 2 of 3 bets with a
+stake" — the average stake beside the total it is the average of, so the
+header keeps only the small-sample caveat. The ROI percentage is computed
+from the profit and the stake rounded to the cent, as they are shown: a P/L
+of $0.00 is 0.0% in the neutral tone, never "+0.0%" in green from
+floating-point dust. With a range chosen and no bets in it, P/L, ROI and
+the chart say "No bets in this range"; the first-steps copy appears only when
+the account has no bets at all. On a phone the ROI card comes before the
+month card, so the month sits right above the calendar it drives (the
+reading order for the keyboard is unchanged).
+
+The calendar tints each won or lost day by its size among the month's
+decided days so far (three steps; days still to come are never tinted).
+Amounts of $1,000 and more are written in whole thousands in the cells
+("-$1k", "+$12k"), which is what fits a 320px phone; the exact figure is in
+the cell's title and one tap away in the day.
 
 A new account (no bets yet) gets a short **Getting started** guide: set the
 starting bankroll, choose how odds are written, log the first bet. It goes
 once the three are done, or when hidden.
 
-**Add bet** (and the **+** button on a phone, the same sheet) logs a bet for
-today in a couple of taps; **More details** carries what was typed to the
-full form. For another day, click the day on the calendar.
+The **+** button at the bottom right (or `T`) logs a bet in a couple of taps,
+for today unless another date is picked; **More details** carries what was
+typed to the full form. Its **Sports | Casino** switch at the top logs a
+casino play instead (see [Casino plays](#casino-plays)). The calendar's days
+open their own day too.
 
 ## Date ranges
 
@@ -456,9 +498,13 @@ The row above the stat cards picks the range P/L, ROI, the balance chart and
 the advanced analytics are computed over: all time, this week (Sunday to
 Saturday), this month, the last 30 days, this year, or custom dates
 (inclusive at both ends). The bankroll, the pending bets, the calendar, its
-month card and the history always cover every date, and each card says
-which (a tag such as "All dates"); the history can be narrowed to the range
-with its **Dates shown** filter. The choice is remembered on the device.
+month card and the history always cover every date. Once a range other than
+all time is chosen, each card says which dates it covers (the range's name,
+or a tag such as "All dates") and a note under the row says what the range
+applies to; with all time every card covers the same dates, so nothing is
+said (the note stays as the row's description for screen readers). The
+history can be narrowed to the range with its **Dates shown** filter. The
+choice is remembered on the device.
 
 ## Forms: problems in words, drafts, free bets
 
@@ -488,8 +534,8 @@ Tick rows in the history (the header box ticks the page) and a bar appears,
 saying how many are selected and how many of those the filters hide, to
 **retag** them (empty boxes keep a bet's current tag), **settle** the
 pending ones as won / lost / push / void (a win whose profit can't be worked
-out, with no odds or a free bet, is skipped) or **delete** them (click
-twice: the button says how many). Every delete
+out, with no odds or a free bet, and a loss without a stake are skipped) or
+**delete** them (click twice: the button says how many). Every delete
 — single or bulk — and every bulk edit shows an **Undo** in its toast. Undo
 writes the previous values back through the same outbox, so it works offline
 and syncs like any other change; a restored bet keeps its id but gets a new
@@ -498,11 +544,39 @@ and syncs like any other change; a restored bet keeps its id but gets a new
 ## Pending bets
 
 The menu button (☰), and the **Pending bets** card on the dashboard, show how
-many bets are still waiting for a result; **Pending bets** in the menu (or a
+many bets are still waiting for a result and what is at risk on them (their
+stakes, added up in one place for the card, the panel, the summary and the
+bankroll alike); **Pending bets** in the menu (or a
 click on the card) opens a panel listing them, oldest first. Each settles in one tap
 (WON / LOST / PUSH / VOID — the result is worked out from the stake and odds),
 and a bet whose date has passed is flagged so it is not forgotten. Settling
-works offline like any other edit.
+works offline like any other edit. A result that can't be worked out (a win
+without odds, a loss without a stake) opens the bet's form to type it.
+
+## Casino plays
+
+Besides sports bets, the quick add logs **casino plays** (Stake's Dice,
+Limbo, Mines, Plinko …): **Sports | Casino** at the top of the sheet (a
+radio group: the arrows, Home and End switch it) opens on the kind of the
+bet logged last. The casino side asks for the date, the **game** (ten chips
+for Stake's common games, or **Other game**, which suggests the ones used
+before; the last game comes chosen), the **amount** won or lost, net, and
+**Won** or **Lost**, which gives it its sign. Under them, small and
+optional: the **site** (the last play's, else Stake) and what was
+**wagered**. A loss can't be more than what was wagered. The sports side is
+the sheet as it was, its tags and stake taken from the last *sports* bet, so
+a casino play in between never turns the next bet's sport into "Casino".
+
+There is no new table or column: a casino play is an ordinary bet with sport
+**Casino** (a bet already tagged "casino" counts too), the game as its bet
+type, the site as its book, no odds, the net result as its amount and what
+was wagered, when typed, as its stake. So it counts in P/L, the bankroll,
+the calendar and the monthly loss limit; the breakdown shows **Casino** as
+a sport and each game as a bet type; ROI counts only the plays with a wager;
+CLV and the odds bands leave them out. The history, the day and the pending
+list read one as "Casino · Limbo · Stake". The full form edits it like any
+bet, with no odds asked for and the stake optional. It goes through CSV and
+backups unchanged. More in `docs/casino-2026-11.md` (Spanish).
 
 ## Expenses
 
@@ -514,11 +588,12 @@ says which one is missing and what you add waits on the device.
 - **An expense** has a date, an amount, a card (or none), a merchant, a
   category (coffee, food & restaurants, groceries, transport, shopping,
   entertainment, health, home & bills, subscriptions, travel, other) and a
-  note. **Add expense** (or `T`, or the `+` button on a phone) opens a sheet
-  that starts on the amount and remembers the last card and category on that
-  device. Amounts read the way you type them: `4,50`, `4.50`, `1.234,50` and,
-  in a currency without cents, `12.500`. A **refund** (or credit) is an
-  expense below zero: it shows in green and lowers that month's spending.
+  note. The **+** button at the bottom right (or `T`) opens a sheet, with
+  **Scan receipt** at its top, that starts on the amount and remembers the
+  last card and category on that device. Amounts read the way you type them:
+  `4,50`, `4.50`, `1.234,50` and, in a currency without cents, `12.500`. A
+  **refund** (or credit) is an expense below zero: it shows in green and
+  lowers that month's spending.
   Edit and delete from the list; each comes with an **Undo**. It all works
   offline and syncs like the bets.
 - **Merchants you have typed before** are suggested as you type (the latest
@@ -533,13 +608,18 @@ says which one is missing and what you add waits on the device.
   the scan review and the budgets. Decoration only, in a neutral ink (colour
   is kept for money), and hidden from screen readers.
 - **Cards** — as many as you like (name, last 4 digits, credit or debit),
-  under **Expense settings**. Deleting a card that has expenses archives it:
-  it leaves the pickers and its expenses keep its name. An expense whose card
+  under **Expense settings** (in the menu ☰). Deleting a card that has
+  expenses archives it: it leaves the pickers and its expenses keep its name. An expense whose card
   isn't there shows under **No card**.
 - **Budgets** — monthly, the same every month: one for the whole month, one
-  per card and one per category, all optional. They show as bars (amber from
-  80%, red once over) and never block anything. Two devices that set the same
-  budget meet on one row.
+  per card and one per category, all optional. The **Budgets** panel gives
+  each one two lines, its name and `$338.81 of $400.00 · $61.19 left` (or
+  `· $12.00 over`), with a bar under them: amber from 80%, red once over, and
+  always said in words too. They never block anything. With no budget set the
+  panel is one quiet line, *No budget set*, and **Set one**, which opens
+  Expense settings at the budgets. A budget of an archived card is left out
+  until the card is restored. Two devices that set the same budget meet on
+  one row.
 - **Currency** — expenses are shown in the currency picked in **Expense
   settings**: your main currency (USD by default; CAD, EUR, MXN, COP, ARS,
   CLP, PEN and more). Its code stands next to the month's title and amounts
@@ -549,21 +629,46 @@ says which one is missing and what you add waits on the device.
 - **Other currencies** — an expense can be paid in a currency that isn't
   yours: pick it next to the amount, and the app converts it (see
   [Other currencies and exchange rates](#other-currencies-and-exchange-rates)).
-- **The month** — what was spent, what is left of the budget, each card's
-  share, the daily average and where the month is heading. Under what was
-  spent, one line compares it with **the month before**: day for day while
-  the month is under way ("12% less than at this point last month": both
-  months up to today's day number, never part of a month against a whole
-  one), whole months for a past one. An arrow and plain words, no colour;
-  hover it for the figure it is compared with. It is left out when the month
-  before has no expenses. Then one chart of every
-  card's spending (running total against the budget, or per day), the
-  categories, and the list (a table on a computer, cards on a phone; search,
-  and filter by card and category). The arrows and `←`/`→` change the month,
-  shared with the bets' calendar.
-- **Scan receipt** — the AI reads a receipt photo or an Apple Wallet
-  screenshot and fills in the expenses for you to check before anything is
-  saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).
+- **The month** — four figures in one strip: what was spent, what is left of
+  the budget, each card's share and the daily average. Under what was spent,
+  one line compares it with **the month before**: day for day while the month
+  is under way ("12% less than at this point last month": both months up to
+  today's day number, never part of a month against a whole one), whole
+  months for a past one. An arrow and plain words, no colour; hover it for
+  the figure it is compared with. It is left out when the month before has no
+  expenses. **By card** lists the three largest; **+n more** is a button that
+  lists them all. Then one chart of every card's spending (running total
+  against the budget, drawn with straight segments so nothing reads as spent
+  before its day, or per day; hover or tap a day for its figures, days still
+  to come say nothing), the categories (each one's share of the month's
+  positive spending, so they add up to 100%; a refund lowers its own
+  category's net), and the list (a table on a computer, cards on a phone;
+  search, and filter by card and category). The arrows and `←`/`→` change
+  the month, shared with the bets' calendar. On a phone the strip is two
+  columns: the total across the top, *Budget left* and *Daily average* side
+  by side, *By card* across the bottom.
+- **The daily average and the projection** — the average is the net of what
+  is dated **through today** divided by today's day number: an expense
+  logged ahead (the rent due on the 30th, entered on the 2nd) is not in it,
+  or two days would average a month's rent. Its line says so and where the
+  month is heading: "19 days · on pace for $1,685.40", the average over
+  every day of the month **plus what is already dated after today** (it is
+  spent whatever the pace). Hover it for the figure the average is made of.
+  A past month says "Over 31 days" and projects nothing (the month is what it
+  was); a month still to come says it hasn't started. The projection lives
+  in that one line: the total above it is always what was actually spent.
+  Until the expenses have loaded on the device (or while it is offline and
+  never did) the figures are "—" and the reason is said once under the
+  total, in the chart and in the list; a zero is only ever a real zero.
+- **Tap a card or a category to see its expenses** — a card under *By
+  card*, a card's or a category's budget, or a category under *By category*:
+  the list shows just that card's (or that category's) expenses for the
+  month, scrolls up into view and says so in a quiet line above it ("Visa ×
+  · 12 expenses · $561.63", with **Show all**). The budgets' monthly total
+  shows the whole month again; the list's boxes always show the same filter.
+- **Scan receipt**, first in the expense sheet — the AI reads a receipt
+  photo or an Apple Wallet screenshot and fills in the expenses for you to
+  check before anything is saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).
 - **Export CSV** (in the list) writes every expense, with the columns `date,
   amount, currency, card, card_last4, merchant, category, note, source,
   original_amount, original_currency, fx_rate`. `amount` is in your main
@@ -575,12 +680,13 @@ says which one is missing and what you add waits on the device.
 ### Other currencies and exchange rates
 
 Say your main currency is Canadian dollars and a subscription charges you in
-US dollars. In **Add expense**, pick **USD** in the box next to the amount and
-type what you paid. Under it the app shows the **rate** of that day and the
-amount **in CAD**, and saves both: `USD 12.00` as paid, `$16.80` as what it
-counts for. Totals, budgets, the chart and the categories always use the
-amount in your main currency; the list shows the original beside it, small,
-written with its code so a bare `$` always means your own currency.
+US dollars. In the expense sheet (the **+** button), pick **USD** in the box
+next to the amount and type what you paid. Under it the app shows the **rate**
+of that day and the amount **in CAD**, and saves both: `USD 12.00` as paid,
+`$16.80` as what it counts for. Totals, budgets, the chart and the categories
+always use the amount in your main currency; the list shows the original
+beside it, small, written with its code so a bare `$` always means your own
+currency.
 
 - **Both boxes can be typed in.** Type the amount your bank actually charged
   (banks add their own fee) and the rate follows it; type a rate and the
@@ -594,11 +700,11 @@ written with its code so a bare `$` always means your own currency.
   or a currency the service doesn't publish, such as COP), the two boxes stay
   empty and say so; the expense is saved once you type the rate or the amount
   in your currency. An amount in dollars is never saved as if it were yours.
-- **Scan receipt** works the same way for a whole picture: the review has a
-  **Currency of the picture** box (an Apple Wallet screen shows a bare `$` for
-  US and Canadian dollars alike, so you can say which), each row shows what
-  was read and what it comes to, and one field gives a rate to every row that
-  has none. A row without a rate is left out of **Add N** until it has one.
+- **Scan receipt** works the same way for each row of a picture: every row
+  has its own currency (see [AI reading of receipts](#ai-reading-of-receipts-optional)),
+  a row in another one shows what was read and what it comes to, and one
+  field per currency gives a rate to every row of it that has none. A row
+  without a rate is left out of **Add N** until it has one.
 - The currency you last paid in is offered first, after your own.
 
 **Where the rates come from.** [Frankfurter](https://frankfurter.dev), a free
@@ -634,7 +740,8 @@ could not reach the service and checks nothing.
 
 ## AI reading of receipts (optional)
 
-**Scan receipt** in the Expenses view reads a photo of a receipt or an Apple
+**Scan receipt**, first in the expense sheet (the **+** button in the Expenses
+view), reads a photo of a receipt or an Apple
 Wallet screenshot with Claude (Anthropic) and fills in the expenses: one per
 receipt (its total, tip included), one per visible Wallet transaction
 (declined ones left out, refunds as refunds). Nothing is saved until you
@@ -643,6 +750,27 @@ last 4 digits (or the name) the image shows, and one that looks like an
 expense you already have (same date, amount and card, a similar merchant) is
 unticked and shown next to it. Everything works without it: until it is set
 up, scanning says so and you type the expense instead.
+
+**The currency of each expense.** A Wallet list can mix purchases in your
+currency and in another one, and a bare `$` can be any dollar, so the
+reading gives each expense its own currency and says how it knows it: a code,
+a currency word or a symbol of one currency shown for that amount (`USD`,
+`US$`, `CA$`, `€`), or, for a bare `$`, where the image shows the purchase
+was made (a US state or a Canadian province in the address, a ZIP or postal
+code, Sales tax against GST/HST/PST/QST, a phone number, a website's
+country). It never assumes your currency. When nothing in the image settles
+it, the row takes the currency you last paid in at the same merchant, else
+your own, and where that matters (you have expenses in other currencies, or
+the picture mixes them) the row says **Currency assumed** so you give it a
+look. When the image also shows what the card was charged in your currency
+(Wallet: "USD 12.00" with "CA$16.95" under it), that is the amount saved,
+**as charged**, and no rate is fetched for it. Each row's currency can be
+changed in its fields, and **Currency of all rows** sets them all at once.
+**After updating the app, deploy the function again** (the same `functions
+deploy` as below; the secrets stay): until then the old function still
+works, with one currency for the whole picture. An app installed before
+this change works with the new function too: it reads the picture's one
+currency, which is set when every row shares it.
 
 It runs in a Supabase **Edge Function**, `extract-expenses`
 (`supabase/functions/extract-expenses/`), with **your own Anthropic API key**,
@@ -668,7 +796,7 @@ through `npx` at the version these steps were last checked with, **3.2.0**
 project's **reference id** (the `<ref>` of `https://<ref>.supabase.co`).
 
 ```bash
-# From the repository root: the function imports src/shared/expenseExtraction.ts.
+# From the repository root (the folder that holds supabase/).
 npx supabase@3.2.0 login
 
 # The secrets go in a file, not on the command line (it would stay in the shell
@@ -688,12 +816,15 @@ npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-
   deploy` can't turn the gateway's check back on.
 - **Docker**: the CLI bundles the function with Docker when it's running;
   without it, add `--use-api` to bundle on Supabase's side.
-- **The Dashboard's editor can't deploy it** (it imports a second file): use
-  the CLI. If a CLI version refuses the import from outside `supabase/`
-  ("Module not found … src/shared"), copy `src/shared/expenseExtraction.ts`
-  to `supabase/functions/_shared/expenseExtraction.ts`, point the one import
-  in `index.ts` at it, and keep the two files identical (a unit test that
-  compares them byte for byte is the safe way).
+- **Everything the function needs is under `supabase/functions`**: its
+  `index.ts` and `_shared/expenseExtraction.ts`, a byte-for-byte copy of
+  `src/shared/expenseExtraction.ts` (the app's own module), so bundling never
+  has to reach outside that folder, with or without Docker. The copy is never
+  edited by hand: after changing the module run `npm run sync:function`; a
+  unit test fails while the two files differ.
+- **The secrets can also be set in the Dashboard** (Edge Functions →
+  Secrets) instead of with `secrets set`: the same two names and values, and
+  no file to make or delete.
 - **`EXTRACT_ALLOWED_USERS`**: who may scan, comma-separated user ids
   (recommended; **Authentication → Users** shows yours) or confirmed emails.
   Unset, every scan is refused ("This account isn't allowed"). `*` lets every
@@ -732,10 +863,11 @@ npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-
 Claude Opus 5.5 costs $4 per million input tokens and $20 per million output
 tokens. The app sends the image at most 1600 px on its long side: a 1600×1200
 photo is about 2,600 input tokens (width × height / 750; a 739×1600 Wallet
-screenshot about 1,600), plus about 1,500 for the instructions, so about
-**$0.017** of input. The answer and the model's thinking (effort medium) take
-about 1,000 to 4,000 output tokens, **$0.02 to $0.08**. All in, about **3 to
-10 US cents per scan**. If Claude declines an image and the request falls
+screenshot about 1,600), plus about 2,000 for the instructions and the
+schema, so about **$0.018** of input. The answer and the model's thinking
+(effort medium) take about 1,000 to 5,000 output tokens (each row carries its
+currency too), **$0.02 to $0.10**. All in, about **3 to 12 US cents per
+scan**. If Claude declines an image and the request falls
 back to another model (the function asks for that fallback), that attempt is
 billed at that model's rates; the function logs it (`fallback: true`).
 

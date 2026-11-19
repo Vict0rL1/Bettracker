@@ -42,7 +42,6 @@ export type ScanBlocked = 'offline' | 'signed_out' | 'loading' | null
 export interface ExpenseSheetProps {
   /** The expense being edited, or null to add one. */
   editing: Expense | null
-  startWithScan: boolean
   /** A draft handed back after "Add card" (memory only). */
   draft: ExpenseDraft | null
   /** The card added during that handover. */
@@ -111,7 +110,8 @@ export default function ExpenseSheet(p: ExpenseSheetProps) {
   const convertedRef = useRef<HTMLInputElement>(null)
   const dateRef = useRef<HTMLInputElement>(null)
 
-  const [stage, setStage] = useState<Stage>(p.startWithScan && !editing && !scanBlocked ? 'scan' : 'form')
+  // Always the form first: its Scan receipt (or an image pasted or dropped) moves on to the scan.
+  const [stage, setStage] = useState<Stage>('form')
   // Back from "Add card": what was typed, with the card added chosen.
   const [d, setD] = useState<ExpenseDraft>(() =>
     p.draft

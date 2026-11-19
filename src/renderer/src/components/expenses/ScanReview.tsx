@@ -9,13 +9,17 @@ import { expenseAmountProblem, expenseDateProblem, merchantLabel, paidInAnother 
 import { parseRateText, settledFx } from '../../lib/expenseFx'
 import {
   applyCardToUnmatched,
-  pictureCurrency,
+  commonCurrency,
   refreshDuplicates,
   reviewAdds,
   reviewRowProblem,
+  rowAsCharged,
   rowLacksRate,
   rowMoney,
+  setAllCurrencies,
   setAllIncluded,
+  setRowCurrency,
+  wantedRates,
   type ReviewMoney,
   type ReviewRow
 } from '../../lib/expenseReview'
@@ -26,7 +30,7 @@ import { PencilIcon } from '../icons'
 import CategoryIcon from './CategoryIcon'
 import Paged from '../Paged'
 import { originLine } from './fxText'
-import { useRates } from './useRates'
+import { useRatePairs } from './useRates'
 
 interface Props {
   result: ExtractResult
@@ -35,7 +39,7 @@ interface Props {
   cards: readonly ExpenseCard[]
   /** Every saved expense (queued ones too): a row like one of them is a possible duplicate. */
   existing: readonly Expense[]
-  /** The main currency: what every expense is saved in. The picture may be in another. */
+  /** The main currency: what every expense is saved in. A row may be in another. */
   currency: string
   /** The other currency last used on this device, offered first after the main one. */
   lastCurrency: string | null
@@ -60,11 +64,14 @@ const PAGE = 10
  * is a summary line; its fields open on the pencil, and rows with something
  * to check start open. Nothing is added until "Add N".
  *
- * A picture is in one currency, chosen at the top (what the reading says,
- * else the main one: a bare "$" can be any dollar). In another currency every
- * row shows what was read and what it comes to in the main one, at its day's
- * rate; a row with no rate says so and is not added until it has one (typed
- * on the row, or once for all of them at the top).
+ * Each row is in its own currency (what the image shows for it, else what
+ * the merchant was last paid in, else the main one: a bare "$" can be any
+ * dollar), changed on the row or for every row at the top. A row in another
+ * currency shows what was read and what it comes to in the main one: what the
+ * picture says the card was charged, or its day's rate; a row with no rate
+ * says so and is not added until it has one (typed on the row, or once for
+ * all the rows of that currency at the top). A row whose currency nothing
+ * settled says so quietly where that matters.
  */
 export default function ScanReview({ result, rows, cards, existing, currency: main, lastCurrency, today, onChange, onFollow, onAdd, onAgain, discardSure }: Props) {
   const { t, tn } = useLang()
@@ -76,54 +83,68 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
   // A new key remounts the list showing at least `first` rows (to bring a problem row into view).
   const [paging, setPaging] = useState({ key: 0, first: PAGE })
   const [focusRow, setFocusRow] = useState<string | null>(null)
-  // The currency of the picture: what the reading says, until the person says otherwise.
-  const read = pictureCurrency(result, main)
-  const [paidIn, setPaidIn] = useState(read)
-  // One rate for every row that has none (the service has none for the pair, or can't be reached).
-  const [rateAll, setRateAll] = useState('')
+  // One rate per currency for every row of it that has none (the service has none for the pair, or can't be reached).
+  const [rateAll, setRateAll] = useState<Readonly<Record<string, string>>>({})
 
   const active = cards.filter((c) => !c.archived)
-  const foreign = paidIn !== main
-  // The rates of the rows' days, for the rows whose rate the person has not typed.
-  const wantedDates = useMemo(() => rows.filter((r) => r.fx === null || r.fx.text.trim() === '').map((r) => r.date), [rows])
-  const rates = useRates({ enabled: foreign, from: paidIn, to: main, dates: wantedDates })
-  const all = parseRateText(rateAll)
-  const allRate = typeof all === 'number' ? all : null
-  const m: ReviewMoney = useMemo(() => ({ currency: paidIn, main, rates: rates.found, all: allRate }), [paidIn, main, rates.found, allRate])
+  // The currencies other than the main one that rows are in, in the rows' order.
+  const others = useMemo(() => [...new Set(rows.map((r) => r.currency).filter((c) => c !== main))], [rows, main])
+  // The rates of the rows' currencies and days, for the rows whose rate the person has not typed and the picture doesn't give.
+  const wants = useMemo(() => wantedRates(rows, main), [rows, main])
+  const rates = useRatePairs({ enabled: wants.length > 0, to: main, wants })
+  const allRates = useMemo(() => {
+    const out: Record<string, number | undefined> = {}
+    for (const [code, text] of Object.entries(rateAll)) {
+      const rate = parseRateText(text)
+      if (typeof rate === 'number') out[code] = rate
+    }
+    return out
+  }, [rateAll])
+  const m: ReviewMoney = useMemo(() => ({ main, rates: rates.found, all: allRates }), [main, rates.found, allRates])
+  /** What is known of a row's rate when the service is what it waits on (not typed, not charged, not the main currency). */
+  const rateOf = (r: ReviewRow) => (r.currency === main || r.fx !== null || rowAsCharged(r, main) ? undefined : rates.of(r.currency, r.date))
 
   const ticked = rows.filter((r) => r.include).length
   // Ticked rows with no rate from anywhere: left out of "Add N" until they have one. A row whose rate is still being
   // asked for is not counted out yet (the button doesn't flash "Add 0" each time a review opens).
-  const waiting = rows.filter((r) => r.include && rowLacksRate(r, m) && rates.of(r.date) !== 'loading').length
+  const waiting = rows.filter((r) => r.include && rowLacksRate(r, m) && rates.of(r.currency, r.date) !== 'loading').length
   const adding = ticked - waiting
-  // A date whose rate could not be had, and why (the first such row's reason: one pair, so mostly one reason). The box
-  // for one rate for all such rows shows then (and stays while it holds text), and the line under the currency says why.
-  const failure = ((): 'offline' | 'unsupported' | 'unavailable' | null => {
-    if (!foreign) return null
-    for (const r of rows) {
-      if (r.fx !== null && r.fx.text.trim() !== '') continue
-      const state = rates.of(r.date)
-      if (state !== undefined && state !== 'loading' && !state.ok) return state.reason
-    }
-    return null
-  })()
+  // Per currency, a date whose rate could not be had, and why (the first such row's reason: one pair, so mostly one
+  // reason). The box for one rate for all such rows shows then (and stays while it holds text), and the line under the
+  // currency says why (for the first such currency).
+  const failures = new Map<string, 'offline' | 'unsupported' | 'unavailable'>()
+  for (const r of rows) {
+    if (failures.has(r.currency) || (r.fx !== null && r.fx.text.trim() !== '')) continue
+    const state = r.currency === main || rowAsCharged(r, main) ? undefined : rates.of(r.currency, r.date)
+    if (state !== undefined && state !== 'loading' && !state.ok) failures.set(r.currency, state.reason)
+  }
+  const failure = failures.size > 0 ? [...failures][0] : null
   const anyUnmatched = rows.some((r) => r.cardHow === 'none')
   const cardName = (id: string | null): string => (id === null ? t('spend.noCard') : (cards.find((c) => c.id === id)?.name ?? t('spend.noCard')))
   const mainSymbol = currencySymbol(main)
-  const currencies = useMemo(() => payCurrencyOptions(main, lastCurrency, read), [main, lastCurrency, read])
+  // "Currency of all rows": the one they share, or none while they differ.
+  const common = commonCurrency(rows)
+  const bulkCurrencies = useMemo(() => [...new Set([...payCurrencyOptions(main, lastCurrency), ...rows.map((r) => r.currency)])], [main, lastCurrency, rows])
+  // The rows whose currency nothing read: said under the currency when no row is in another one.
+  const unread = rows.filter((r) => r.currencyHow === 'main' || r.currencyHow === 'picture').length
 
   const patch = (key: string, change: Partial<ReviewRow>): void => {
     setAlert(null)
     onChange(rows.map((r) => (r.key === key ? { ...r, ...change } : r)))
+  }
+  /** Rows in another currency: what each comes to, and so its duplicates, change with it. */
+  const recurrency = (next: ReviewRow[]): void => {
+    setAlert(null)
+    onChange(refreshDuplicates(next, existing, m) as ReviewRow[])
   }
   /** Leaving a rate or converted box left empty: nothing is typed on the row any more (its day's rate comes back). */
   const leaveFx = (r: ReviewRow): void => {
     if (settledFx(r.fx) !== r.fx) onChange(rows.map((x) => (x.key === r.key ? { ...x, fx: null } : x)))
   }
 
-  // The duplicates follow the saved expenses while the review is open, and what the rows come to: the currency of the
-  // picture, and each rate as it arrives (a row paid in another currency is matched by what was paid, and by its
-  // amount in the main currency once that is known).
+  // The duplicates follow the saved expenses while the review is open, and what the rows come to: each rate as it
+  // arrives (a row paid in another currency is matched by what was paid, and by its amount in the main currency once
+  // that is known).
   useEffect(() => {
     onFollow((current) => refreshDuplicates(current, existing, m) as ReviewRow[])
     // onFollow is the sheet's setRows in a new closure each render: not a reason to look again.
@@ -134,10 +155,10 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
   useEffect(() => {
     if (focusRow === null) return
     const row = rows.find((r) => r.key === focusRow)
-    const field = !row ? 'date' : expenseAmountProblem(row.amount, paidIn) ? 'amount' : expenseDateProblem(row.date) ? 'date' : row.fx?.lead === 'converted' ? 'converted' : row.fx ? 'rate' : 'date'
+    const field = !row ? 'date' : expenseAmountProblem(row.amount, row.currency) ? 'amount' : expenseDateProblem(row.date) ? 'date' : row.fx?.lead === 'converted' ? 'converted' : row.fx ? 'rate' : 'date'
     document.getElementById(`${baseId}-${focusRow}-${field}`)?.focus()
     setFocusRow(null)
-  }, [focusRow, rows, paidIn, baseId])
+  }, [focusRow, rows, baseId])
 
   const add = async (): Promise<void> => {
     if (busy) return
@@ -177,12 +198,16 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
     const merchant = merchantLabel(r.merchant, t)
     const sums = rowMoney(r, m)
     const sign = r.refund ? -1 : 1
-    // What was read, written with its code when the picture is in another currency ("USD 12.00").
-    const original = sums.foreign && sums.paid !== null ? codeAmount(sign * sums.paid, paidIn) : null
+    const foreign = sums.foreign
+    // What was read, written with its code when the row is in another currency ("USD 12.00").
+    const original = foreign && sums.paid !== null ? codeAmount(sign * sums.paid, r.currency) : null
     // The amount in the main currency: what the row is saved as. Unknown without a rate.
-    const amount = sums.amount !== null ? money.plain(sums.amount) : sums.foreign ? (original ?? (r.amount || '—')) : r.amount || '—'
-    const noRate = rowLacksRate(r, m) && rates.of(r.date) !== 'loading'
-    const amountProblem = r.open ? expenseAmountProblem(r.amount, paidIn) : null
+    const amount = sums.amount !== null ? money.plain(sums.amount) : foreign ? (original ?? (r.amount || '—')) : r.amount || '—'
+    const noRate = rowLacksRate(r, m) && rates.of(r.currency, r.date) !== 'loading'
+    // The picture's charge in the main currency is what this row comes to (until a rate is typed on it).
+    const asCharged = sums.view?.origin?.how === 'charged'
+    const remembered = r.currencyHow === 'memory' && foreign
+    const amountProblem = r.open ? expenseAmountProblem(r.amount, r.currency) : null
     const dateProblem = r.open ? expenseDateProblem(r.date) : null
     const view = sums.view
     const fxTyped = r.fx !== null && r.fx.text.trim() !== ''
@@ -218,7 +243,7 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
             </span>
           </span>
           <span className="exp-review-money">
-            <span className={`exp-review-amount-text${r.refund ? ' refund' : ''}${sums.foreign && sums.amount === null ? ' is-unknown' : ''}`}>{amount}</span>
+            <span className={`exp-review-amount-text${r.refund ? ' refund' : ''}${foreign && sums.amount === null ? ' is-unknown' : ''}`}>{amount}</span>
             {original !== null && sums.amount !== null && <span className="exp-review-original">{original}</span>}
           </span>
           <button
@@ -233,11 +258,14 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
           </button>
         </div>
 
-        {(dup || noRate || r.confidence === 'low' || r.dateGuessed || r.pending || r.cardHow === 'last4' || r.cardUnknownLast4) && (
+        {(dup || noRate || r.confidence === 'low' || r.dateGuessed || r.pending || r.cardHow === 'last4' || r.cardUnknownLast4 || r.currencyAssumed || remembered || asCharged) && (
           <div className="exp-review-notes">
             {dup && <div className="exp-review-match">{t('scan.dupOf', { merchant: merchantLabel(dup.merchant, t), card: cardName(dup.cardId), amount: dupAmount, date: humanDate(dup.date) })}</div>}
             {noRate && <p className="exp-review-check exp-review-norate">{t('scan.noRate', { currency: main })}</p>}
             {(r.confidence === 'low' || r.dateGuessed) && <p className="exp-review-check">{t(r.confidence === 'low' ? 'scan.check' : 'scan.checkDate')}</p>}
+            {r.currencyAssumed && <span className="hint exp-review-assumed">{t('scan.currencyAssumed', { currency: r.currency })}</span>}
+            {remembered && <span className="hint exp-review-curhow">{t('scan.currencyMemory', { currency: r.currency })}</span>}
+            {asCharged && <span className="hint exp-review-charged">{t('scan.asCharged')}</span>}
             {r.pending && <span className="exp-review-pending">{t('scan.pending')}</span>}
             {r.cardHow === 'last4' && <span className="hint exp-review-cardhow">{t('scan.cardMatched')}</span>}
             {r.cardUnknownLast4 && r.cardHow !== 'user' && <span className="hint exp-review-cardhow">{t('scan.cardUnknown', { last4: r.cardUnknownLast4 })}</span>}
@@ -261,7 +289,7 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
             </label>
             <div className="field exp-review-field-amount">
               <label className="field-label" htmlFor={`${id}-amount`}>
-                {t('exp.amount')} {foreign && <span className="field-opt">{paidIn}</span>}
+                {t('exp.amount')} {foreign && <span className="field-opt">{r.currency}</span>}
               </label>
               <div className="exp-review-amount-row">
                 <input
@@ -281,11 +309,22 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
               </div>
               <FieldError id={`${id}-amount-err`} problem={amountProblem} />
             </div>
+            {/* The currency of this row: what the image or the merchant said, or the main one, until the person says otherwise. */}
+            <label className="field exp-review-field-currency">
+              <span className="field-label">{t('exp.payCurrency')}</span>
+              <select id={`${id}-currency`} className="exp-review-row-currency" value={r.currency} onChange={(e) => recurrency(rows.map((x) => (x.key === r.key ? setRowCurrency(x, e.target.value, main) : x)))}>
+                {payCurrencyOptions(main, lastCurrency, r.currency).map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+            </label>
             {foreign && view && (
               <div className="exp-review-fx" role="group" aria-label={t('exp.fxGroup', { currency: main })}>
                 <div className="field exp-review-field-rate">
                   <label className="field-label" htmlFor={`${id}-rate`}>
-                    {t('exp.fxRate')} <span className="field-opt">{t('exp.fxRateUnit', { from: paidIn, to: main })}</span>
+                    {t('exp.fxRate')} <span className="field-opt">{t('exp.fxRateUnit', { from: r.currency, to: main })}</span>
                   </label>
                   <input
                     id={`${id}-rate`}
@@ -323,7 +362,7 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
                 <FieldError id={`${id}-rate-err`} problem={rateProblem} />
                 <FieldError id={`${id}-converted-err`} problem={convertedProblem} />
                 <p className="hint exp-review-fx-line" id={`${id}-fx-line`}>
-                  {originLine({ origin: view.origin, state: r.fx === null ? rates.of(r.date) : undefined, typedEmpty: r.fx !== null && !fxTyped, from: paidIn, to: main, today, t })}
+                  {originLine({ origin: view.origin, state: rateOf(r), typedEmpty: r.fx !== null && !fxTyped, from: r.currency, to: main, today, t })}
                 </p>
               </div>
             )}
@@ -371,54 +410,63 @@ export default function ScanReview({ result, rows, cards, existing, currency: ma
       {result.kind === 'wallet' && <p className="hint exp-review-asof">{t('scan.asOf', { date: humanDate(today) })}</p>}
       {result.sample && <p className="draft-note exp-sample">{t('scan.sample')}</p>}
 
-      {/* The currency of the picture: the amounts read are in it. Not the main one: each row is converted. */}
+      {/* Every row's currency at once (each row has its own, in its fields). Not the main one: the row is converted. */}
       <div className="exp-review-money-bar">
         <label className="field exp-review-currency-field">
           <span className="field-label">{t('scan.currency')}</span>
-          <select
-            className="exp-review-currency"
-            value={paidIn}
-            onChange={(e) => {
-              setAlert(null)
-              setPaidIn(e.target.value)
-            }}
-          >
-            {currencies.map((code) => (
+          <select className="exp-review-currency" value={common ?? ''} onChange={(e) => e.target.value !== '' && recurrency(setAllCurrencies(rows, e.target.value, main))}>
+            {common === null && (
+              <option value="" disabled>
+                {t('scan.currencyMixed')}
+              </option>
+            )}
+            {bulkCurrencies.map((code) => (
               <option key={code} value={code}>
                 {code}
               </option>
             ))}
           </select>
         </label>
-        {foreign && (failure !== null || rateAll !== '') && (
-          <div className="field exp-review-rateall-field">
-            <label className="field-label" htmlFor={`${baseId}-rateall`}>
-              {t('scan.rateAll')} <span className="field-opt">{t('exp.fxRateUnit', { from: paidIn, to: main })}</span>
-            </label>
-            <input
-              id={`${baseId}-rateall`}
-              type="text"
-              inputMode="decimal"
-              autoComplete="off"
-              className="exp-review-rateall"
-              value={rateAll}
-              aria-invalid={all === 'invalid'}
-              aria-describedby={describedBy(all === 'invalid' && `${baseId}-rateall-err`)}
-              onChange={(e) => {
-                setAlert(null)
-                setRateAll(e.target.value)
-              }}
-            />
-            <FieldError id={`${baseId}-rateall-err`} problem={all === 'invalid' ? { key: 'field.rateInvalid' } : null} />
-          </div>
-        )}
+        {others
+          .filter((code) => failures.has(code) || (rateAll[code] ?? '') !== '')
+          .map((code) => {
+            const boxId = `${baseId}-rateall-${code}`
+            const typed = rateAll[code] ?? ''
+            const invalid = parseRateText(typed) === 'invalid'
+            return (
+              <div key={code} className="field exp-review-rateall-field" data-currency={code}>
+                <label className="field-label" htmlFor={boxId}>
+                  {t('scan.rateAll')} <span className="field-opt">{t('exp.fxRateUnit', { from: code, to: main })}</span>
+                </label>
+                <input
+                  id={boxId}
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  className="exp-review-rateall"
+                  value={typed}
+                  aria-invalid={invalid}
+                  aria-describedby={describedBy(invalid && `${boxId}-err`)}
+                  onChange={(e) => {
+                    setAlert(null)
+                    setRateAll((all) => ({ ...all, [code]: e.target.value }))
+                  }}
+                />
+                <FieldError id={`${boxId}-err`} problem={invalid ? { key: 'field.rateInvalid' } : null} />
+              </div>
+            )
+          })}
       </div>
-      {foreign ? (
+      {others.length > 0 ? (
         <p className="hint exp-review-fxinfo" aria-live="polite">
-          {rates.loading ? t('scan.fxLoading') : failure ? t(`scan.fxNone.${failure}`, { from: paidIn, to: main }) : t('scan.fxInfo', { to: main, source: t('exp.fxSource') })}
+          {rates.loading
+            ? t('scan.fxLoading')
+            : failure
+              ? t(`scan.fxNone.${failure[1]}`, { from: failure[0], to: main })
+              : t(rows.every((r) => r.currency !== main && !rowAsCharged(r, main)) ? 'scan.fxInfo' : 'scan.fxInfoSome', { to: main, source: t('exp.fxSource') })}
         </p>
       ) : (
-        result.currency === null && <p className="hint exp-review-fxinfo">{t('scan.currencyUnread', { currency: main })}</p>
+        unread > 0 && <p className="hint exp-review-fxinfo">{t(unread === rows.length ? 'scan.currencyUnread' : 'scan.currencySomeUnread', { currency: main })}</p>
       )}
 
       {result.warnings.length > 0 && (

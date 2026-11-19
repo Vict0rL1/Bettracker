@@ -33,6 +33,16 @@ export const sameMonth = (a: MonthKey, b: MonthKey): boolean =>
 
 export const monthPrefix = (ym: MonthKey): string => `${ym.year}-${pad2(ym.month + 1)}`
 
+/**
+ * Where a month stands against today's (a local date string): 0 for the
+ * current month, below 0 for a past one (−1 is last month), above 0 for one
+ * still to come. The one place the comparison is made (lib/spend.ts).
+ */
+export function monthOrder(ym: MonthKey, today: string): number {
+  const [ty, tm] = today.split('-').map(Number)
+  return ym.year * 12 + ym.month - (ty * 12 + (tm - 1))
+}
+
 // Human-readable dates follow the interface language. Spanish month names are
 // lowercase by convention ("agosto 2026"); the first letter is raised where a
 // label starts with one, so headings read the same in both languages.

@@ -2,7 +2,10 @@
 // in, the expenses it shows out. Stateless: the image is neither stored nor
 // logged, and nothing is written to the database. Deploy and secrets: README,
 // "AI reading of receipts". The prompt, schema and checks are shared with the
-// app (src/shared/expenseExtraction.ts), which checks the answer again.
+// app, which checks the answer again: ../_shared/expenseExtraction.ts is a
+// byte-for-byte copy of src/shared/expenseExtraction.ts (`npm run
+// sync:function` writes it; a unit test compares them), so everything the
+// function needs is under supabase/functions and any way of deploying works.
 //
 // ANTHROPIC_API_KEY is a secret of this function (`supabase secrets set`):
 // never in the app, never in a VITE_ variable (the app's build refuses one).
@@ -24,7 +27,7 @@ import {
   type ApiErrorFacts,
   type ExtractErrorCode,
   type ExtractRequest
-} from '../../../src/shared/expenseExtraction.ts'
+} from '../_shared/expenseExtraction.ts'
 
 // supabase-js's own header list (a header a later supabase-js adds can't break the preflight); browsers cap max-age at 7200.
 // Origin '*': the PWA's origin and Electron's file:// ("null"); auth is the bearer token, not cookies.

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { boot, card, entry, expense, menu, SEED } from './harness'
+import { addBet, boot, card, entry, expense, menu, openExpenseSettings, SEED } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const daysAgo = (n: number): string => {
@@ -97,7 +97,7 @@ for (const width of [320, 390]) {
 
       const expenseDialogs: [string, () => Promise<unknown>][] = [
         ['.expense-modal', () => page.click('.fab')],
-        ['.expense-settings-modal', () => page.click('.exp-manage-btn')]
+        ['.expense-settings-modal', () => openExpenseSettings(page)]
       ]
       for (const [modal, show] of expenseDialogs) {
         await show()
@@ -146,27 +146,72 @@ test('on a phone, no field is under 16px, so iOS does not zoom in on it', async 
   await expect(page.locator('.expense-modal .exp-amount')).toBeVisible()
   expect(await small(), 'expense sheet').toEqual([])
   await page.keyboard.press('Escape')
-  await page.click('.exp-manage-btn')
+  await openExpenseSettings(page)
   const settings = page.locator('.expense-settings-modal')
   for (const box of ['.paycard-name-input', '.paycard-last4-input', '.budget-input', '.currency-select']) await expect(settings.locator(box).first()).toBeVisible()
   expect(await small(), 'expense settings').toEqual([])
 })
 
-test('at the bottom of the page, the + button leaves the history pager free to tap', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
-  const many = Array.from({ length: 40 }, (_, i) => entry({ id: `m${i}`, date: daysAgo(i + 1), amount: i % 2 ? 10 : -10, stake: 10 }))
-  await boot(page, { entries: many })
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-  const next = page.locator('.pager .nav-btn').last()
-  const box = await next.boundingBox()
-  if (!box) throw new Error('no pager')
-  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.pager .nav-btn, .fab')?.className ?? null, { x: box.x + box.width / 2, y: box.y + box.height / 2 })
-  expect(hit).toContain('nav-btn')
-})
+/**
+ * Scrolled to the bottom (the page, and any box it scrolls inside, such as a
+ * table's), what is under the middle and the right end of `selector`'s last
+ * match (the + button's side) is that element, never the +.
+ */
+async function freeAtBottom(page: Page, selector: string): Promise<string[]> {
+  return page.evaluate((sel) => {
+    const all = document.querySelectorAll(sel)
+    const el = all[all.length - 1]
+    if (!el) return [`no ${sel}`]
+    for (let box = el.parentElement; box; box = box.parentElement) {
+      if (box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY)) box.scrollTop = box.scrollHeight
+    }
+    window.scrollTo(0, document.documentElement.scrollHeight)
+    const r = el.getBoundingClientRect()
+    const y = r.top + r.height / 2
+    return [r.left + r.width / 2, r.right - 4].flatMap((x) => {
+      const hit = document.elementFromPoint(x, y)
+      return el.contains(hit) ? [] : [`${sel} at ${Math.round(x)},${Math.round(y)}: ${hit?.closest('.fab') ? 'the + button' : (hit?.className ?? 'nothing')}`]
+    })
+  }, selector)
+}
+
+// The + button is the add button on every screen size, so the page's end keeps clear of it on a computer too.
+for (const size of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+  test(`at ${size.width}px, at the bottom of the page, the + button leaves the history pager free to tap`, async ({ page }) => {
+    await page.setViewportSize(size)
+    const many = Array.from({ length: 40 }, (_, i) => entry({ id: `m${i}`, date: daysAgo(i + 1), amount: i % 2 ? 10 : -10, stake: 10 }))
+    await boot(page, { entries: many })
+    await expect(page.locator('.fab')).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    const next = page.locator('.pager .nav-btn').last()
+    const box = await next.boundingBox()
+    if (!box) throw new Error('no pager')
+    const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.pager .nav-btn, .fab')?.className ?? null, { x: box.x + box.width / 2, y: box.y + box.height / 2 })
+    expect(hit).toContain('nav-btn')
+    expect(await freeAtBottom(page, '.pager .nav-btn')).toEqual([])
+  })
+
+  test(`at ${size.width}px, at the bottom of the Expenses view, the + button leaves the list's last row and Show more free`, async ({ page }) => {
+    await page.setViewportSize(size)
+    // More than one page of the list (60) in this month, so Show more is there.
+    const month = Array.from({ length: 65 }, (_, i) =>
+      expense({ id: `20000000-0000-4000-8000-${String(i).padStart(12, '0')}`, date: daysAgo(0), amount: 3 + i, category: 'coffee', merchant: `Café ${i}` })
+    )
+    await boot(page, { view: 'expenses', expenses: month, cards: [], budgets: [] })
+    await expect(page.locator('.fab')).toBeVisible()
+    await expect(page.locator('.exp-more')).toBeVisible()
+    expect(await freeAtBottom(page, '.exp-more')).toEqual([])
+    expect(await freeAtBottom(page, size.width > 640 ? '.exp-row .exp-delete' : '.exp-item-open')).toEqual([])
+    // And it still does what it says.
+    await page.locator('.exp-more').click()
+    await expect(page.locator('.exp-more')).toHaveCount(0)
+    expect(await freeAtBottom(page, size.width > 640 ? '.exp-row .exp-delete' : '.exp-item-open')).toEqual([])
+  })
+}
 
 test('odds boxes ask for a keyboard that can type them: minus and slash for American and fractional, the pad for decimal', async ({ page }) => {
   await boot(page, { settings: { oddsFormat: 'american' } })
-  await page.click('.add-bet-btn')
+  await addBet(page)
   await expect(page.locator('.quick-modal .quick-row input[type=text]')).toHaveAttribute('inputmode', 'text')
   await page.keyboard.press('Escape')
   await page.locator('.history-card tbody tr').first().locator('.td-actions .btn-icon').first().click()
@@ -176,7 +221,7 @@ test('odds boxes ask for a keyboard that can type them: minus and slash for Amer
 
 test('with decimal odds the odds boxes get the number pad', async ({ page }) => {
   await boot(page, { settings: { oddsFormat: 'decimal' } })
-  await page.click('.add-bet-btn')
+  await addBet(page)
   await expect(page.locator('.quick-modal .quick-row input[type=text]')).toHaveAttribute('inputmode', 'decimal')
 })
 

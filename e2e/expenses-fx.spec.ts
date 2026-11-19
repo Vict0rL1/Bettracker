@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
-import { USER, boot, businessDay, card, expense, fxRequests, reload, scanFile, setFx } from './harness'
+import { USER, addExpense, boot, businessDay, card, expense, fxRequests, openExpenseSettings, openScan, reload, scanFile, setFx } from './harness'
 
 /**
  * Expenses paid in another currency (migration 009): the main currency is
@@ -36,9 +36,7 @@ const counter = (page: Page, name: string) => page.evaluate((n) => Number(localS
 const money = async (page: Page) => (await server(page)).map((e) => [Number(e.amount), e.original_amount === null ? null : Number(e.original_amount), e.original_currency, e.fx_rate === null ? null : Number(e.fx_rate)])
 
 async function openSheet(page: Page) {
-  const fab = page.locator('.fab')
-  if (await fab.isVisible()) await fab.click()
-  else await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   await expect(sheet.locator('.exp-amount')).toBeVisible()
   return sheet
@@ -289,7 +287,7 @@ test('before 009: an expense waits as Update needed, said once, and the view nam
   await expect(banner).toHaveClass(/exp-migration-009/)
   await expect(banner).toContainText('supabase/migrations/009_expense_original_currency.sql')
   // 008 is there, so the budgets and the currency are not held back.
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   const settings = page.locator('.expense-settings-modal')
   await expect(settings.locator('.currency-select')).toBeEnabled()
   await expect(settings.locator('.budget-input').first()).toBeEnabled()
@@ -355,7 +353,7 @@ test('scan review: the picture’s currency is chosen at the top; in USD each ro
     ai: { rows: { kind: 'wallet', currency: null, expenses: [aiRow({ amount: 12, merchant: 'APPLE.COM/BILL', date: TODAY }), aiRow({ amount: 23.5, merchant: 'Uber', date: yesterday }), aiRow({ amount: -5, merchant: 'Refund Co', date: yesterday })] } }
   })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
-  await page.locator('.exp-scan-open').click()
+  await openScan(page)
   await page.setInputFiles('.exp-scan-input', scanFile)
   const rows = page.locator('.exp-review-row')
   await expect(rows).toHaveCount(3)
@@ -421,7 +419,7 @@ test('scan review without rates: rows say so and are left out of Add N until one
     ai: { rows: { kind: 'receipt', currency: 'USD', expenses: [aiRow({ amount: 12, merchant: 'Apple', date: TODAY }), aiRow({ amount: 20, merchant: 'Uber', date: yesterday })] } }
   })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
-  await page.locator('.exp-scan-open').click()
+  await openScan(page)
   await page.setInputFiles('.exp-scan-input', scanFile)
   const rows = page.locator('.exp-review-row')
   await expect(rows).toHaveCount(2)
@@ -523,7 +521,7 @@ test('on a 320px phone, in Spanish, the sheet and the review in another currency
   await expect(sheet).toHaveCount(0)
 
   // The review, in dollars, with a row open.
-  await page.locator('.exp-scan-open').click()
+  await openScan(page)
   await page.setInputFiles('.exp-scan-input', scanFile)
   const rows = page.locator('.exp-review-row')
   await expect(rows).toHaveCount(2)

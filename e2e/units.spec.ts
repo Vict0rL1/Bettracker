@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, menu, reload, USER } from './harness'
+import { addBet, boot, menu, reload, USER } from './harness'
 
 // The usual seed: +200 (no stake), −50 on 50, +30 on 60. At $20 a unit:
 // lifetime +$180 is +9.00u, and ROI is −$20 on $110 staked: −1.00u on 5.5u.
@@ -12,13 +12,14 @@ test.describe('units', () => {
     await expect(lifetime.locator('.life-value')).toHaveText('+9.00u')
     // Hovering the figure gives the exact dollars.
     await expect(lifetime.locator('.life-value')).toHaveAttribute('title', '+$180.00')
-    await expect(page.locator('.roi-card .stat-sub')).toContainText('-1.00u on 5.5u staked · 2 of 3 bets with a stake')
+    // The average stake (55 dollars) sits in the same line, in units too.
+    await expect(page.locator('.roi-card .stat-sub')).toContainText('-1.00u on 5.5u staked · avg 2.75u · 2 of 3 bets with a stake')
     // Newest first: the +$30 bet.
     await expect(page.locator('.history-card tbody tr').first().locator('.td-amt')).toHaveText('+1.50u')
     await expect(page.locator('.history-card tbody tr').first().locator('.td-stake:not(.td-odds)')).toHaveText('3u')
 
     // The stake box is still in dollars; the note under it says what that is in units.
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     await expect(sheet.locator('.amount-cur').first()).toHaveText('$')
     await sheet.locator('.field input').first().fill('30')

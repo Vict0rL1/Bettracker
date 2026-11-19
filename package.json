@@ -24,7 +24,8 @@
     "build:desktop": "npm run typecheck && electron-vite build && electron-builder",
     "build:desktop:dir": "electron-vite build && electron-builder --dir",
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false && tsc -p e2e/tsconfig.json",
-    "check:rates": "node scripts/check-rates.mjs"
+    "check:rates": "node scripts/check-rates.mjs",
+    "sync:function": "node -e \"require('node:fs').copyFileSync('src/shared/expenseExtraction.ts', 'supabase/functions/_shared/expenseExtraction.ts')\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7"

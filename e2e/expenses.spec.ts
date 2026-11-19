@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { budgetId } from '../src/renderer/src/lib/stableId'
-import { TINY_PNG, USER, bigPng, boot, budget, card, expense, menu, reload, scanFile } from './harness'
+import { TINY_PNG, USER, addExpense, bigPng, boot, budget, card, expense, menu, openExpenseSettings, openScan, reload, scanFile } from './harness'
 import { APP_URL } from './urls'
 
 /**
@@ -31,11 +31,9 @@ async function openExpenses(page: Page): Promise<void> {
   await page.waitForSelector('.exp-bar')
 }
 
-/** Add one expense through the sheet (the + button on a phone, Add expense on a computer). */
-async function addExpense(page: Page, o: { amount: string; category?: string; card?: string; merchant?: string; refund?: boolean }): Promise<void> {
-  const fab = page.locator('.fab')
-  if (await fab.isVisible()) await fab.click()
-  else await page.locator('.add-expense-btn').click()
+/** Log one expense through the sheet (the + button, on every screen size). */
+async function logExpense(page: Page, o: { amount: string; category?: string; card?: string; merchant?: string; refund?: boolean }): Promise<void> {
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   await sheet.locator('.exp-amount').fill(o.amount)
   if (o.refund) await sheet.locator('.exp-kind-refund').click()
@@ -46,7 +44,7 @@ async function addExpense(page: Page, o: { amount: string; category?: string; ca
   await expect(sheet).toHaveCount(0)
 }
 
-test('Bets is the default and Expenses is remembered; the top bar keeps two buttons; T and Add expense open the sheet; the tabs take the arrows; a device without expense caches can still restore', async ({ page }) => {
+test('Bets is the default and Expenses is remembered; the top bar keeps only the menu and the bar only the month; T and the + button open the sheet; the tabs take the arrows; a device without expense caches can still restore', async ({ page }) => {
   await boot(page, { moves: [], expenses: null, settings: {} })
 
   // The bets' restore waits only for the bets' data; the backup waits for the expenses too.
@@ -70,11 +68,18 @@ test('Bets is the default and Expenses is remembered; the top bar keeps two butt
   await expect(page.locator('#view-panel-expenses')).toBeVisible()
   await expect(page.locator('.history-card')).toHaveCount(0)
   const bar = page.locator('.topbar-actions')
-  await expect(bar.locator('button:visible')).toHaveCount(2)
-  await expect(bar.locator('.add-expense-btn')).toHaveText('Add expense')
+  await expect(bar.locator('button:visible')).toHaveCount(1)
+  await expect(page.locator('.add-expense-btn')).toHaveCount(0)
   await expect(page.locator('.add-bet-btn')).toHaveCount(0)
+  // The + button speaks for this view.
+  const fab = page.locator('.fab')
+  await expect(fab).toHaveAttribute('aria-label', 'Add expense')
+  await expect(fab).toHaveAttribute('title', 'Add an expense (T): type it, or scan a receipt.')
+  // The view's bar: the month, its currency and the arrows; no Scan receipt or Expense settings there any more.
+  await expect(page.locator('.exp-bar button')).toHaveCount(2)
+  await expect(page.locator('.exp-scan-open, .exp-manage-btn')).toHaveCount(0)
 
-  // T from the page (nothing focused): the expense sheet; Escape hands focus to Add expense.
+  // T from the page (nothing focused): the expense sheet; Escape hands focus to the + button.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('t')
   const sheet = page.locator('.expense-modal')
@@ -83,9 +88,11 @@ test('Bets is the default and Expenses is remembered; the top bar keeps two butt
   await expect(sheet.locator('.exp-amount')).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(sheet).toHaveCount(0)
-  await expect(page.locator('.add-expense-btn')).toBeFocused()
-  await page.locator('.add-expense-btn').click()
+  await expect(fab).toBeFocused()
+  await fab.click()
   await expect(sheet).toBeVisible()
+  // Scan receipt is first in the sheet.
+  await expect(sheet.locator('.exp-scan-btn')).toHaveText('Scan receipt')
   await page.keyboard.press('Escape')
   await expect(sheet).toHaveCount(0)
 
@@ -102,7 +109,7 @@ test('Bets is the default and Expenses is remembered; the top bar keeps two butt
   await page.waitForSelector('.history-card')
   // Back on the bets, the first-paint stagger doesn't play again.
   expect(await page.locator('.history-card').evaluate((el) => el.getAnimations().length)).toBe(0)
-  await expect(page.locator('.topbar-actions .add-bet-btn')).toHaveText('Add bet')
+  await expect(fab).toHaveAttribute('aria-label', 'Add bet')
   await page.keyboard.press('ArrowRight')
   await expect(expensesTab).toHaveAttribute('aria-selected', 'true')
   await expect(expensesTab).toBeFocused()
@@ -112,7 +119,9 @@ test('Bets is the default and Expenses is remembered; the top bar keeps two butt
   await menu(page, '.lang-btn')
   await expect(expensesTab).toHaveText('Gastos')
   await expect(betsTab).toHaveText('Apuestas')
-  await expect(page.locator('.add-expense-btn')).toHaveText('Añadir gasto')
+  await expect(fab).toHaveAttribute('aria-label', 'Añadir gasto')
+  // The language toggle keeps the menu open: Expense settings is in it, in Spanish.
+  await expect(page.locator('.app-menu .expense-settings-btn')).toHaveText('Ajustes de gastos')
 })
 
 test('add, edit and delete offline, each with Undo; kept in the outbox and across a reload; "4,50" is 4.50', async ({ page }) => {
@@ -120,7 +129,7 @@ test('add, edit and delete offline, each with Undo; kept in the outbox and acros
   const rows = page.locator('.exp-row')
 
   // The amount reads the way it was typed, before it is saved.
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   await sheet.locator('.exp-amount').fill('4,50')
   await expect(sheet.locator('.exp-amount-reads')).toHaveText('= $4.50')
@@ -141,7 +150,7 @@ test('add, edit and delete offline, each with Undo; kept in the outbox and acros
   await expect(rows).toHaveCount(0)
 
   // Again; the sheet remembers the card and category it last used.
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   await expect(sheet.locator('.cat-chip[data-cat="coffee"]')).toHaveAttribute('aria-pressed', 'true')
   await expect(sheet.locator('.exp-paycard-seg .scope-btn', { hasText: 'Visa A' })).toHaveAttribute('aria-pressed', 'true')
   await sheet.locator('.exp-amount').fill('4,50')
@@ -196,7 +205,7 @@ test('an add syncs and the badge says Synced; a refund lowers the month and show
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
   await expect(page.locator('.exp-first')).toHaveCount(0)
 
-  await addExpense(page, { amount: '2', refund: true, merchant: 'Devolución' })
+  await logExpense(page, { amount: '2', refund: true, merchant: 'Devolución' })
   await expect(page.locator('.spend-total')).toHaveText('$10.00')
   await expect(page.locator('.exp-amount.refund')).toHaveText(/-\$2\.00/)
   await expect(page.locator('.exp-amount.refund')).toHaveCSS('color', await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--green').trim()).then(hexToRgb))
@@ -205,7 +214,7 @@ test('an add syncs and the badge says Synced; a refund lowers the month and show
   // A write held on the wire while the user signs out.
   const started = await counter(page, 'writes-started')
   await page.evaluate(() => localStorage.setItem('e2e:hold', '1'))
-  await addExpense(page, { amount: '3' })
+  await logExpense(page, { amount: '3' })
   await expect.poll(() => counter(page, 'writes-started')).toBe(started + 1)
   await menu(page, '.btn-signout')
   await menu(page, '.btn-signout')
@@ -230,7 +239,7 @@ test('cards: add, rename, archive a used card, delete an unused one; never a har
   await boot(page, { backend: 'live', view: 'expenses', cards: [cardA], expenses: [expense({ id: '10000000-0000-4000-8000-000000000001', date: TODAY, amount: 7, cardId: CARD_A, merchant: 'Metro' })] })
   await expect.poll(async () => (await server(page, 'expense-cards')).length).toBe(1)
 
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   const settings = page.locator('.expense-settings-modal')
   await expect(settings.locator('.paycard-name-input')).toBeFocused()
   await settings.locator('.paycard-name-input').fill('Visa')
@@ -258,14 +267,14 @@ test('cards: add, rename, archive a used card, delete an unused one; never a har
   await settings.locator('.expset-done').click()
   await expect(settings).toHaveCount(0)
   await expect(page.locator('.exp-row .exp-col-card')).toHaveText('Visa A')
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const picker = page.locator('.expense-modal .exp-paycard-field')
   await expect(picker).toContainText('Visa Oro')
   await expect(picker).not.toContainText('Visa A')
   await page.keyboard.press('Escape')
 
   // An unused card is deleted for good.
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   const oro = settings.locator('.paycard-row', { hasText: 'Visa Oro' })
   await oro.locator('.paycard-delete').click()
   await oro.locator('.paycard-delete').click()
@@ -277,7 +286,7 @@ test('cards: add, rename, archive a used card, delete an unused one; never a har
   const other = await context.newPage()
   await other.addInitScript(() => localStorage.setItem('e2e:hold-reads', 'expenses'))
   await boot(other, { backend: 'live', view: 'expenses', cards: [cardB], expenses: null })
-  await other.locator('.exp-manage-btn').click()
+  await openExpenseSettings(other)
   const b = other.locator(`.expense-settings-modal .paycard-row[data-id="${CARD_B}"]`)
   await b.locator('.paycard-delete').click()
   await b.locator('.paycard-delete').click()
@@ -288,7 +297,7 @@ test('cards: add, rename, archive a used card, delete an unused one; never a har
 
 test('a card added from the sheet comes back chosen, with what was typed', async ({ page }) => {
   await boot(page, { view: 'expenses', cards: [], expenses: [], budgets: [], settings: {} })
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   await sheet.locator('.exp-amount').fill('4.50')
   await sheet.locator('.exp-merchant').fill('Kiosk')
@@ -328,7 +337,7 @@ test('budgets: total, per card and per category, near and over; untouched boxes 
   const writes = await counter(page, 'writes')
 
   // Opened and closed without typing: nothing written.
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   const settings = page.locator('.expense-settings-modal')
   const box = (scope: string, target = '') => settings.locator(`.budget-input[data-scope="${scope}"][data-target="${target}"]`)
   await expect(box('total')).toBeEnabled()
@@ -383,7 +392,7 @@ test('currency: amounts follow the new currency without conversion; a wide symbo
   await boot(page, { backend: 'live', view: 'expenses', expenses: [expense({ id: '10000000-0000-4000-8000-000000000001', date: TODAY, amount: 12.5, category: 'food' })] })
   await expect(page.locator('.spend-total')).toHaveText('$12.50')
 
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   const settings = page.locator('.expense-settings-modal')
   const select = settings.locator('.currency-select')
   await expect(select).toBeEnabled()
@@ -398,12 +407,12 @@ test('currency: amounts follow the new currency without conversion; a wide symbo
 
   // Peruvian soles: three letters before the digits (the main currency is written with its narrow symbol, which for
   // most pesos and dollars is "$"; soles have none in en-US, so their code stands in).
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   await select.selectOption('PEN')
   await expect.poll(() => page.evaluate(() => (JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { expense_currency?: string }).expense_currency)).toBe('PEN')
   await settings.locator('.expset-done').click()
   await expect(page.locator('.spend-total')).toHaveText(/^PEN\s12\.50$/)
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   await sheet.locator('.exp-amount').fill('12500')
   await expect(sheet.locator('.amount-cur')).toHaveText('PEN')
@@ -474,7 +483,7 @@ test('AI scan: matches the card by its last 4, unticks a duplicate, adds the res
   })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
 
-  await page.locator('.exp-scan-open').click()
+  await openScan(page)
   await page.setInputFiles('.exp-scan-input', await bigPng(page))
   const rows = page.locator('.exp-review-row')
   await expect(rows).toHaveCount(3)
@@ -537,7 +546,7 @@ test('AI failures say why, and typing the expense still works', async ({ page })
   const error = page.locator('.exp-scan-error')
   const retry = page.locator('.exp-scan-retry')
 
-  await page.locator('.exp-scan-open').click()
+  await openScan(page)
   await page.setInputFiles('.exp-scan-input', scanFile)
   await expect(error).toContainText('isn’t set up')
   await expect(retry).toBeFocused()
@@ -562,7 +571,6 @@ test('AI failures say why, and typing the expense still works', async ({ page })
   })
   await expect(sheet.locator('.exp-scan-btn')).toBeDisabled()
   await expect(sheet.locator('.exp-scan-off')).toHaveText('AI reading needs a connection. You can still type the expense.')
-  await expect(page.locator('.exp-scan-open')).toBeDisabled()
   await sheet.locator('.exp-amount').fill('6')
   await sheet.locator('.exp-save').click()
   await expect(sheet).toHaveCount(0)
@@ -574,7 +582,7 @@ test('AI failures say why, and typing the expense still works', async ({ page })
 test('cancelling while reading adds nothing, even when the answer comes later', async ({ page }) => {
   await boot(page, { backend: 'live', view: 'expenses', ai: { hold: true, ignoreAbort: true } })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
-  await page.locator('.exp-scan-open').click()
+  await openScan(page)
   await page.setInputFiles('.exp-scan-input', scanFile)
   await expect(page.locator('.exp-reading')).toBeVisible()
   await expect(page.locator('.exp-scan-cancel')).toBeFocused()
@@ -595,7 +603,7 @@ test('cancelling while reading adds nothing, even when the answer comes later', 
 test('text pasted into a box is typing, even with a picture of the copied cells; an image pasted anywhere else is read', async ({ page }) => {
   await boot(page, { backend: 'live', view: 'expenses', cards: [cardA], ai: { hold: true } })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   await expect(sheet.locator('.exp-amount')).toBeFocused()
 
@@ -638,7 +646,7 @@ test('before 008: only proof counts; expenses wait as Update needed, budgets and
   // No connection at first: nothing is known of 008 yet.
   await page.addInitScript(() => localStorage.setItem('e2e:down', '1'))
   await boot(page, { backend: 'behind-008', view: 'expenses', moves: [] })
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   const settings = page.locator('.expense-settings-modal')
   await expect(settings.locator('.expset-connect')).toHaveText('Connect once on this device to set budgets and the currency.')
   await expect(settings.locator('.currency-select')).toBeDisabled()
@@ -656,13 +664,13 @@ test('before 008: only proof counts; expenses wait as Update needed, budgets and
   await expect(page.locator('.toast')).toHaveCount(0)
 
   // An expense waits on this device, said once.
-  await addExpense(page, { amount: '4.50', category: 'coffee' })
+  await logExpense(page, { amount: '4.50', category: 'coffee' })
   await expect(page.locator('.sync-badge')).toHaveText('Update needed · 1 queued')
   await expect(page.locator('.exp-row')).toHaveCount(1)
   // Said once, for the three tables (expenses-sync.spec.ts: not again on a resume or a reconnect).
   await expect(page.locator('.toast')).toContainText('Your database is behind the app')
   await expect(page.locator('.toast')).toHaveCount(1)
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   await expect(settings.locator('.expset-needs008')).toBeVisible()
   await expect(settings.locator('.currency-select')).toBeDisabled()
   await expect(settings.locator('.budget-input').first()).toBeDisabled()
@@ -677,7 +685,7 @@ test('before 008: only proof counts; expenses wait as Update needed, budgets and
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
   await expect.poll(async () => (await server(page, 'expenses')).length).toBe(1)
   await expect(page.locator('.exp-migration')).toHaveCount(0)
-  await page.locator('.exp-manage-btn').click()
+  await openExpenseSettings(page)
   await expect(settings.locator('.currency-select')).toBeEnabled()
   await expect(settings.locator('.budget-input').first()).toBeEnabled()
   await expect(settings.locator('.expset-needs008')).toHaveCount(0)
@@ -705,7 +713,7 @@ test('on a 320px phone the review fits, in Spanish and in English', async ({ pag
   await expect(page.locator('.sync-badge')).toHaveText(/Sincronizado|Synced/)
 
   for (const lang of ['es', 'en'] as const) {
-    await page.locator('.exp-scan-open').click()
+    await openScan(page)
     await page.setInputFiles('.exp-scan-input', scanFile)
     const rows = page.locator('.exp-review-row')
     await expect(rows).toHaveCount(3)
@@ -798,7 +806,7 @@ test('each category has its glyph wherever it is named, for the eye only: the na
   for (const color of await all.evaluateAll((els) => els.map((el) => getComputedStyle(el).color))) expect(inks).toContain(color)
 
   // The sheet: the eleven categories, each chip with its own glyph and still named by its word alone.
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   const chips = sheet.locator('.cat-chip')
   await expect(chips).toHaveCount(11)
@@ -865,7 +873,7 @@ test('under Spent, the month against the one before it: day for day, in words an
   await page.waitForFunction(() => document.getAnimations().length === 0)
 
   // Less, once a refund this month brings it under: the arrow turns, the words say so.
-  await addExpense(page, { amount: '30', refund: true, merchant: 'Devolución' })
+  await logExpense(page, { amount: '30', refund: true, merchant: 'Devolución' })
   await expect(vs).toHaveText('18% less than at this point last month')
   await expect(vs).toHaveAttribute('data-direction', 'less')
 
@@ -901,7 +909,7 @@ test('a merchant typed before brings its last category and card, until the user 
     budgets: []
   })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   const sheet = page.locator('.expense-modal')
   const chip = (cat: string) => sheet.locator(`.cat-chip[data-cat="${cat}"]`)
   const cardBtn = (name: string) => sheet.locator('.exp-paycard-seg .scope-btn', { hasText: name })
@@ -954,7 +962,7 @@ test('a merchant typed before brings its last category and card, until the user 
   await expect.poll(async () => (await server(page, 'expenses')).find((r) => r.amount === 6.1)).toMatchObject({ merchant: 'Uber', category: 'entertainment', card_id: CARD_A })
 
   // What is saved is what the merchant brought when nothing was chosen.
-  await page.locator('.add-expense-btn').click()
+  await addExpense(page)
   await sheet.locator('.exp-amount').fill('4.75')
   await merchant.fill('Starbucks')
   await expect(brought).toHaveText('As last time: Coffee · Débito B')

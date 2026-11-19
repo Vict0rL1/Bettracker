@@ -23,18 +23,24 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
 
 - **Una pestaña Gastos** al lado de Apuestas, bajo la cabecera (un
   `tablist`; cada dispositivo recuerda la última en `bettracker:view`, nunca
-  en la URL). Solo se monta la vista activa. La cabecera sigue teniendo dos
-  botones: en Gastos el principal es **Añadir gasto**; `T` y el **+** del
-  móvil abren la hoja de gasto. Las flechas cambian el mes, compartido con el
-  calendario de apuestas.
+  en la URL). Solo se monta la vista activa. La cabecera solo tiene el
+  nombre, la sincronización y el menú ☰, donde están los **Ajustes de
+  gastos** (tarjetas, presupuestos y moneda, desde cualquiera de las dos
+  vistas); la barra de la vista, solo el mes, su moneda y las flechas. El
+  **+** de abajo a la derecha, en el ordenador como en el móvil, y `T` abren
+  la hoja de gasto, que empieza por **Escanear recibo**. Las flechas cambian
+  el mes, compartido con el calendario de apuestas.
 - **El mes**: gastado (los reembolsos restan) y cómo va frente al mes
   anterior, presupuesto restante, gasto
-  por tarjeta (las tres primeras y «+n más»), media diaria y a qué ritmo va el
-  mes; un gráfico que apila el gasto de cada tarjeta con tintas neutras
+  por tarjeta (las tres primeras y «+n más», que enseña todas), media diaria
+  de los días hasta hoy y a qué ritmo va el mes (ver «Pulido 2.0»); un
+  gráfico que apila el gasto de cada tarjeta con tintas neutras
   («Sin tarjeta», punteada) en dos vistas, acumulado contra la línea del
-  presupuesto o por día; barras de presupuestos; desglose por categoría (cada
-  fila filtra la lista); y la lista agrupada por día, tabla en escritorio y
-  tarjetas en el móvil, con búsqueda y filtros por tarjeta y categoría.
+  presupuesto o por día; barras de presupuestos; desglose por categoría; y la
+  lista agrupada por día, tabla en escritorio y tarjetas en el móvil, con
+  búsqueda y filtros por tarjeta y categoría. Cada línea que nombra una
+  tarjeta o una categoría enseña sus gastos al tocarla (ver «Tocar una
+  tarjeta o una categoría»).
 - **Un gasto**: fecha, importe, tarjeta (opcional), comercio, categoría (11
   fijas: café, comida y restaurantes, supermercado, transporte, compras, ocio,
   salud, casa y servicios, suscripciones, viajes, otros), nota y origen (a
@@ -62,8 +68,9 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
 - **Gastos en otra moneda**: un gasto se puede pagar en una moneda que no es
   la principal; la app guarda lo pagado y lo convierte (ver «Otras monedas y
   tasas de cambio» abajo).
-- **Escanear recibo**: una foto de un recibo o una captura de Apple Wallet
-  se lee con IA y se **revisa** antes de guardar nada (ver «IA» abajo).
+- **Escanear recibo** (lo primero de la hoja de gasto): una foto de un
+  recibo o una captura de Apple Wallet se lee con IA y se **revisa** antes de
+  guardar nada (ver «IA» abajo).
 - **CSV de gastos** desde la lista (todas las columnas, con las guardas de
   fórmula del CSV de apuestas; lo pagado en otra moneda, su código y la tasa
   van en tres columnas al final). El CSV de apuestas no cambia.
@@ -232,25 +239,110 @@ el código («USD 12.00», `codeAmount`): un `$` a secas siempre es la moneda
 principal. En la tabla va al lado del importe y en el móvil, bajo él; la tasa
 está en el `title` y en la hoja.
 
-**La revisión del escaneo.** La lectura trae un `currency` (código ISO o
-nulo); el contrato y la Edge Function no cambian. Arriba de la revisión hay
-un selector «Moneda de la imagen»: la de la lectura si es un código válido y,
-si no, la principal (Apple Wallet enseña un `$` a secas tanto para CAD como
-para USD, así que el usuario puede decir «esto son USD»). El aviso antiguo de
-«la moneda no coincide» desaparece: ahora es este flujo.
+**La revisión del escaneo.** Así quedó con la 009: la lectura traía un solo
+`currency` por imagen y arriba había un selector «Moneda de la imagen». Desde
+«La moneda de cada gasto» (abajo) cada fila tiene la suya y ese selector es
+«Moneda de todas las filas». El aviso antiguo de «la moneda no coincide»
+desaparece: ahora es este flujo.
 
-- Con una moneda distinta de la principal, cada fila es un gasto en otra
-  moneda: se pide la tasa de cada fecha distinta (la caché lo deja en pocas
-  llamadas), cada fila enseña lo leído y lo convertido, y al abrirla tiene
-  tasa e importe convertido como la hoja.
+- Una fila en una moneda distinta de la principal es un gasto en otra
+  moneda: se pide la tasa de cada moneda y fecha distintas (la caché lo deja
+  en pocas llamadas), cada fila enseña lo leído y lo convertido, y al abrirla
+  tiene tasa e importe convertido como la hoja.
 - Una fila sin tasa lo dice y **no entra en «Añadir N»** hasta tenerla; un
-  campo arriba, «Tasa para las filas sin tasa», las rellena. Si se añaden las
-  que sí la tienen, las demás se quedan en la revisión.
+  campo arriba por moneda, «Tasa para las filas sin tasa», rellena las de esa
+  moneda. Si se añaden las que sí la tienen, las demás se quedan en la
+  revisión.
 - **Duplicados**: misma moneda y mismo importe pagados, o mismo importe en la
   moneda principal (más las reglas de fecha, tarjeta y comercio de antes).
   Así la misma compra leída dos veces se reconoce aunque cada vez tocara una
-  tasa distinta. Se vuelven a mirar cuando cambia la moneda de la imagen o
+  tasa distinta. Se vuelven a mirar cuando cambia la moneda de una fila o
   llega una tasa.
+
+### La moneda de cada gasto (noviembre)
+
+Petición del dueño, tal cual: «que la IA pueda reconocer los gastos mejor,
+porque en algunas capturas gasta en USD pero la IA lo puso aún así como CAD y
+lo tuve que cambiar manualmente». Su moneda principal es CAD; algunas compras
+son en USD; escanea capturas de Apple Wallet y recibos. Antes la lectura daba
+una sola moneda por imagen (nula para un `$` a secas) y la revisión la
+aplicaba a todas las filas, así que una lista de Wallet con compras en CAD y
+en USD, o un recibo de EE. UU. con solo «$», acababa en CAD.
+
+**Lo que lee la IA** (`src/shared/expenseExtraction.ts`). Cada gasto trae:
+
+| Campo | Qué es |
+|---|---|
+| `currency` | código ISO 4217 de `amount`, o nulo |
+| `currencyBasis` | `"code"`: la imagen lo muestra para ese importe (un código, una palabra de moneda o un símbolo de una sola moneda: US$, C$, CA$, €, £, MX$); `"place"`: un `$` a secas que el lugar de la compra, tal como sale en la imagen, decide (dirección con estado de EE. UU. o provincia de Canadá, ZIP o código postal, «Sales tax» frente a GST/HST/PST/QST/TPS/TVQ, teléfono, dominio del país); `"none"`: nada lo decide, y `currency` es nulo |
+| `chargedAmount`, `chargedCurrency` | cuando la imagen enseña además lo que se cobró a la tarjeta en otra moneda por esa compra (Wallet: «USD 12.00» con «CA$16.95» debajo): ese importe, con el signo de `amount`, y su moneda; si no, los dos nulos. `amount` y `currency` siguen siendo lo pagado |
+
+El `currency` de arriba se queda por compatibilidad: es el que comparten
+todas las filas cuando coinciden, y si no, nulo (lo calcula el validador, no
+se fía de lo que diga el modelo). El prompt explica las reglas por
+transacción: primero las marcas explícitas; un `$` a secas solo por lo que
+muestra esta imagen; nunca suponer la moneda del usuario; una lista de
+Wallet puede mezclar monedas, así que no se arrastra la moneda de una fila a
+otra; nunca inventar ni calcular lo cobrado. Las líneas de seguridad de
+antes siguen (el texto de la imagen es contenido, no instrucciones; nada de
+números de tarjeta ni enlaces). En el esquema, `currencyBasis` va justo
+detrás de `amount` (la prueba antes que el código), y el `currency` de
+arriba detrás de la lista; todo objeto cerrado, todo requerido, los nulos con
+`anyOf` y sin límites numéricos ni de longitud (lo comprueba el test que
+recorre el esquema). El modelo, las betas, el respaldo y `output_config` de
+la función no cambian.
+
+**El validador** (`normalizeExtraction`): un código en mayúsculas con su
+base `code` o `place`, o nulo con `none` (una base sin código o un código sin
+base válida es `none`); lo cobrado necesita número y código, en una moneda
+distinta de la de la fila, se redondea al céntimo y lleva el signo de la
+fila. **Una respuesta de una función anterior** (ninguna fila trae
+`currency` ni `currencyBasis`) se lee como entonces: todas las filas en la
+moneda de la imagen, como leída (`code`), o sin moneda si la imagen no la
+tenía. **Una app anterior con la función nueva** también funciona: su
+validador arma cada fila campo a campo e ignora los cuatro nuevos, y usa el
+`currency` de arriba para todas, que solo existe cuando todas coinciden; si
+se mezclan, ve una imagen sin moneda y las pone en la principal, como hacía
+con un `$` a secas. Lo comprueba `expenseExtraction.compat.test.ts` contra
+una copia congelada del módulo tal como estaba
+(`src/shared/compat/expenseExtraction-2026-11-18.ts`, con su hash), que ni la
+app ni la función importan.
+
+**La revisión** (`lib/expenseReview.ts`, `ScanReview.tsx`). La moneda con
+que empieza cada fila (`rowCurrency`): la que la imagen muestra para ella
+(`code` o `place`); si no, la del último gasto guardado del mismo comercio
+(`merchantMemory`: el más reciente por fecha y alta con el mismo
+`normalizeMerchant`, su `originalCurrency` o la principal si no tenía); si
+no, la de la imagen; si no, la principal. Una fila en otra moneda es un
+gasto en otra moneda, con sus tasas por (moneda, fecha). Cuando lo cobrado
+está en la moneda principal, **eso es el importe convertido** (`chargedFx`:
+la tasa sale de `rateFrom`) y no se pide tasa; la fila dice «Según lo
+cobrado» y, abierta, «Lo que se cobró a la tarjeta, según la imagen». Como
+una tasa guardada, se queda tal cual mientras el importe es el leído; si se
+cambia el importe, sigue a esa tasa; lo que se escriba en la fila manda.
+
+- Cada fila enseña su moneda cuando no es la principal (lo leído con su
+  código bajo lo convertido) y, abierta, tiene un selector «Moneda del
+  pago». Cambiarla quita una tasa escrita para la otra moneda y conserva un
+  importe en la principal escrito a mano (salvo que la fila pase a la
+  principal).
+- **«Moneda de todas las filas»** (antes «Moneda de la imagen») pone todas
+  en una; mientras difieren dice «Varias».
+- **«Moneda supuesta: CAD»**, una nota discreta, en una fila cuya moneda no
+  se leyó ni se recordó, solo cuando importa: el usuario tiene gastos en
+  otra moneda, la imagen mezcla monedas o la fila trae lo cobrado en otra.
+  Una imagen toda en la principal de alguien que nunca paga en otra no dice
+  nada. Una fila que sale del comercio dice «USD, como la última vez en este
+  comercio».
+- Debajo del selector, la línea dice cómo se convierten las filas en otra
+  moneda o, si todas están en la principal, que la imagen no dice su moneda
+  (todas o algunas filas).
+
+**Desplegar.** Tras actualizar, volver a desplegar la función (el mismo
+`functions deploy`, sin tocar los secretos). Hasta entonces la función
+anterior sigue funcionando con la app nueva, con una moneda por imagen, y la
+memoria del comercio ya se aplica a las filas que esa lectura deja sin
+moneda.
 
 **Comprobación con el servicio de verdad.** Las pruebas nunca tocan la red:
 la suite e2e intercepta el host en `e2e/harness.ts` (opción `fx`: tasas fijas
@@ -379,6 +471,181 @@ decidir nada: migrar, cambiar la moneda, usar los presupuestos.
   build real (también los que se cargan a demanda) y comprueba que no llevan
   ni un comercio del ejemplo ni la semilla de sus ids.
 
+## Tocar una tarjeta o una categoría (noviembre)
+
+Petición del dueño, tal cual: «Quiero que en esta parte de expense, al
+presionar una tarjeta que me salga los gastos que usé con esta tarjeta y así
+con lo demás. […] Quiero que se mire todo limpio y minimalista». Sin
+migración y sin tocar la sincronización.
+
+- **Qué se toca**: cada tarjeta de «Por tarjeta» (también «Sin tarjeta»),
+  cada línea de presupuesto de una tarjeta o de una categoría y cada fila de
+  «Por categoría». La lista del mes pasa a enseñar **exactamente** eso:
+  `drillFilter` (`lib/spend.ts`) pone la tarjeta o la categoría y **quita**
+  la búsqueda y el filtro del otro tipo. Tocar otra vez la misma línea no
+  quita el filtro (antes, en el desglose, sí): sigue enseñando esos gastos.
+  La línea **«Total del mes»** de los presupuestos enseña el mes entero
+  (quita los filtros): cada línea enseña lo que cuenta. El «+n más» de «Por
+  tarjeta», la leyenda del gráfico y las demás cifras no cambian.
+- **La lista viene a la vista**: la tarjeta de la lista sube hasta arriba de
+  la ventana con un desplazamiento suave (al instante con «reducir
+  movimiento») y su título (`tabIndex=-1`) se lleva el foco, así que el
+  teclado y el lector de pantalla siguen ahí. Nada fijo tapa arriba; en el
+  iPhone la página corre bajo la barra de estado, así que el margen es
+  `12px + env(safe-area-inset-top)` (`scroll-margin-top`). Si la página es
+  demasiado corta para subirla del todo, llega hasta el final.
+- **El filtro se ve y se quita fácil**: sobre las filas, una línea discreta
+  con una ficha por tarjeta y por categoría («Promerica ×»: tocarla quita ese
+  filtro), cuántos gastos y cuánto suman en el mes («12 gastos · $561.63»,
+  `listSummary`, en céntimos) y **«Ver todo»**. Sale con cualquier filtro,
+  también con solo la búsqueda, y sustituye a «Quitar filtros», que estaba
+  junto a las casillas. Las casillas siguen diciendo lo mismo que la ficha.
+  El título lleva el resumen para el lector de pantalla («…, filtrados por
+  Promerica: 12 gastos, $561.63»). Al quitar una ficha el foco pasa a «Ver
+  todo», o al título si ya no queda filtro.
+- **Aspecto**: las líneas son las de antes. El nombre es un `<button>` sin
+  aspecto de botón, y su `::after` cubre la línea entera (`.drill-row` en
+  `index.css`): se toca en cualquier punto, mientras las cifras siguen siendo
+  texto y la barra de un presupuesto sigue siendo una barra de progreso para
+  el lector de pantalla. Un tono al pasar el ratón (solo con ratón), otro
+  algo más firme al pulsar (`--dur-press`, sin escala) y en la línea que la
+  lista enseña (`aria-current`), y el anillo neutro del foco alrededor de la
+  línea. Nombre accesible: «Ver los gastos de Promerica», «Ver los gastos
+  sin tarjeta», «Ver los gastos de Supermercado», «Total del mes: ver todos
+  los gastos». En el móvil cada tarjeta de «Por tarjeta» mide 44 px y las
+  fichas y «Ver todo» se tocan en 44 px. Sin color: el color es dinero.
+- **El gráfico**: un día que aún no ha llegado y no tiene nada no tiene
+  tooltip ni cursor, en las dos vistas (`chartDayHasTip`; un día pasado sin
+  gasto sigue diciendo $0.00, y un gasto fechado por adelantado tiene el
+  suyo en «Por día»). En «Acumulado» los días que faltan se añaden como días
+  vacíos (`wholeMonthPoints`), para que el puntero caiga en su día y no se
+  pegue al último real; el área sigue parando hoy. **La línea blanca** de la
+  captura del dueño era el cursor del tooltip: un `ComposedChart` de
+  Recharts siempre dibuja una línea como cursor, con su trazo por defecto
+  `#ccc`, y el `fill` que pedía la vista «Por día» no hacía nada. Ahora el
+  cursor lo dibuja la app: una franja tenue en el día (`--tint-2`) o una
+  línea fina (`--grid-strong`). **La columna que se desvanece** sobre la
+  barra más alta no era un artefacto: era el tramo de arriba de esa barra
+  apilada (la segunda tarjeta), que en la captura queda bajo la barra de
+  estado del iPhone, y el sistema la difumina igual que la etiqueta «$400».
+  De paso salió otro artefacto al tocar: Recharts mete cada capa del
+  gráfico en un `<g tabindex="-1">` y hace enfocable el dibujo (para sus
+  flechas), así que un toque o un clic enfocaba uno y el navegador le ponía
+  su anillo (un rectángulo alrededor de las barras o del gráfico). Ahora solo
+  el teclado deja anillo, el neutro de la app; vale también para el gráfico
+  de apuestas.
+
+## Pulido 2.0 (noviembre 2026)
+
+Del «master prompt» de BetTracker 2.0 del dueño (mejorar lo que hay sin
+rediseñar; menos es más; la exactitud financiera antes que la analítica
+decorativa; el panel de presupuestos sin presupuestos no puede ser un hueco)
+y de dos auditorías de solo lectura. Sin migración y sin tocar la
+sincronización. Lo que cambió en Gastos:
+
+### Cálculos
+
+- **Media diaria y proyección** (`pace` en `lib/spend.ts`). Antes la media
+  dividía el total del mes, con lo fechado después de hoy dentro: un alquiler
+  del 30 apuntado el día 2 triplicaba la media de dos días y la proyección lo
+  contaba quince veces. Ahora la media es el neto de las filas fechadas
+  **hasta hoy** (fecha local) entre el número de día de hoy, y la proyección
+  es esa media por los días del mes **más el neto de lo fechado después de
+  hoy** (ya está comprometido, vaya al ritmo que vaya). Ejemplo: el 2 de
+  noviembre, $40 el día 1 y $1.500 el día 30 → media $20.00, proyección
+  $2,100.00 (antes: media $770.00 y proyección $23,100.00). Un mes pasado: la
+  media sobre todos sus días, sin proyección (el mes ya es lo que fue). Un mes
+  futuro: nada. Todo en céntimos enteros. `pace` recibe las filas, no el
+  total, y el reductor «hasta el día n» (`netThroughDay`) es el mismo que usa
+  la comparación con el mes anterior. `Pace` trae además `counted`, el neto
+  del que sale la media, para el `title` de la ficha.
+- **Nada es cero antes de cargar.** Hasta que los gastos han cargado en el
+  dispositivo (o si está sin conexión y nunca cargaron) la franja enseñaba
+  $0.00 como si fuera real. Ahora lo gastado, el presupuesto restante y la
+  media son «—», igual que «Por tarjeta», el panel de presupuestos y las
+  categorías. El porqué se dice una vez en la franja (bajo el total), en el
+  hueco del gráfico y en la lista («Cargando tus gastos…» o «Tus gastos se
+  cargan cuando este dispositivo tenga conexión», la frase que ya usaba la
+  lista), no en cada ficha: siete veces la misma frase era ruido. Un cero
+  solo aparece cuando es un cero de verdad.
+- **Las categorías suman 100 %.** El denominador de «Por categoría» era lo
+  gastado en positivo (`month.spent`), así que con un reembolso parcial las
+  cuotas no sumaban 100. Ahora es la suma de los netos positivos de las
+  categorías: comida 30, compras 100 y −20 → comida 27 %, compras 73 %. Una
+  categoría que solo devolvió dinero es 0 %.
+- **El presupuesto de una tarjeta archivada** no se lista (`budgetLines`):
+  la tarjeta ya no está en el editor. Vuelve si se restaura la tarjeta.
+- **Importes compactos**: `lib/currency.ts` añade el tramo M («$1.5M») a
+  `compact` y `axis`, para pesos y ejes que lleguen al millón.
+
+### Interfaz
+
+- **Presupuestos**: cada línea son dos renglones, el nombre y «$338.81 de
+  $400.00 · Quedan $61.19» (o «· $12.00 de más»), con la barra debajo; el
+  ámbar y el rojo de la barra y de las palabras siguen, y el nivel se dice
+  siempre con palabras (también para el lector de pantalla). Sin
+  presupuestos, una sola línea («Sin presupuesto») y el botón fantasma de la
+  cabecera dice «Ponerlo» (abre los Ajustes de gastos en los presupuestos);
+  la tarjeta mide lo que su línea (`align-self: start`), no lo que el
+  gráfico de al lado. Cargando, la línea de carga.
+- **La media diaria dice cómo se hace**: «19 días · a este ritmo, $1,685.40»
+  en el mes en curso y «En 31 días» en un mes pasado; el `title` lleva la
+  cifra de la que sale («Hasta el 19 nov 2026: $1,061.80»), como la línea
+  del mes anterior. La proyección vive solo en esa línea: lo gastado es
+  siempre lo gastado.
+- **«+n más»** de «Por tarjeta» es un botón: enseña todas las tarjetas, de
+  mayor a menor (44 px en el móvil).
+- **Teléfono (≤ 640 px)**: la franja va en dos columnas: lo gastado a lo
+  ancho, Presupuesto restante y Media diaria lado a lado, Por tarjeta a lo
+  ancho. Solo CSS (`order`); el DOM y el teclado no cambian. A 320 y 390 px
+  nada desborda y las cifras caben en una línea (20 px en las dos mitades).
+- **Las cuatro cifras comparten línea base**: cada valor va bajo su
+  etiqueta y la línea de abajo se empuja al fondo (`margin-top: auto`).
+- **Gráfico**: el acumulado se dibuja con segmentos rectos (`linear`, no
+  `monotone`): la curva se doblaba antes del día del gasto y parecía dinero
+  gastado la víspera. Las barras por día no cambian. Margen derecho de 24 px
+  para que la última fecha del eje no se corte.
+- **Mes vacío** que no es el primer uso: «Por categoría» es una línea, no un
+  hueco de 160 px; los presupuestos, como arriba; el gráfico conserva su
+  estado vacío (da la altura de la fila).
+
+### Código
+
+- `cardInk(cards)` en `lib/spend.ts` es la única fuente de la tinta de cada
+  tarjeta (gráfico, leyenda y «Por tarjeta»); desaparece
+  `components/expenses/inks.ts`.
+- `monthOrder(ym, hoy)` en `lib/dates.ts`: mes en curso 0, pasado < 0,
+  futuro > 0; lo usan `pace`, `vsLastMonth` y `spendChartData`.
+- `cardBudget(budgets, cardId)`: la búsqueda del presupuesto de una tarjeta
+  (sin distinguir mayúsculas en el id), en `budgetLines`, el editor y
+  `App.tsx` al borrar una tarjeta.
+- `cardLines(month, cards)` y `TOP_CARDS`: la selección de líneas de «Por
+  tarjeta» (las tarjetas activas más las claves que movieron dinero, de
+  mayor a menor), probada aparte.
+- `levelClass(level)`: la clase de la barra (`over` / `near` / `ink`),
+  compartida por la franja y el panel.
+- `App.tsx` calcula `monthSpend` una vez (`useMemo`) y se lo pasa a la vista
+  y a los Ajustes de gastos, que antes lo recalculaban en cada render.
+
+### Pruebas
+
+- Unitarias: `spend.test.ts` (`pace` con filas: el 2 de noviembre, un
+  reembolso fechado por delante, un mes pasado, uno futuro, céntimos;
+  `monthOrder`; `categoryShares` con el reembolso parcial; `budgetLines` con
+  la tarjeta archivada; `cardBudget`, `cardLines`, `cardInk`, `levelClass`) y
+  `currency.test.ts` (el tramo M). **Expectativas que cambiaron**: `pace`
+  recibe filas en vez del total, y las dos cuotas de `categoryShares` son de
+  50 (los netos positivos), no de 55 (lo gastado).
+- e2e: `e2e/expenses-summary.spec.ts` (8): la media y la proyección en el mes
+  en curso, en uno pasado y en uno futuro, en en y es, con la cifra del
+  `title`; sin conexión sin haber cargado (ni un «$» en la vista); la primera
+  carga («—», la frase una vez en la franja, y la tarjeta de primeros pasos
+  al terminar vacía);
+  «+n más» en el ordenador y a 390 px en español; sin presupuestos y
+  «Ponerlo», luego las dos líneas de un presupuesto cerca y pasado; la franja
+  en dos columnas a 390 y 320 px, sin nada de lado y cada cifra en su línea.
+  Ninguna e2e anterior cambió.
+
 ## Sincronización
 
 Una capa genérica para tablas sencillas de un usuario, en vez de copiar
@@ -441,8 +708,8 @@ conexión no se sabe nada.
 
 ## IA
 
-**Flujo.** En la hoja de gasto (o con «Escanear recibo» en la barra de la
-vista) se elige, pega o suelta una imagen. El cliente la decodifica
+**Flujo.** En la hoja de gasto (el **+**), con su «Escanear recibo», se
+elige, pega o suelta una imagen. El cliente la decodifica
 (`createImageBitmap`; HEIC solo donde el navegador sepa), la reduce a 1600 px
 en el lado largo y la vuelve a codificar como JPEG (≤ ~1,5 MB en base64; eso
 quita la ubicación y los datos de la cámara). Llama a la Edge Function
@@ -452,8 +719,9 @@ tarjeta se reconoce en el cliente por los 4 últimos dígitos o el nombre que
 la imagen muestra (`lib/cardMatch.ts`); una fila que parece un gasto ya
 guardado (misma fecha, importe y tarjeta, comercio parecido) sale
 desmarcada junto a ese gasto; las filas dudosas o sin fecha salen abiertas;
-la moneda de la imagen se elige arriba, y si no es la principal cada fila se
-convierte (ver «Otras monedas y tasas de cambio»). «Añadir N gastos» encola
+cada fila tiene su moneda, la que la imagen muestra para ella o la que se
+supone, y si no es la principal se convierte (ver «La moneda de cada
+gasto»). «Añadir N gastos» encola
 N altas normales, con Deshacer. La imagen no se guarda en ningún sitio: ni en
 el almacenamiento, ni en borradores, ni en la copia, ni en el servidor.
 
@@ -501,10 +769,11 @@ ejemplo y la nota lo dice.
 
 **Coste** (Opus 5.5: 4 $ / 20 $ por millón de tokens de entrada / salida):
 una imagen de 1600×1200 son unos 2.600 tokens (ancho × alto / 750; una
-captura de Wallet de 739×1600, unos 1.600) más ~1.500 de instrucciones, unos
-0,017 $; la salida con el razonamiento a esfuerzo medio, 1.000 a 4.000
-tokens, 0,02 a 0,08 $. En total, **unos 3 a 10 céntimos de dólar por
-escaneo**. Si Claude rechaza una imagen y responde el modelo de respaldo, ese
+captura de Wallet de 739×1600, unos 1.600) más ~2.000 de instrucciones y
+esquema (eran ~1.500 antes de la moneda de cada gasto), unos 0,018 $; la
+salida con el razonamiento a esfuerzo medio, 1.000 a 5.000 tokens (cada fila
+lleva también su moneda), 0,02 a 0,10 $. En total, **unos 3 a 12 céntimos de
+dólar por escaneo**. Si Claude rechaza una imagen y responde el modelo de respaldo, ese
 intento se cobra a su precio (queda en el registro como `fallback: true`). No
 se usa caché de prompt: solo compensa con varios escaneos en 5 minutos; medir
 antes de activarla.
@@ -600,7 +869,21 @@ reabrieron; las que más pesan:
   `demo` (`demoHasData`) y `sample` (las filas del ejemplo pasan por
   `normalizeInput`, `normalizeExpense`, `normalizeCard` y `normalizeBudget`
   sin cambiar; ids únicos; nada en el futuro; presupuestos cerca y pasado
-  los 400 días que recorre).
+  los 400 días que recorre). Con la moneda de cada gasto:
+  `expenseExtraction` (el esquema: los nulos con `anyOf`, nunca una lista de
+  tipos, la base como enum, el orden de los campos; el prompt nombra cada
+  campo y dice sus reglas; el validador fila a fila, lo cobrado, la moneda
+  de arriba, una respuesta de una función anterior y que leer dos veces da
+  lo mismo), `expenseExtraction.compat` (la app anterior con la función
+  nueva), `expenseFx` (`chargedFx`, lo cobrado en `fxView`) y
+  `expenseReview` (`merchantMemory`, `rowCurrency`, filas con lo cobrado,
+  tasas por moneda y fecha, «Moneda supuesta» solo donde importa, cambiar la
+  moneda de una fila o de todas). Con «Tocar una tarjeta o una categoría»:
+  `spend` (`drillFilter`, `listSummary`, `wholeMonthPoints`,
+  `chartDayHasTip` y la línea que enseña cada presupuesto). Con el pulido
+  2.0: `spend` (`pace` con filas, `monthOrder`, `categoryShares` que suma
+  100 %, `budgetLines` sin tarjetas archivadas, `cardBudget`, `cardLines`,
+  `cardInk`, `levelClass`) y `currency` (el tramo M).
 - **SQL**: `checks.sql` secciones 11 (008) y 12 (009) en las variantes A, B y
   C de `run.sh`, que además prueba `check_migrations.sql` tras cada
   migración.
@@ -630,10 +913,27 @@ reabrieron; las que más pesan:
   el usuario elige y la edición, que no cambia) y cuatro en `demo.spec.ts`
   (cargar el ejemplo en una demo vacía y volver a la misma vista, con sus
   presupuestos, sus USD y sus apuestas; preguntar antes si hay datos; en
-  español; y que los scripts del build real no llevan el ejemplo).
+  español; y que los scripts del build real no llevan el ejemplo). Con la
+  moneda de cada gasto, `expenses-currency.spec.ts` (5: una lista de Wallet
+  con filas en CAD y en USD, solo las USD convertidas y pedidas; un `$` a
+  secas en un comercio pagado antes en USD, y otro sin historial marcado
+  «Moneda supuesta» en tinta neutra; lo cobrado en CAD como importe, sin
+  pedir ninguna tasa; cambiar la moneda de una fila; «Moneda de todas las
+  filas» a EUR y de vuelta a CAD). Las pruebas de escaneo de antes no
+  cambian: la lectura de mentira contesta como una función anterior (sin
+  moneda por fila), así que también prueban esa compatibilidad. Con «Tocar
+  una tarjeta o una categoría», `expenses-drill.spec.ts` (5: cada tipo de
+  línea enseña solo sus gastos, con la ficha, las casillas y el resumen de
+  acuerdo, la lista arriba y el foco en su título, y «Ver todo» y la × lo
+  deshacen; Intro y Espacio, y al instante con «reducir movimiento»; en
+  español a 390 px con 44 px para el dedo; y el gráfico, con la fecha fija,
+  sin tooltip ni cursor en un día que no ha llegado, con el ratón y con el
+  dedo, sin anillo tras un toque y con el del teclado). Con el pulido 2.0,
+  `expenses-summary.spec.ts` (8; ver «Pulido 2.0»).
 - **La función**: `deno check` (Deno 2.9.6) pasó en la etapa 2 contra los
-  tipos reales del SDK y de supabase-js. Nunca se ha llamado a Anthropic ni a
-  un proyecto de Supabase real.
+  tipos reales del SDK y de supabase-js, y otra vez con la moneda de cada
+  gasto. Nunca se ha llamado a Anthropic ni a un proyecto de Supabase real:
+  el prompt nuevo solo está comprobado por los tests y leyéndolo.
 
 ## Despliegue
 
@@ -642,10 +942,11 @@ hay que hacer a mano». Orden: (1) la 008 y la 009 en el editor SQL, después de
 (2) la función y sus secretos con la CLI (`npx supabase@3.2.0`, desde la
 raíz del repositorio, con `--env-file` y `--no-verify-jwt`;
 `supabase/config.toml` guarda `verify_jwt = false`); (3) la app. En otro
-orden no se pierde nada. Si una versión de la CLI no acepta el import de
-fuera de `supabase/`, copiar el módulo a
-`supabase/functions/_shared/expenseExtraction.ts`, cambiar ese import y
-añadir un test que compare los dos archivos.
+orden no se pierde nada. La función importa su propia copia del módulo
+compartido, `supabase/functions/_shared/expenseExtraction.ts`, para que todo
+lo que se despliega esté bajo `supabase/functions`: es idéntica byte a byte a
+`src/shared/expenseExtraction.ts`, la escribe `npm run sync:function` y un
+test falla mientras difieran.
 
 ## Pendiente
 

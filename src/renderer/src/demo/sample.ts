@@ -5,9 +5,10 @@ import { budgetId, stableUuid } from '../lib/stableId'
 import { DEMO_PREFIX, DEMO_USER, resetDemo } from './demo'
 
 /**
- * Sample data for the demo: two months of a made-up person's bets and
- * everyday expenses, so the app can be looked at full before any real data
- * goes into it. Demo only: nothing here is in the real app's bundle.
+ * Sample data for the demo: two months of a made-up person's bets (and a few
+ * casino plays) and everyday expenses, so the app can be looked at full
+ * before any real data goes into it. Demo only: nothing here is in the real
+ * app's bundle.
  *
  * It is the same every time. The bets are drawn from a seeded generator and
  * the expenses from two written months (this one and the last), and only the
@@ -94,6 +95,22 @@ const SETTLED_BETS = 56
 const BET_DAYS = 58
 /** Still open: three placed today and one yesterday. */
 const PENDING_DAYS_AGO = [1, 0, 0, 0] as const
+
+/**
+ * A few casino plays at Stake (lib/casino.ts): the game, what each won or
+ * lost, net, and what was wagered when it was typed. They net to exactly
+ * nothing, so the bankroll the sample shows is the sports bets' alone, and
+ * none is from today or yesterday, so the bet logged last is a sports one and
+ * the quick add opens on Sports.
+ */
+const CASINO_PLAYS: readonly { daysAgo: number; game: string; amount: number; wagered: number | null }[] = [
+  { daysAgo: 13, game: 'Limbo', amount: 38, wagered: 20 },
+  { daysAgo: 11, game: 'Dice', amount: -15, wagered: null },
+  { daysAgo: 9, game: 'Mines', amount: -25, wagered: 25 },
+  { daysAgo: 6, game: 'Plinko', amount: 12.5, wagered: null },
+  { daysAgo: 4, game: 'Limbo', amount: -20, wagered: 40 },
+  { daysAgo: 2, game: 'Blackjack', amount: 9.5, wagered: 50 }
+]
 
 // ---- expenses ----
 
@@ -265,6 +282,27 @@ export function sampleData(now: Date, o: SampleOptions): SampleData {
       created_at: stamp,
       updated_at: stamp
     }
+  })
+  // The casino plays: a bet with sport Casino, the game as its type, no odds.
+  CASINO_PLAYS.forEach((play, i) => {
+    const date = addDays(today, -play.daysAgo)
+    const stamp = at(date, 21 * 60 + i * 13)
+    bets.push({
+      id: id(`casino|${i}`),
+      user_id,
+      date,
+      amount: play.amount,
+      stake: play.wagered,
+      odds: null,
+      closing_odds: null,
+      status: play.amount > 0 ? 'won' : 'lost',
+      note: '',
+      sport: 'Casino',
+      book: 'Stake',
+      bet_type: play.game,
+      created_at: stamp,
+      updated_at: stamp
+    })
   })
 
   // ---- the bankroll ----

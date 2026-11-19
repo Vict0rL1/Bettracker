@@ -82,7 +82,7 @@ import { planImport } from './lib/importPlan'
 import { newId } from './lib/uuid'
 import { downloadBackup, makeBackup, planRestore, settingsChange } from './lib/backup'
 import { useSettings, type SettingsOutcomeEvent } from './data/useSettings'
-import { bankrollNow, firstBetDate } from './lib/bankroll'
+import { bankrollNow } from './lib/bankroll'
 import { retagPlan, settlePlan, toInput, type TagPatch } from './lib/bulk'
 import { downloadCsv } from './lib/csv'
 import { moneyFormat } from './lib/format'
@@ -101,7 +101,7 @@ import { currencyFormat } from './lib/currency'
 import { downloadExpensesCsv } from './lib/expenseCsv'
 import { cardDeleteMode, type ExpenseDraft } from './lib/expenseForm'
 import type { PreparedImage } from './lib/scanImageDom'
-import { monthSpend } from './lib/spend'
+import { cardBudget, monthSpend } from './lib/spend'
 import { budgetId } from './lib/stableId'
 import { loadView, saveView, type AppView } from './lib/view'
 
@@ -111,8 +111,8 @@ const ExpensesView = lazy(() => import('./components/expenses/ExpensesView'))
 const ExpenseSheet = lazy(() => import('./components/expenses/ExpenseSheet'))
 const ExpenseSettings = lazy(() => import('./components/expenses/ExpenseSettings'))
 
-/** The expense sheet: adding (by hand, or starting with a scan; a draft handed back from Expense settings), or editing one. */
-type ExpenseSheetState = { kind: 'add'; scan?: boolean; draft?: ExpenseDraft; preferCardId?: string } | { kind: 'edit'; id: string }
+/** The expense sheet: adding (by hand or with its Scan receipt; a draft handed back from Expense settings), or editing one. */
+type ExpenseSheetState = { kind: 'add'; draft?: ExpenseDraft; preferCardId?: string } | { kind: 'edit'; id: string }
 
 const kindOf = (amount: number): 'deposit' | 'withdrawal' => (amount > 0 ? 'deposit' : 'withdrawal')
 
@@ -299,6 +299,8 @@ export default function App() {
   const money = useMemo(() => moneyFormat(unit), [unit])
   // The expenses have their own currency (never units, never the bets' dollars): their subtree gets this instead.
   const expenseMoney = useMemo(() => currencyFormat(settings.expenseCurrency), [settings.expenseCurrency])
+  // What the shown month spent, once: the Expenses view and Expense settings read the same figures.
+  const expenseMonth = useMemo(() => monthSpend(expenses.rows, ym, cards.rows), [expenses.rows, ym, cards.rows])
 
   // The bankroll is a balance over every bet, whatever the range. Until both
   // the settings (for the starting bankroll) and the deposits and withdrawals
@@ -376,8 +378,8 @@ export default function App() {
     setLossDismissed(lossKey)
   }, [lossKey])
 
+  // The + button and `T`: scanning a receipt starts from there too, with the sheet's own Scan receipt.
   const openExpense = useCallback(() => setExpenseSheet({ kind: 'add' }), [])
-  const openScan = useCallback(() => setExpenseSheet({ kind: 'add', scan: true }), [])
   // Every dialog, bets' and expenses': the keys and the + button stand aside while one is open (dialogs never stack).
   const anyDialogOpen = day !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen || dataOpen || expenseSheet !== null || expenseSettings !== null
 
@@ -541,8 +543,10 @@ export default function App() {
   // the user can type it.
   const handleSettle = useCallback(
     async (bet: Bet, next: BetStatus, amount: number | null) => {
-      if (next === 'won' && (amount === null || amount === 0)) {
-        setDay({ date: bet.date, edit: { id: bet.id, as: 'won' } })
+      // A result that can't be worked out is typed in the bet's form: a win
+      // without odds, a loss without a stake (a casino play may have none).
+      if ((next === 'won' && (amount === null || amount === 0)) || (next === 'lost' && amount === null)) {
+        setDay({ date: bet.date, edit: { id: bet.id, as: next } })
         return
       }
       try {
@@ -664,7 +668,7 @@ export default function App() {
       try {
         const mode = cardDeleteMode(card, expenses.rows, { loaded: expenses.loaded, readThisSession: expenses.tableReady })
         // Its budget goes with it, and comes back with an Undo.
-        const budget = budgets.rows.find((b) => b.scope === 'card' && b.target.toLowerCase() === card.id.toLowerCase()) ?? null
+        const budget = cardBudget(budgets.rows, card.id)
         if (budget) {
           budgetSeen.current.set(budget.id, budget.updatedAt)
           await budgets.remove(budget.id)
@@ -792,7 +796,7 @@ export default function App() {
   // What the Bankroll dialog's changes wait for, judged per queue: a
   // migration for the queue it holds back, the connection for the rest. A
   // change simply on its way says nothing.
-  const firstBet = useMemo(() => firstBetDate(bets ?? []), [bets])
+  const firstBet = bankroll.firstBetDate
   const movesWaiting = moves.queuedCount > 0
   const bankrollSyncNote =
     (movesWaiting && moves.blocked) || (settingsDirty && settingsBlocked)
@@ -1335,12 +1339,25 @@ export default function App() {
           }}
           onToggleTheme={toggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
+          onOpenExpenseSettings={() => setExpenseSettings('cards')}
           onOpenPending={() => setPendingOpen(true)}
-          view={view}
-          onAddBet={openQuick}
-          onAddExpense={openExpense}
           onSignOut={signOut}
         />
+
+        {/* The one add button, on every screen: the open view's sheet (quick add, or an expense, whose sheet also
+            scans). Fixed at the bottom right; here in the DOM so the keyboard meets it right after the menu button,
+            where the header's Add bet was. Out of the way while a dialog is open: it would open another on top. */}
+        {!anyDialogOpen && (
+          <button
+            type="button"
+            className="fab"
+            aria-label={t(view === 'bets' ? 'header.addBet' : 'header.addExpense')}
+            title={t(view === 'bets' ? 'header.addBetTitle' : 'header.addExpenseTitle')}
+            onClick={view === 'bets' ? openQuick : openExpense}
+          >
+            <PlusIcon size={22} />
+          </button>
+        )}
 
         <ViewTabs view={view} onChange={changeView} />
 
@@ -1390,6 +1407,7 @@ export default function App() {
             <KeyStats
               lifetime={scoped}
               rangeName={rangeName}
+              hasBets={shownBets.length > 0}
               bankroll={bankroll}
               offline={isOffline}
               open={openList}
@@ -1455,6 +1473,7 @@ export default function App() {
                 onNextMonth={() => setYm((m) => addMonths(m, 1))}
                 onThisMonth={() => setYm(currentMonth())}
                 expenses={expenses.rows}
+                month={expenseMonth}
                 cards={cards.rows}
                 budgets={budgets.rows}
                 expensesLoaded={expenses.loaded}
@@ -1465,9 +1484,7 @@ export default function App() {
                 needs008={needs008}
                 needs009={needs009}
                 currency={settings.expenseCurrency}
-                scanBlocked={scanBlocked}
                 onAdd={openExpense}
-                onScan={openScan}
                 onEdit={(e) => setExpenseSheet({ kind: 'edit', id: e.id })}
                 onDelete={(e) => void handleDeleteExpense(e)}
                 onManage={setExpenseSettings}
@@ -1601,8 +1618,8 @@ export default function App() {
             open={openList}
             oddsFormat={settings.oddsFormat}
             onSettle={(bet, next, amount) => {
-              // A win whose profit can't be worked out opens the bet to type it; get out of its way.
-              if (next === 'won' && (amount === null || amount === 0)) setPendingOpen(false)
+              // A result that can't be worked out (a win's profit, a loss without a stake) opens the bet to type it; get out of its way.
+              if ((next === 'won' && (amount === null || amount === 0)) || (next === 'lost' && amount === null)) setPendingOpen(false)
               handleSettle(bet, next, amount)
             }}
             onEdit={(bet) => {
@@ -1618,9 +1635,8 @@ export default function App() {
             <Suspense fallback={null}>
               <ExpenseSheet
                 // A new sheet for each thing it opens on: fresh boxes, fresh stage.
-                key={expenseSheet.kind === 'edit' ? `edit|${expenseSheet.id}` : `add|${expenseSheet.scan ? 'scan' : ''}`}
+                key={expenseSheet.kind === 'edit' ? `edit|${expenseSheet.id}` : 'add'}
                 editing={editingExpense}
-                startWithScan={expenseSheet.kind === 'add' && expenseSheet.scan === true}
                 draft={expenseSheet.kind === 'add' ? (expenseSheet.draft ?? null) : null}
                 preferCardId={expenseSheet.kind === 'add' ? (expenseSheet.preferCardId ?? null) : null}
                 cards={cards.rows}
@@ -1654,7 +1670,7 @@ export default function App() {
                 cards={cards.rows}
                 budgets={budgets.rows}
                 expenses={expenses.rows}
-                month={monthSpend(expenses.rows, ym, cards.rows)}
+                month={expenseMonth}
                 ym={ym}
                 cardsLoaded={cards.loaded}
                 budgetsLoaded={budgets.loaded}
@@ -1672,19 +1688,6 @@ export default function App() {
               />
             </Suspense>
           </MoneyContext.Provider>
-        )}
-
-        {/* Out of the way while a dialog is open: it sits above them, and would open another on top. */}
-        {!anyDialogOpen && (
-          <button
-            type="button"
-            className="fab"
-            aria-label={t(view === 'bets' ? 'header.addBet' : 'header.addExpense')}
-            title={t(view === 'bets' ? 'header.addBetTitle' : 'header.addExpenseTitle')}
-            onClick={view === 'bets' ? openQuick : openExpense}
-          >
-            <PlusIcon size={22} />
-          </button>
         )}
 
         {/* The live region is always there, so each message put into it is

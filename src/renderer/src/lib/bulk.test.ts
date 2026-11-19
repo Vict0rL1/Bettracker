@@ -71,6 +71,17 @@ describe('settlePlan', () => {
   })
 })
 
+describe('settlePlan and casino plays', () => {
+  it('leaves a loss whose cost can’t be worked out (no stake, as a casino play may have) to settle one by one', () => {
+    const noStake = bet({ id: 'c1', status: 'pending', sport: 'Casino', betType: 'Dice' })
+    const wagered = bet({ id: 'c2', status: 'pending', stake: 10, sport: 'Casino', betType: 'Dice' })
+    const plan = settlePlan([noStake, wagered], 'lost')
+    expect(plan.next.map((c) => [c.id, c.input.amount])).toEqual([['c2', -10]])
+    expect(plan.skipped).toBe(1)
+    for (const c of plan.next) expect(() => normalizeInput(c.input)).not.toThrow()
+  })
+})
+
 describe('settlePlan and free bets', () => {
   it('leaves a free bet’s win alone (its profit can’t be worked out) and settles its loss at $0', () => {
     const free = bet({ status: 'pending', stake: 0, odds: 2 })
