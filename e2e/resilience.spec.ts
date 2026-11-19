@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { boot, entry, importCsv, install, menu, move, reload, USER, type SeedEntry } from './harness'
+import { addBet, boot, entry, importCsv, install, menu, move, reload, USER, type SeedEntry } from './harness'
 import { DEV_URL } from './urls'
 
 // The sync engine where real servers and real devices misbehave: several
@@ -27,7 +27,7 @@ async function secondWindow(context: BrowserContext): Promise<Page> {
 }
 
 async function logLoss(page: Page, stake: string): Promise<void> {
-  await page.click('.add-bet-btn')
+  await addBet(page)
   const sheet = page.locator('.quick-modal')
   await sheet.locator('.field input').first().fill(stake)
   await sheet.locator('.seg-btn.loss').click()

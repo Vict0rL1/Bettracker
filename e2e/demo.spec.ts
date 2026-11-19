@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
-import { forbidRates, menu, scanFile } from './harness'
+import { addBet, forbidRates, menu, openScan, scanFile } from './harness'
 
 // `npm run demo` as built (see playwright.config.ts): no Supabase anywhere and
 // no harness, only the demo's own fake backend in the browser.
@@ -16,7 +16,7 @@ const storedExpenses = (page: Page): Promise<number> =>
   page.evaluate(() => (JSON.parse(localStorage.getItem('demo:expenses') ?? '[]') as unknown[]).length)
 
 async function addLoss(page: Page, stake: string): Promise<void> {
-  await page.click('.add-bet-btn')
+  await addBet(page)
   const sheet = page.locator('.quick-modal')
   await sheet.locator('.field input').first().fill(stake)
   await sheet.locator('.seg-btn.loss').click()
@@ -171,7 +171,7 @@ test.describe('demo', () => {
     await page.goto('/')
     await expect(page.locator('.sync-badge')).toHaveText('Synced')
     await page.locator('.view-tab-expenses').click()
-    await page.locator('.exp-scan-open').click()
+    await openScan(page)
     // No Anthropic and no Supabase here: the demo says so before anything is picked.
     await expect(page.locator('.exp-privacy')).toHaveText('Demo: the image stays on this device and a sample result is shown.')
     await page.setInputFiles('.exp-scan-input', scanFile)

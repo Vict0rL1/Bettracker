@@ -1,10 +1,10 @@
-import { useId, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Expense, ExpenseBudget, ExpenseCard } from '../../../../shared/types'
 import { currencyName } from '../../lib/currency'
 import { currentMonth, monthLabel, sameMonth, todayStr, type MonthKey } from '../../lib/dates'
 import { useLang } from '../../lib/i18n'
 import { budgetLines, categoryShares, expensesInMonth, monthSpend, totalBudget, vsLastMonth, type ExpenseFilter } from '../../lib/spend'
-import { ChevronLeftIcon, ChevronRightIcon, ReceiptIcon, SlidersIcon } from '../icons'
+import { ChevronLeftIcon, ChevronRightIcon } from '../icons'
 import BudgetsPanel from './BudgetsPanel'
 import CategoryBreakdown from './CategoryBreakdown'
 import ExpenseList from './ExpenseList'
@@ -31,12 +31,11 @@ export interface ExpensesViewProps {
   /** Migration 009 is missing: an expense added or changed waits for its three columns. */
   needs009: boolean
   currency: string
-  /** Why the AI reading can't start now, or null. */
-  scanBlocked: 'offline' | 'signed_out' | 'loading' | null
+  /** The first-run card's Add an expense (the same sheet as the + button and `T`). */
   onAdd: () => void
-  onScan: () => void
   onEdit: (e: Expense) => void
   onDelete: (e: Expense) => void
+  /** Expense settings at a section: the first-run card and the budgets (the menu's Expense settings opens it too). */
   onManage: (section: ExpenseSettingsSection) => void
   onExport: () => void
 }
@@ -47,11 +46,12 @@ const NO_FILTER: ExpenseFilter = { card: 'all', category: 'all', query: '' }
  * The Expenses view: the month (shared with the bets' calendar, and its
  * arrow keys), what it cost, how it went against the budgets, where the
  * money went, and the list. Everything is in the expense currency, through
- * the MoneyContext App gives this subtree. Only one view is mounted.
+ * the MoneyContext App gives this subtree. Only one view is mounted. Its bar
+ * holds the month alone: adding (and scanning, from the expense sheet) is the
+ * + button, and Expense settings is in the menu.
  */
 export default function ExpensesView(p: ExpensesViewProps) {
   const { t, lang } = useLang()
-  const scanOffId = useId()
   const today = todayStr()
   const [filter, setFilter] = useState<ExpenseFilter>(NO_FILTER)
 
@@ -87,26 +87,6 @@ export default function ExpensesView(p: ExpensesViewProps) {
             <ChevronRightIcon />
           </button>
         </div>
-        <div className="exp-bar-actions">
-          <button
-            type="button"
-            className="btn btn-ghost exp-scan-open"
-            title={t('scan.openTitle')}
-            disabled={p.scanBlocked !== null}
-            aria-describedby={p.scanBlocked ? scanOffId : undefined}
-            onClick={p.onScan}
-          >
-            <ReceiptIcon /> {t('scan.open')}
-          </button>
-          <button type="button" className="btn btn-ghost exp-manage-btn" onClick={() => p.onManage('cards')}>
-            <SlidersIcon size={14} /> {t('exp.manage')}
-          </button>
-        </div>
-        {p.scanBlocked && (
-          <p className="hint exp-scan-off" id={scanOffId}>
-            {t(`scan.err.${p.scanBlocked}`)}
-          </p>
-        )}
       </div>
 
       {p.needs008 && (

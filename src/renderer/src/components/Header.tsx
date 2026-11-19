@@ -2,8 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboard
 import type { SyncStatus } from '../data/useBetSync'
 import { useLang } from '../lib/i18n'
 import type { Theme } from '../lib/theme'
-import type { AppView } from '../lib/view'
-import { ArchiveIcon, ClockIcon, GlobeIcon, MenuIcon, MoonIcon, PlusIcon, SignOutIcon, SlidersIcon, SparkIcon, SunIcon } from './icons'
+import { ArchiveIcon, CardIcon, ClockIcon, GlobeIcon, MenuIcon, MoonIcon, SignOutIcon, SlidersIcon, SparkIcon, SunIcon } from './icons'
 
 interface Props {
   email: string | null
@@ -20,22 +19,18 @@ interface Props {
   onOpenData: () => void
   onToggleTheme: () => void
   onOpenSettings: () => void
+  /** Cards, budgets and the expense currency (the same sheet the budgets card's Edit budgets opens). */
+  onOpenExpenseSettings: () => void
   onOpenPending: () => void
-  /** The view open below (see ViewTabs): it decides the primary button. */
-  view: AppView
-  /** The quick add, for today (the same sheet as the + button on a phone). */
-  onAddBet: () => void
-  /** The expense sheet (the same as the + button on a phone, in the Expenses view). */
-  onAddExpense: () => void
   onSignOut: () => void
 }
 
 /**
- * The top bar: the name, the sync badge, Add bet (Add expense in the
- * Expenses view), and a menu with the rest
- * (import and export, pending bets, settings, theme, language, the account
- * and signing out). The menu button counts the bets still waiting for a
- * result, so they show while the menu is closed.
+ * The top bar: the name, the sync badge and a menu with the rest (import
+ * and export, pending bets, settings, expense settings, theme, language, the
+ * account and signing out). Adding is the + button at the bottom right, on
+ * every screen (App.tsx), never a button here. The menu button counts the
+ * bets still waiting for a result, so they show while the menu is closed.
  */
 export default function Header({
   email,
@@ -47,10 +42,8 @@ export default function Header({
   onOpenData,
   onToggleTheme,
   onOpenSettings,
+  onOpenExpenseSettings,
   onOpenPending,
-  view,
-  onAddBet,
-  onAddExpense,
   onSignOut
 }: Props) {
   const { t, tn, lang, toggle: toggleLang } = useLang()
@@ -166,16 +159,6 @@ export default function Header({
         </span>
       </div>
       <div className="topbar-actions">
-        {/* One primary action, the open view's: Add bet keeps its words and is never relabelled. */}
-        {view === 'bets' ? (
-          <button type="button" className="btn btn-primary add-bet-btn" onClick={onAddBet} title={t('header.addBetTitle')}>
-            <PlusIcon /> {t('header.addBet')}
-          </button>
-        ) : (
-          <button type="button" className="btn btn-primary add-expense-btn" onClick={onAddExpense} title={t('header.addExpenseTitle')}>
-            <PlusIcon /> {t('header.addExpense')}
-          </button>
-        )}
         <div className="menu-wrap" ref={wrapRef}>
           <button
             ref={toggleRef}
@@ -220,6 +203,10 @@ export default function Header({
               </button>
               <button type="button" role="menuitem" className="menu-item settings-btn" onClick={pick(onOpenSettings)}>
                 <SlidersIcon /> <span>{t('header.settings')}</span>
+              </button>
+              {/* On both views: the Expenses view's bar keeps only its month. */}
+              <button type="button" role="menuitem" className="menu-item expense-settings-btn" onClick={pick(onOpenExpenseSettings)}>
+                <CardIcon /> <span>{t('exp.manage')}</span>
               </button>
               <div className="menu-sep" role="separator" />
               {/* Toggles: the menu stays open, showing the change. */}

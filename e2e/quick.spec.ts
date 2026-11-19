@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { boot } from './harness'
+import { addBet, boot } from './harness'
 
 test.describe('quick add', () => {
   test('a pending bet is two taps when a default stake is set', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 25, oddsFormat: 'american' } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     await expect(sheet.locator('.field input').first()).toHaveValue('25')
     // Tags come from the last bet logged (the NFL one in the seed).
@@ -31,7 +31,7 @@ test.describe('quick add', () => {
 
   test('a win without odds asks for the profit instead of guessing', async ({ page }) => {
     await boot(page, { settings: { defaultStake: 50 } })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     await sheet.locator('.seg-btn.win').click()
     await expect(sheet.locator('.quick-profit')).toBeVisible()
@@ -50,7 +50,7 @@ test('adding works where the browser offers no crypto.randomUUID', async ({ page
   await boot(page, { backend: 'live', settings: { startingBankroll: 1000 }, moves: [] })
   expect(await page.evaluate(() => typeof (crypto as { randomUUID?: unknown }).randomUUID)).toBe('undefined')
 
-  await page.click('.add-bet-btn')
+  await addBet(page)
   const sheet = page.locator('.quick-modal')
   await sheet.locator('.field input').first().fill('20')
   await sheet.locator('.seg-btn.loss').click()

@@ -23,10 +23,13 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
 
 - **Una pestaña Gastos** al lado de Apuestas, bajo la cabecera (un
   `tablist`; cada dispositivo recuerda la última en `bettracker:view`, nunca
-  en la URL). Solo se monta la vista activa. La cabecera sigue teniendo dos
-  botones: en Gastos el principal es **Añadir gasto**; `T` y el **+** del
-  móvil abren la hoja de gasto. Las flechas cambian el mes, compartido con el
-  calendario de apuestas.
+  en la URL). Solo se monta la vista activa. La cabecera solo tiene el
+  nombre, la sincronización y el menú ☰, donde están los **Ajustes de
+  gastos** (tarjetas, presupuestos y moneda, desde cualquiera de las dos
+  vistas); la barra de la vista, solo el mes, su moneda y las flechas. El
+  **+** de abajo a la derecha, en el ordenador como en el móvil, y `T` abren
+  la hoja de gasto, que empieza por **Escanear recibo**. Las flechas cambian
+  el mes, compartido con el calendario de apuestas.
 - **El mes**: gastado (los reembolsos restan) y cómo va frente al mes
   anterior, presupuesto restante, gasto
   por tarjeta (las tres primeras y «+n más»), media diaria y a qué ritmo va el
@@ -62,8 +65,9 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
 - **Gastos en otra moneda**: un gasto se puede pagar en una moneda que no es
   la principal; la app guarda lo pagado y lo convierte (ver «Otras monedas y
   tasas de cambio» abajo).
-- **Escanear recibo**: una foto de un recibo o una captura de Apple Wallet
-  se lee con IA y se **revisa** antes de guardar nada (ver «IA» abajo).
+- **Escanear recibo** (lo primero de la hoja de gasto): una foto de un
+  recibo o una captura de Apple Wallet se lee con IA y se **revisa** antes de
+  guardar nada (ver «IA» abajo).
 - **CSV de gastos** desde la lista (todas las columnas, con las guardas de
   fórmula del CSV de apuestas; lo pagado en otra moneda, su código y la tasa
   van en tres columnas al final). El CSV de apuestas no cambia.
@@ -441,8 +445,8 @@ conexión no se sabe nada.
 
 ## IA
 
-**Flujo.** En la hoja de gasto (o con «Escanear recibo» en la barra de la
-vista) se elige, pega o suelta una imagen. El cliente la decodifica
+**Flujo.** En la hoja de gasto (el **+**), con su «Escanear recibo», se
+elige, pega o suelta una imagen. El cliente la decodifica
 (`createImageBitmap`; HEIC solo donde el navegador sepa), la reduce a 1600 px
 en el lado largo y la vuelve a codificar como JPEG (≤ ~1,5 MB en base64; eso
 quita la ubicación y los datos de la cámara). Llama a la Edge Function

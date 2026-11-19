@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, menu, move, reload, SEED, USER } from './harness'
+import { addBet, boot, entry, menu, move, reload, SEED, USER } from './harness'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const now = new Date()
@@ -60,7 +60,7 @@ test.describe('bankroll', () => {
 
   test('a stake above 5% of the bankroll is flagged, and never blocked', async ({ page }) => {
     await boot(page, { settings: START, moves: [] })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     const note = sheet.locator('.stake-note')
     const lost = sheet.locator('.seg-btn.loss')

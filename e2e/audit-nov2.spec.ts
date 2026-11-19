@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { boot, entry, menu, move, reload, USER } from './harness'
+import { addBet, boot, entry, menu, move, reload, USER } from './harness'
 
 /**
  * Regression tests for the audit of 2026-11-02 (base df13583): restore and
@@ -274,7 +274,7 @@ test.describe('the five reliability defects', () => {
       localStorage.setItem('e2e:refused-full', '1')
       localStorage.setItem('e2e:fail', JSON.stringify({ status: 400, message: 'new row violates check constraint', code: '23514', times: 1 }))
     })
-    await page.click('.add-bet-btn')
+    await addBet(page)
     const sheet = page.locator('.quick-modal')
     await sheet.locator('input[type="number"]').first().fill('12')
     await sheet.locator('.seg-btn.loss').click()

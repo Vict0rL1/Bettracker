@@ -927,8 +927,8 @@ test.describe('what the history and the details say, as it is', () => {
     await expect(dialog.locator('.result-recover-retrySettings')).toHaveCount(0)
   })
 
-  test('the Add bet button and the first steps say a bet can be for any day', async ({ page }) => {
+  test('the + button and the first steps say a bet can be for any day', async ({ page }) => {
     await boot(page, { backend: 'live', entries: [], settings: SETTINGS })
-    await expect(page.locator('.add-bet-btn')).toHaveAttribute('title', 'Add a bet (T). Pick its date in the form: Today, Yesterday or any day.')
+    await expect(page.locator('.fab')).toHaveAttribute('title', 'Add a bet (T). Pick its date in the form: Today, Yesterday or any day.')
   })
 })

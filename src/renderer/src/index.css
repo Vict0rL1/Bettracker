@@ -487,6 +487,9 @@ h2 {
 }
 
 /* ---------- app frame ---------- */
+/* The bottom padding keeps the end of the page (the history's pager, the
+   expense list's last row and Show more) clear of the + button: 96px is its
+   24px offset, its 56px and 16px of air (88px on a phone, below). */
 .app {
   max-width: 1400px;
   margin: 0 auto;
@@ -2243,7 +2246,7 @@ tbody tr:last-child td {
     gap: 12px;
   }
 
-  /* The name and the menu button on one row, Add bet across the next. */
+  /* The name and the menu button on one row (adding is the + button). */
   .topbar-actions {
     display: contents;
   }
@@ -2261,22 +2264,6 @@ tbody tr:last-child td {
   .btn {
     flex: 1;
     justify-content: center;
-  }
-
-  /* Tonal here, so the + button is the one solid primary on a phone. */
-  .topbar-actions :is(.add-bet-btn, .add-expense-btn) {
-    order: 3;
-    flex: 1 1 100%;
-    min-height: 44px;
-    background: var(--tint-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .topbar-actions :is(.add-bet-btn, .add-expense-btn):hover:not(:disabled) {
-      background: var(--tint-3);
-    }
   }
 
   .hero {
@@ -2392,7 +2379,8 @@ tbody tr:last-child td {
 .toast {
   position: fixed;
   right: calc(24px + env(safe-area-inset-right));
-  bottom: calc(24px + env(safe-area-inset-bottom));
+  /* Above the + button (24px + its 56px + 16px), never over it. */
+  bottom: calc(96px + env(safe-area-inset-bottom));
   z-index: 60;
   display: flex;
   align-items: center;
@@ -2992,11 +2980,14 @@ tr.is-pending td:first-child {
 }
 
 /* ---------- quick add ---------- */
+/* The one add button, on every screen size: the open view's sheet. Under the
+   open menu (45) and a dialog's shade (50), which it must never cover; App
+   unmounts it while a dialog is open anyway. */
 .fab {
   position: fixed;
   right: calc(24px + env(safe-area-inset-right));
   bottom: calc(24px + env(safe-area-inset-bottom));
-  z-index: 55;
+  z-index: 40;
   width: 56px;
   height: 56px;
   border-radius: 50%;
@@ -4944,17 +4935,6 @@ tr.is-pending td:first-child {
   }
 }
 
-/* The + button is the quick add on a phone, where the header's Add bet has scrolled away. */
-@media (min-width: 641px) {
-  .fab {
-    display: none;
-  }
-
-  .toast {
-    right: calc(24px + env(safe-area-inset-right));
-  }
-}
-
 /* ---------- first steps ---------- */
 .first-run {
   display: flex;
@@ -5090,8 +5070,8 @@ tr.is-pending td:first-child {
 }
 
 /* ---------- expenses: bar, banner, first run, summary, chart, budgets, categories ---------- */
-/* The month and its currency at the left; the arrows, then the view's own
-   actions, at the right (the top bar keeps its two buttons). */
+/* The month and its currency at the left, the arrows at the right; nothing
+   else (adding and scanning are the + button, Expense settings the menu). */
 .exp-bar {
   display: flex;
   flex-wrap: wrap;
@@ -5123,17 +5103,6 @@ tr.is-pending td:first-child {
 .month-nav.exp-month-nav {
   margin: 0 0 0 auto;
   align-self: center;
-}
-
-.exp-bar-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.exp-bar > .exp-scan-off {
-  flex-basis: 100%;
-  margin: 0;
-  text-align: right;
 }
 
 .draft-note.exp-migration {
@@ -6642,14 +6611,6 @@ tr.is-pending td:first-child {
 
   .hero.spend-strip .spend-total-card .life-value {
     font-size: 32px;
-  }
-
-  .exp-bar > .exp-scan-off {
-    text-align: left;
-  }
-
-  .exp-bar-actions {
-    flex-basis: 100%;
   }
 
   .exp-filters select {

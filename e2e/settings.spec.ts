@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { boot, entry, menu, reload, USER } from './harness'
+import { addBet, boot, entry, menu, reload, USER } from './harness'
 
 /** Two bets with the two prices everyone recognises: +150 (2.50, 3/2) and −110 (1.91, 10/11). */
 const WITH_ODDS = [
@@ -46,7 +46,7 @@ test.describe('settings', () => {
     await stake.fill('30')
     await stake.press('Enter')
     await page.locator('.settings-modal .modal-actions .btn-ghost').click()
-    await page.click('.add-bet-btn')
+    await addBet(page)
     await expect(page.locator('.quick-modal .field input').first()).toHaveValue('30')
   })
 })

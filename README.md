@@ -107,12 +107,16 @@ keyboard shortcuts — `←`/`→` to change month, `T` to log today (an expense
 in the Expenses view), `Esc` to close a dialog.
 
 The **Bets | Expenses** tabs under the header switch between the two views
-(each device remembers the last one). The top bar holds only **Add bet**
-(**Add expense** in the Expenses view), next to the sync badge. Everything else
-is in the menu (☰): the account, **Import & export**, **Pending bets**,
-**Settings**, the theme, the language and **Sign out**. The menu button
-shows how many bets are waiting for a result; the menu works from the
-keyboard (arrows, Home/End, Escape back to the button).
+(each device remembers the last one). The top bar holds only the name, the
+sync badge and the menu (☰): the account, **Import & export**, **Pending
+bets**, **Settings**, **Expense settings** (cards, budgets and the expense
+currency, from either view), the theme, the language and **Sign out**. The
+menu button shows how many bets are waiting for a result; the menu works
+from the keyboard (arrows, Home/End, Escape back to the button). Adding is
+the round **+** button at the bottom right, on a computer as on a phone: a
+bet in the Bets view, an expense in the Expenses view (`T` does the same).
+The end of the page keeps clear of it, so the history's pager and the last
+rows are never under it.
 
 ## What you'll need
 
@@ -446,9 +450,9 @@ A new account (no bets yet) gets a short **Getting started** guide: set the
 starting bankroll, choose how odds are written, log the first bet. It goes
 once the three are done, or when hidden.
 
-**Add bet** (and the **+** button on a phone, the same sheet) logs a bet for
-today in a couple of taps; **More details** carries what was typed to the
-full form. For another day, click the day on the calendar.
+The **+** button at the bottom right (or `T`) logs a bet in a couple of taps,
+for today unless another date is picked; **More details** carries what was
+typed to the full form. The calendar's days open their own day too.
 
 ## Date ranges
 
@@ -514,11 +518,12 @@ says which one is missing and what you add waits on the device.
 - **An expense** has a date, an amount, a card (or none), a merchant, a
   category (coffee, food & restaurants, groceries, transport, shopping,
   entertainment, health, home & bills, subscriptions, travel, other) and a
-  note. **Add expense** (or `T`, or the `+` button on a phone) opens a sheet
-  that starts on the amount and remembers the last card and category on that
-  device. Amounts read the way you type them: `4,50`, `4.50`, `1.234,50` and,
-  in a currency without cents, `12.500`. A **refund** (or credit) is an
-  expense below zero: it shows in green and lowers that month's spending.
+  note. The **+** button at the bottom right (or `T`) opens a sheet, with
+  **Scan receipt** at its top, that starts on the amount and remembers the
+  last card and category on that device. Amounts read the way you type them:
+  `4,50`, `4.50`, `1.234,50` and, in a currency without cents, `12.500`. A
+  **refund** (or credit) is an expense below zero: it shows in green and
+  lowers that month's spending.
   Edit and delete from the list; each comes with an **Undo**. It all works
   offline and syncs like the bets.
 - **Merchants you have typed before** are suggested as you type (the latest
@@ -533,8 +538,8 @@ says which one is missing and what you add waits on the device.
   the scan review and the budgets. Decoration only, in a neutral ink (colour
   is kept for money), and hidden from screen readers.
 - **Cards** — as many as you like (name, last 4 digits, credit or debit),
-  under **Expense settings**. Deleting a card that has expenses archives it:
-  it leaves the pickers and its expenses keep its name. An expense whose card
+  under **Expense settings** (in the menu ☰). Deleting a card that has
+  expenses archives it: it leaves the pickers and its expenses keep its name. An expense whose card
   isn't there shows under **No card**.
 - **Budgets** — monthly, the same every month: one for the whole month, one
   per card and one per category, all optional. They show as bars (amber from
@@ -561,9 +566,9 @@ says which one is missing and what you add waits on the device.
   categories, and the list (a table on a computer, cards on a phone; search,
   and filter by card and category). The arrows and `←`/`→` change the month,
   shared with the bets' calendar.
-- **Scan receipt** — the AI reads a receipt photo or an Apple Wallet
-  screenshot and fills in the expenses for you to check before anything is
-  saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).
+- **Scan receipt**, first in the expense sheet — the AI reads a receipt
+  photo or an Apple Wallet screenshot and fills in the expenses for you to
+  check before anything is saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).
 - **Export CSV** (in the list) writes every expense, with the columns `date,
   amount, currency, card, card_last4, merchant, category, note, source,
   original_amount, original_currency, fx_rate`. `amount` is in your main
@@ -575,12 +580,13 @@ says which one is missing and what you add waits on the device.
 ### Other currencies and exchange rates
 
 Say your main currency is Canadian dollars and a subscription charges you in
-US dollars. In **Add expense**, pick **USD** in the box next to the amount and
-type what you paid. Under it the app shows the **rate** of that day and the
-amount **in CAD**, and saves both: `USD 12.00` as paid, `$16.80` as what it
-counts for. Totals, budgets, the chart and the categories always use the
-amount in your main currency; the list shows the original beside it, small,
-written with its code so a bare `$` always means your own currency.
+US dollars. In the expense sheet (the **+** button), pick **USD** in the box
+next to the amount and type what you paid. Under it the app shows the **rate**
+of that day and the amount **in CAD**, and saves both: `USD 12.00` as paid,
+`$16.80` as what it counts for. Totals, budgets, the chart and the categories
+always use the amount in your main currency; the list shows the original
+beside it, small, written with its code so a bare `$` always means your own
+currency.
 
 - **Both boxes can be typed in.** Type the amount your bank actually charged
   (banks add their own fee) and the rate follows it; type a rate and the
@@ -634,7 +640,8 @@ could not reach the service and checks nothing.
 
 ## AI reading of receipts (optional)
 
-**Scan receipt** in the Expenses view reads a photo of a receipt or an Apple
+**Scan receipt**, first in the expense sheet (the **+** button in the Expenses
+view), reads a photo of a receipt or an Apple
 Wallet screenshot with Claude (Anthropic) and fills in the expenses: one per
 receipt (its total, tip included), one per visible Wallet transaction
 (declined ones left out, refunds as refunds). Nothing is saved until you

@@ -233,7 +233,7 @@ npm ci
 npm test            # 1577 tests unitarios en 59 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 267 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 270 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
@@ -310,10 +310,53 @@ presupuestos (con `moves` y sin ellas valen `[]`; `null`, ninguna caché);
 `view: 'expenses'` abre en la vista Gastos; `ai` dirige la lectura con IA
 falsa (`rows`, `fail` con un código, `hold`, `ignoreAbort`), y el harness
 exporta `TINY_PNG`, `scanFile` y `bigPng` (un recibo de 1200×1600 dibujado en
-la página). En este entorno hizo falta `NO_PROXY='*'` para que
+la página). Para abrir cada cosa como lo hace el usuario: `addBet` y
+`addExpense` (el + de abajo a la derecha), `openScan` (el + y el «Escanear
+recibo» de la hoja) y `openExpenseSettings` (menú ☰ → Ajustes de gastos). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Cabecera y barras más simples (noviembre 2026)
+
+Petición del dueño tras usar la app: «puedes quitar el botón de add bet
+arriba porque es más conveniente usar el botón que está a la derecha, lo
+mismo en expenses quitar scan receipt y expense settings y ponerlo en otro
+lado». Sin migración y sin tocar la sincronización.
+
+- **Cabecera**: el nombre, la insignia de sincronización y el menú ☰. Ya no
+  lleva «Añadir apuesta» ni «Añadir gasto».
+- **El + de abajo a la derecha es el botón de añadir en cualquier tamaño de
+  pantalla**, también en el ordenador (antes se ocultaba desde 641 px): en
+  Apuestas abre el registro rápido y en Gastos la hoja de gasto; `T` sigue
+  igual. En el DOM va justo después de la cabecera, así que con el teclado
+  llega tras el botón del menú, donde estaba «Añadir apuesta». Queda por
+  debajo del menú abierto y de los diálogos (`z-index` 40); el aviso
+  (toast) sube por encima de él también en el ordenador, y el relleno
+  inferior de la página (96 px; 88 en el móvil) deja libres el paginador del
+  historial, las últimas filas y «Mostrar más» de la lista de gastos. Solo
+  anima al aparecer.
+- **Barra de Gastos**: solo el mes, su moneda, «Hoy» y ‹ ›. «Escanear
+  recibo» queda en la hoja de gasto (ya era lo primero) y la hoja ya no se
+  abre directamente en el escaneo; **«Ajustes de gastos» pasa al menú ☰**,
+  justo después de «Ajustes», en las dos vistas (abre la misma hoja que
+  «Editar presupuestos»; flechas, Inicio/Fin y Escape la incluyen).
+- **Textos** (en y es): el historial vacío, la guía de primeros pasos, la
+  lista de gastos vacía y la pista de «sin tarjetas» hablan del botón + y
+  del menú; el README y `docs/expenses-2026-11.md` también.
+
+**Cómo se probó.** e2e: el harness tiene `addBet`, `addExpense`, `openScan`
+y `openExpenseSettings` (el +, el + y «Escanear recibo», el menú), que usan
+todas las pruebas que pulsaban los botones quitados. Expectativas que
+cambian: la cabecera tiene un botón visible (antes dos) y el menú siete
+entradas con «Ajustes de gastos» (`dashboard.spec.ts`, que además recorre
+la nueva con el teclado y comprueba que Tab desde el menú llega al +); el +
+se ve también a 1280 px y su `title` es el que tenía «Añadir apuesta»
+(`audit-nov5.spec.ts`); en Gastos el foco vuelve al + al cerrar la hoja
+(`expenses.spec.ts`); «el + deja libre el paginador» se comprueba a 390 y a
+1280 px, y a los dos tamaños el final de la lista de gastos con «Mostrar
+más» (`mobile.spec.ts`); el menú no queda tapado por el + en una ventana
+baja (`language.spec.ts`, 1024×440). Capturas a 1280 y 390 px.
 
 ### Pulido de Gastos y datos de ejemplo (noviembre 2026)
 
@@ -430,8 +473,9 @@ una captura de Apple Wallet. Detalle completo en `docs/expenses-2026-11.md`.
 En corto:
 
 - **Vista Gastos** junto a Apuestas (pestañas bajo la cabecera, recordadas
-  por dispositivo; solo se monta la activa). En ella el botón principal es
-  **Añadir gasto**, y `T` y el **+** del móvil abren la hoja de gasto. Mes
+  por dispositivo; solo se monta la activa). En ella el **+** de abajo a la
+  derecha y `T` abren la hoja de gasto (antes había además «Añadir gasto»
+  en la cabecera: ver «Cabecera y barras más simples»). Mes
   con flechas (compartido con el calendario de apuestas), resumen (gastado,
   presupuesto restante, por tarjeta, media diaria y proyección), un gráfico
   que apila el gasto de cada tarjeta (acumulado contra la línea del
@@ -652,10 +696,11 @@ estaban en este contenedor; se trabajó con la lista de hallazgos):
   **¿Olvidaste la contraseña?** y pantalla de contraseña nueva
   (`auth/NewPassword.tsx`).
 - **Panel**: P/L, bankroll y pendientes primero; analítica avanzada
-  plegable; guía de primeros pasos para cuentas nuevas; **Añadir apuesta**
-  y el **+** del móvil abren la misma hoja.
-- **Cabecera**: solo **Añadir apuesta** (y la insignia de sincronización);
-  lo demás (cuenta, Importar y exportar, Pendientes, Ajustes, tema, idioma
+  plegable; guía de primeros pasos para cuentas nuevas; el **+** abre el
+  registro rápido (entonces también **Añadir apuesta** en la cabecera, hoy
+  quitado: ver «Cabecera y barras más simples»).
+- **Cabecera**: el nombre y la insignia de sincronización; lo demás (cuenta,
+  Importar y exportar, Pendientes, Ajustes, Ajustes de gastos, tema, idioma
   y Salir) está en el menú ☰ (`Header.tsx`), que cuenta las pendientes y se
   maneja con el teclado.
 
@@ -1200,7 +1245,7 @@ src/renderer/src/components/expenses/
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
   BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
   CategoryIcon (los once iconos de categoría)
-e2e/*.spec.ts                       267 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       270 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;

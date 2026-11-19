@@ -111,8 +111,8 @@ const ExpensesView = lazy(() => import('./components/expenses/ExpensesView'))
 const ExpenseSheet = lazy(() => import('./components/expenses/ExpenseSheet'))
 const ExpenseSettings = lazy(() => import('./components/expenses/ExpenseSettings'))
 
-/** The expense sheet: adding (by hand, or starting with a scan; a draft handed back from Expense settings), or editing one. */
-type ExpenseSheetState = { kind: 'add'; scan?: boolean; draft?: ExpenseDraft; preferCardId?: string } | { kind: 'edit'; id: string }
+/** The expense sheet: adding (by hand or with its Scan receipt; a draft handed back from Expense settings), or editing one. */
+type ExpenseSheetState = { kind: 'add'; draft?: ExpenseDraft; preferCardId?: string } | { kind: 'edit'; id: string }
 
 const kindOf = (amount: number): 'deposit' | 'withdrawal' => (amount > 0 ? 'deposit' : 'withdrawal')
 
@@ -376,8 +376,8 @@ export default function App() {
     setLossDismissed(lossKey)
   }, [lossKey])
 
+  // The + button and `T`: scanning a receipt starts from there too, with the sheet's own Scan receipt.
   const openExpense = useCallback(() => setExpenseSheet({ kind: 'add' }), [])
-  const openScan = useCallback(() => setExpenseSheet({ kind: 'add', scan: true }), [])
   // Every dialog, bets' and expenses': the keys and the + button stand aside while one is open (dialogs never stack).
   const anyDialogOpen = day !== null || quickOpen || settingsOpen || pendingOpen || bankrollOpen || dataOpen || expenseSheet !== null || expenseSettings !== null
 
@@ -1335,12 +1335,25 @@ export default function App() {
           }}
           onToggleTheme={toggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
+          onOpenExpenseSettings={() => setExpenseSettings('cards')}
           onOpenPending={() => setPendingOpen(true)}
-          view={view}
-          onAddBet={openQuick}
-          onAddExpense={openExpense}
           onSignOut={signOut}
         />
+
+        {/* The one add button, on every screen: the open view's sheet (quick add, or an expense, whose sheet also
+            scans). Fixed at the bottom right; here in the DOM so the keyboard meets it right after the menu button,
+            where the header's Add bet was. Out of the way while a dialog is open: it would open another on top. */}
+        {!anyDialogOpen && (
+          <button
+            type="button"
+            className="fab"
+            aria-label={t(view === 'bets' ? 'header.addBet' : 'header.addExpense')}
+            title={t(view === 'bets' ? 'header.addBetTitle' : 'header.addExpenseTitle')}
+            onClick={view === 'bets' ? openQuick : openExpense}
+          >
+            <PlusIcon size={22} />
+          </button>
+        )}
 
         <ViewTabs view={view} onChange={changeView} />
 
@@ -1465,9 +1478,7 @@ export default function App() {
                 needs008={needs008}
                 needs009={needs009}
                 currency={settings.expenseCurrency}
-                scanBlocked={scanBlocked}
                 onAdd={openExpense}
-                onScan={openScan}
                 onEdit={(e) => setExpenseSheet({ kind: 'edit', id: e.id })}
                 onDelete={(e) => void handleDeleteExpense(e)}
                 onManage={setExpenseSettings}
@@ -1618,9 +1629,8 @@ export default function App() {
             <Suspense fallback={null}>
               <ExpenseSheet
                 // A new sheet for each thing it opens on: fresh boxes, fresh stage.
-                key={expenseSheet.kind === 'edit' ? `edit|${expenseSheet.id}` : `add|${expenseSheet.scan ? 'scan' : ''}`}
+                key={expenseSheet.kind === 'edit' ? `edit|${expenseSheet.id}` : 'add'}
                 editing={editingExpense}
-                startWithScan={expenseSheet.kind === 'add' && expenseSheet.scan === true}
                 draft={expenseSheet.kind === 'add' ? (expenseSheet.draft ?? null) : null}
                 preferCardId={expenseSheet.kind === 'add' ? (expenseSheet.preferCardId ?? null) : null}
                 cards={cards.rows}
@@ -1672,19 +1682,6 @@ export default function App() {
               />
             </Suspense>
           </MoneyContext.Provider>
-        )}
-
-        {/* Out of the way while a dialog is open: it sits above them, and would open another on top. */}
-        {!anyDialogOpen && (
-          <button
-            type="button"
-            className="fab"
-            aria-label={t(view === 'bets' ? 'header.addBet' : 'header.addExpense')}
-            title={t(view === 'bets' ? 'header.addBetTitle' : 'header.addExpenseTitle')}
-            onClick={view === 'bets' ? openQuick : openExpense}
-          >
-            <PlusIcon size={22} />
-          </button>
         )}
 
         {/* The live region is always there, so each message put into it is
