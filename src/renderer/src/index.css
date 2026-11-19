@@ -230,6 +230,11 @@
 html,
 body {
   margin: 0;
+}
+
+/* The status bar's height once, on the body only: on html as well it was
+   counted twice, an empty band above the header in the installed iPhone app. */
+body {
   padding: env(safe-area-inset-top) 0 0;
 }
 
@@ -6922,9 +6927,9 @@ tr.is-pending td:first-child {
 
   /* Two columns: what was spent across the top, Budget left and Daily average
      side by side under it (the two figures a glance wants together), By card
-     across the bottom. The DOM, and so the keyboard, keep their order. Every
-     tile after the first sits under an inset hairline; the right half has
-     one at its left too. */
+     across the bottom. The DOM, and so the keyboard, keep their order. The
+     hairlines as in the bets strip: one across under the total, one upright
+     between the halves, one across over By card. */
   .hero.spend-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6946,28 +6951,18 @@ tr.is-pending td:first-child {
     order: 3;
   }
 
-  .hero.spend-strip > .stat-card + .stat-card::before {
-    content: '';
+  .hero.spend-strip > .spend-total-card::after {
+    left: 16px;
+    right: 16px;
+  }
+
+  .hero.spend-strip > .spend-cards-card::before {
     top: 0;
     bottom: auto;
     left: 16px;
     right: 16px;
     width: auto;
     height: 1px;
-  }
-
-  .hero.spend-strip > .spend-pace-card::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 16px;
-    bottom: 16px;
-    width: 1px;
-    background: var(--divider);
-  }
-
-  .hero.spend-strip > .spend-total-card::after {
-    content: none;
   }
 
   .hero.spend-strip .spend-total-card .life-value {

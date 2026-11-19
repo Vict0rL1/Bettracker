@@ -239,7 +239,7 @@ npm ci
 npm test            # 1707 tests unitarios en 62 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 315 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 317 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
@@ -322,6 +322,28 @@ recibo» de la hoja) y `openExpenseSettings` (menú ☰ → Ajustes de gastos). 
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Revisión en el iPhone (noviembre 2026)
+
+El dueño instaló la versión 2.0 en su iPhone y pidió verificarla. Con sus
+capturas y una cuenta de prueba parecida a la suya (122 apuestas sin stake,
+44 gastos en dos tarjetas, presupuestos) a 393 y 320 px:
+
+- **Una franja vacía sobre la cabecera** en la app instalada: el alto de la
+  barra de estado (`env(safe-area-inset-top)`) se sumaba dos veces, en
+  `html` y en `body`. Ahora solo en `body` (unos 59 px menos en un iPhone
+  con Dynamic Island). Prueba en `mobile.spec.ts`: lee las reglas del CSS,
+  porque Chromium no tiene muesca (`env()` vale 0) y la medida no lo vería.
+- **Gastos en el móvil**: las líneas divisorias de la franja siguen el
+  dibujo de la de Apuestas (una a lo ancho bajo el total, una vertical entre
+  las dos mitades, una sobre Por tarjeta), en vez de dos trazos cortados.
+- **Historial en el móvil**: una apuesta sin stake ya no dice «Stake sin
+  registrar» en su tarjeta cerrada (en una cuenta que nunca lo apunta salía
+  en cada línea); abierta, la primera fila es «Stake: Sin registrar».
+
+La moneda de los gastos de esa cuenta es USD, el valor por defecto; el
+dueño dijo que su moneda principal es CAD. Se cambia en ☰ → Ajustes de
+gastos → Moneda (no convierte nada: solo cambia la etiqueta).
 
 ### Pulido 2.0: Gastos (noviembre 2026)
 
@@ -1407,7 +1429,7 @@ src/renderer/src/components/expenses/
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
   BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
   CategoryIcon (los once iconos de categoría)
-e2e/*.spec.ts                       315 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       317 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;
