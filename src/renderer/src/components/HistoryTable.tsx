@@ -8,7 +8,7 @@ import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
 import { formatOdds } from '../lib/odds'
 import { inBounds, type Bounds } from '../lib/range'
-import { clvOf, tagValues } from '../lib/stats'
+import { clvOf, returnPct, tagValues } from '../lib/stats'
 import { NARROW, useMedia } from '../lib/useMedia'
 import { suggestedAmount } from '../lib/validate'
 import { toneOf } from './DayModal'
@@ -222,7 +222,12 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
       <header className="card-head">
         <h2>{t('hist.title')}</h2>
         <span className="card-note">
-          <span className="scope-tag">{onlyRange ? range.name : t('scope.allDates')}</span>{' '}
+          {/* Which dates the list covers, once a range other than all time is chosen above (then it can differ). */}
+          {range !== null && (
+            <>
+              <span className="scope-tag">{onlyRange ? range.name : t('scope.allDates')}</span>{' '}
+            </>
+          )}
           <span className="hist-count">{hasFilters ? t('hist.countOf', { m: filtered.length, bets: tn('bet', bets.length) }) : tn('bet', bets.length)}</span>
         </span>
       </header>
@@ -362,8 +367,7 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                       const tone = toneOf(b.status)
                       const when = humanDate(b.date)
                       const expanded = open === b.id
-                      const decided = b.status === 'won' || b.status === 'lost'
-                      const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
+                      const ret = returnPct(b)
                       const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
                       const tags = betTags(b)
                       const desc = b.note || tags.join(' · ')
@@ -496,8 +500,7 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                   <tbody>
                     {visible.map((b) => {
                       const tone = toneOf(b.status)
-                      const decided = b.status === 'won' || b.status === 'lost'
-                      const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
+                      const ret = returnPct(b)
                       const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
                       const tags = betTags(b)
                       const when = humanDate(b.date)

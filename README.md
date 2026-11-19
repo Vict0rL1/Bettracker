@@ -404,16 +404,27 @@ and withdrawals** are logged there (amount, date, an optional note) and can
 be edited or deleted, with Undo; they work offline and sync like bets. They
 are not bets: they never count in P/L, ROI, streaks or the loss limit, and
 they are never painted as wins or losses. Pending bets add nothing until they
-settle; their stakes show as *riding*. The bankroll always covers every bet,
-whatever date range is chosen. With no starting bankroll and no deposit or
-withdrawal it reads *—*; on a device that has not loaded your settings or
-your deposits and withdrawals yet (a first start offline) it reads *…*
-rather than a wrong figure.
+settle; what is riding on them is said once, on the **Pending bets** card
+("$40.00 at risk"), while the bankroll tile's own line always says what was
+**contributed** (the start plus deposits less withdrawals; "taken out" when
+that is below zero). The bankroll always covers every bet, whatever date
+range is chosen. With no starting bankroll and no deposit or withdrawal it
+reads *—*; on a device that has not loaded your settings or your deposits
+and withdrawals yet (a first start offline) it reads *…* rather than a wrong
+figure.
 
-**The chart** switches between **P/L** (the running result, from 0) and
-**Bankroll** (the bankroll as a level, with the money put in — start plus
-deposits less withdrawals — as a dashed line; the gap between them is the
-P/L). One axis either way. The choice is remembered on the device.
+**The chart** switches between **P/L** (the running result, from an opening
+point at $0 the day before the first settled day, so one settled day already
+draws) and **Bankroll** (the bankroll as a level, with the money put in —
+start plus deposits less withdrawals — as a dashed step line; at each point
+the gap between the two is the P/L to that day). Points are joined straight
+in both views: a curve between two days would suggest money moving on days
+nothing was settled; the money put in is a step because a deposit is
+instantaneous. One axis either way, on round ticks ($0 · $500 · $1k); the
+tooltip gives the running P/L signed, or the bankroll. The choice is
+remembered on the device. The chart's code is downloaded apart from the
+rest; if it can't be (a first run offline), the card says so and the rest of
+the dashboard stands — it loads the next time the app opens online.
 
 **The 5% note.** Under the stake box in quick add and in the day form, a
 quiet line says what share of the current bankroll the stake is, and turns
@@ -448,7 +459,28 @@ streaks, best and worst day, drawdown and the breakdowns are under
 **Advanced analytics**, closed until opened (remembered on the device).
 Bets and days are kept apart in the words: "bets won" is the strike rate,
 "winning days" the share of days that ended up; each figure says how many
-bets it covers (the break-even rate covers only those with odds).
+bets it covers (the break-even rate covers only those with odds). Counts
+read in the singular when there is one ("1 pending", "1 winning day").
+
+Each figure says what it means to say, once: what is riding on pending bets
+is on the Pending bets card alone ("$40.00 at risk"; with nothing pending
+its 0 is quiet), the bankroll line says what was contributed, and the ROI
+line reads "−$20.00 on $110.00 staked · avg $55.00 · 2 of 3 bets with a
+stake" — the average stake beside the total it is the average of, so the
+header keeps only the small-sample caveat. The ROI percentage is computed
+from the profit and the stake rounded to the cent, as they are shown: a P/L
+of $0.00 is 0.0% in the neutral tone, never "+0.0%" in green from
+floating-point dust. With a range chosen and no bets in it, P/L, ROI and
+the chart say "No bets in this range"; the first-steps copy appears only when
+the account has no bets at all. On a phone the ROI card comes before the
+month card, so the month sits right above the calendar it drives (the
+reading order for the keyboard is unchanged).
+
+The calendar tints each won or lost day by its size among the month's
+decided days so far (three steps; days still to come are never tinted).
+Amounts of $1,000 and more are written in whole thousands in the cells
+("-$1k", "+$12k"), which is what fits a 320px phone; the exact figure is in
+the cell's title and one tap away in the day.
 
 A new account (no bets yet) gets a short **Getting started** guide: set the
 starting bankroll, choose how odds are written, log the first bet. It goes
@@ -466,9 +498,13 @@ The row above the stat cards picks the range P/L, ROI, the balance chart and
 the advanced analytics are computed over: all time, this week (Sunday to
 Saturday), this month, the last 30 days, this year, or custom dates
 (inclusive at both ends). The bankroll, the pending bets, the calendar, its
-month card and the history always cover every date, and each card says
-which (a tag such as "All dates"); the history can be narrowed to the range
-with its **Dates shown** filter. The choice is remembered on the device.
+month card and the history always cover every date. Once a range other than
+all time is chosen, each card says which dates it covers (the range's name,
+or a tag such as "All dates") and a note under the row says what the range
+applies to; with all time every card covers the same dates, so nothing is
+said (the note stays as the row's description for screen readers). The
+history can be narrowed to the range with its **Dates shown** filter. The
+choice is remembered on the device.
 
 ## Forms: problems in words, drafts, free bets
 
@@ -508,7 +544,9 @@ and syncs like any other change; a restored bet keeps its id but gets a new
 ## Pending bets
 
 The menu button (☰), and the **Pending bets** card on the dashboard, show how
-many bets are still waiting for a result; **Pending bets** in the menu (or a
+many bets are still waiting for a result and what is at risk on them (their
+stakes, added up in one place for the card, the panel, the summary and the
+bankroll alike); **Pending bets** in the menu (or a
 click on the card) opens a panel listing them, oldest first. Each settles in one tap
 (WON / LOST / PUSH / VOID — the result is worked out from the stake and odds),
 and a bet whose date has passed is flagged so it is not forgotten. Settling

@@ -1,7 +1,7 @@
-import { lazy, Suspense, useMemo, useState, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useMemo, useState, type ReactNode } from 'react'
 import type { BankrollMove, Bet } from '../../../shared/types'
 import { bankrollSeries, type Bankroll } from '../lib/bankroll'
-import { loadChartView, saveChartView, type ChartView } from '../lib/chartView'
+import { loadChartView, saveChartView, withOpening, type ChartPoint, type ChartView } from '../lib/chartView'
 import { currentMonth, daysInMonth, monthLabel, monthPrefix, pad2, sameMonth, todayStr, type MonthKey } from '../lib/dates'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
@@ -12,6 +12,28 @@ import { cumulativeSeries, forMonth, groupByDay, type Summary } from '../lib/sta
 // not at startup, lets the dashboard paint before the library is downloaded;
 // the card shows its empty state in the meantime.
 const BalanceChartInner = lazy(() => import('./BalanceChartInner'))
+
+/**
+ * The chart's chunk is the one thing the dashboard has to fetch after it
+ * has painted from the device's copy, and a first run offline can't: the
+ * lazy import rejects, and an error nobody catches would unmount the whole
+ * app. Caught here, the card says the chart loads the next time the app
+ * opens with a connection, and the rest of the dashboard stands. No retry in
+ * place: the browser remembers the module URL that failed and rejects it
+ * again without asking the network, so the chunk comes with the next load
+ * (the installed app's service worker keeps it from then on).
+ */
+class ChartBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
 
 interface Props {
   bets: Bet[]
@@ -63,16 +85,20 @@ export default function BalanceChart({ bets, lifetime, rangeName, range, ym, ban
     return bankrollSeries(bets, moves, bankroll.start, bounds)
   }, [view, bankroll, effective, ym, range, bets, moves])
 
-  // Units are drawn as units, so the axis ticks land on whole units.
-  const data = useMemo(() => {
+  // Units are drawn as units, so the axis ticks land on whole units. The P/L
+  // curve opens at 0 the day before its first point (withOpening), as the
+  // bankroll series does, so one settled day already draws.
+  const data = useMemo<ChartPoint[]>(() => {
     const k = money.scale
     if (view === 'bankroll') return bankrollPoints.map((p) => ({ ...p, balance: k(p.balance), dayTotal: k(p.dayTotal), moved: k(p.moved), funded: k(p.funded) }))
     const points = effective === 'all' ? lifetime.series : monthSeries
-    return points.map((p) => ({ ...p, balance: k(p.balance), dayTotal: k(p.dayTotal) }))
+    return withOpening(points).map((p) => ({ ...p, balance: k(p.balance), dayTotal: k(p.dayTotal) }))
   }, [money, view, bankrollPoints, effective, lifetime.series, monthSeries])
 
   const ahead = view !== 'bankroll' || bankrollPoints.length === 0 || bankrollPoints[bankrollPoints.length - 1].balance >= bankrollPoints[bankrollPoints.length - 1].funded
 
+  // Nothing to draw: say which it is. With a range chosen and no bet in it,
+  // the range; with no settled bet at all, where the curve will start from.
   let empty: ReactNode = null
   if (view === 'bankroll' && !bankroll.known) {
     empty =
@@ -86,8 +112,15 @@ export default function BalanceChart({ bets, lifetime, rangeName, range, ym, ban
       ) : (
         <div className="chart-empty">{t('chart.loadingBankroll')}</div>
       )
-  } else if (data.length < 2) {
-    const text = view === 'bankroll' ? t('chart.shortBankroll') : effective === 'month' ? t('chart.emptyMonth', { month: monthLabel(ym) }) : t('chart.emptyAll')
+  } else if (data.length === 0) {
+    const text =
+      view === 'bankroll'
+        ? t('chart.shortBankroll')
+        : effective === 'month'
+          ? t('chart.emptyMonth', { month: monthLabel(ym) })
+          : rangeName !== null && lifetime.bets === 0 && bets.length > 0
+            ? t('hero.noBetsRange')
+            : t('chart.emptyAll')
     empty = <div className="chart-empty">{text}</div>
   }
 
@@ -124,9 +157,11 @@ export default function BalanceChart({ bets, lifetime, rangeName, range, ym, ban
       {empty ?? (
         <>
           <div className="chart-wrap">
-            <Suspense fallback={<div className="chart-empty chart-loading">{t('chart.loading')}</div>}>
-              <BalanceChartInner mode={view} data={data} />
-            </Suspense>
+            <ChartBoundary fallback={<div className="chart-empty chart-offline">{t('chart.offline')}</div>}>
+              <Suspense fallback={<div className="chart-empty chart-loading">{t('chart.loading')}</div>}>
+                <BalanceChartInner mode={view} data={data} />
+              </Suspense>
+            </ChartBoundary>
           </div>
           {view === 'bankroll' && (
             <ul className="chart-legend">

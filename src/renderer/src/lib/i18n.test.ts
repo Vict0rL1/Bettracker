@@ -45,4 +45,17 @@ describe('tn', () => {
     expect(tn('bet', 1)).toBe('1 apuesta')
     expect(tn('freeBet', 2)).toBe('2 apuestas gratis')
   })
+
+  it('counts pending bets and winning or losing days in the singular too', () => {
+    expect(tn('pending', 1)).toBe('1 pending')
+    expect(tn('pending', 2)).toBe('2 pending')
+    expect(tn('winningDay', 1)).toBe('1 winning day')
+    expect(tn('losingDay', 3)).toBe('3 losing days')
+    setLang('es')
+    expect(tn('pending', 1)).toBe('1 pendiente')
+    expect(tn('pending', 2)).toBe('2 pendientes')
+    expect(tn('winningDay', 1)).toBe('1 día ganador')
+    expect(tn('winningDay', 9)).toBe('9 días ganadores')
+    expect(tn('losingDay', 1)).toBe('1 día perdedor')
+  })
 })

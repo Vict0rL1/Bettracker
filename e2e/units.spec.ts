@@ -12,7 +12,8 @@ test.describe('units', () => {
     await expect(lifetime.locator('.life-value')).toHaveText('+9.00u')
     // Hovering the figure gives the exact dollars.
     await expect(lifetime.locator('.life-value')).toHaveAttribute('title', '+$180.00')
-    await expect(page.locator('.roi-card .stat-sub')).toContainText('-1.00u on 5.5u staked · 2 of 3 bets with a stake')
+    // The average stake (55 dollars) sits in the same line, in units too.
+    await expect(page.locator('.roi-card .stat-sub')).toContainText('-1.00u on 5.5u staked · avg 2.75u · 2 of 3 bets with a stake')
     // Newest first: the +$30 bet.
     await expect(page.locator('.history-card tbody tr').first().locator('.td-amt')).toHaveText('+1.50u')
     await expect(page.locator('.history-card tbody tr').first().locator('.td-stake:not(.td-odds)')).toHaveText('3u')

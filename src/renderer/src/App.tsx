@@ -82,7 +82,7 @@ import { planImport } from './lib/importPlan'
 import { newId } from './lib/uuid'
 import { downloadBackup, makeBackup, planRestore, settingsChange } from './lib/backup'
 import { useSettings, type SettingsOutcomeEvent } from './data/useSettings'
-import { bankrollNow, firstBetDate } from './lib/bankroll'
+import { bankrollNow } from './lib/bankroll'
 import { retagPlan, settlePlan, toInput, type TagPatch } from './lib/bulk'
 import { downloadCsv } from './lib/csv'
 import { moneyFormat } from './lib/format'
@@ -796,7 +796,7 @@ export default function App() {
   // What the Bankroll dialog's changes wait for, judged per queue: a
   // migration for the queue it holds back, the connection for the rest. A
   // change simply on its way says nothing.
-  const firstBet = useMemo(() => firstBetDate(bets ?? []), [bets])
+  const firstBet = bankroll.firstBetDate
   const movesWaiting = moves.queuedCount > 0
   const bankrollSyncNote =
     (movesWaiting && moves.blocked) || (settingsDirty && settingsBlocked)
@@ -1407,6 +1407,7 @@ export default function App() {
             <KeyStats
               lifetime={scoped}
               rangeName={rangeName}
+              hasBets={shownBets.length > 0}
               bankroll={bankroll}
               offline={isOffline}
               open={openList}

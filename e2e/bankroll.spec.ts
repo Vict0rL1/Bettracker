@@ -185,7 +185,9 @@ test.describe('bankroll', () => {
     await boot(page, { entries: [...SEED, riding], settings: START, moves: [] })
     const mini = page.locator('.bankroll-card')
     await expect(mini.locator('.key-value')).toHaveText('$1,180')
-    await expect(mini.locator('.key-sub')).toHaveText('$40.00 riding')
+    // The bankroll line says what was contributed; what is riding is the pending card's to say.
+    await expect(mini.locator('.key-sub')).toHaveText('$1,000 contributed')
+    await expect(page.locator('.pending-card .key-sub')).toHaveText('$40.00 at risk')
     // Settled as a loss from the pending panel: now it counts.
     await menu(page, '.pending-btn')
     await page.locator('.pend-item .settle-btn.loss').first().click()

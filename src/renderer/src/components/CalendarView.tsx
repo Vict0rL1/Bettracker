@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
 import { daysInMonth, firstWeekday, humanDate, monthLabel, toDateStr, todayStr, type MonthKey } from '../lib/dates'
+import { fmtMoneyCell } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
-import type { DaySummary } from '../lib/stats'
+import { heatOf, heatSizes, type DaySummary } from '../lib/stats'
 
 interface Props {
   ym: MonthKey
@@ -17,27 +18,8 @@ function kindOf(day: DaySummary | undefined): 'win' | 'loss' | 'push' | 'pending
   return day.total > 0 ? 'win' : day.total < 0 ? 'loss' : 'push'
 }
 
-/**
- * How big a day's P/L is next to the month's other decided days, by thirds:
- * 1 the smallest third, 3 the largest. The tint deepens with it, so the big
- * days stand out at a glance. `sizes` is every decided day's |P/L| up to
- * today. Ties share a bucket by their middle rank, so a month of one decided
- * day, or of equal days, sits in the middle rather than reading as all big.
- */
-function heatOf(sizes: readonly number[], total: number): 1 | 2 | 3 {
-  const size = Math.abs(total)
-  let below = 0
-  let upTo = 0
-  for (const s of sizes) {
-    if (s < size) below++
-    if (s <= size) upTo++
-  }
-  const p = (below + upTo) / 2 / sizes.length
-  return p <= 1 / 3 ? 1 : p <= 2 / 3 ? 2 : 3
-}
-
 export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
-  const { t } = useLang()
+  const { t, tn } = useLang()
   const money = useMoney()
   const cells = useMemo<(number | null)[]>(() => {
     const blanks: (number | null)[] = Array.from({ length: firstWeekday(ym) }, () => null)
@@ -47,19 +29,15 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
 
   const today = todayStr()
 
-  // The month's decided days so far (a result, not even), for heatOf. Days
-  // still to come are never tinted, so they don't count.
-  const sizes = useMemo(() => {
-    const out: number[] = []
-    for (let d = 1; d <= daysInMonth(ym); d++) {
-      const date = toDateStr(ym.year, ym.month, d)
-      if (date > today) break
-      const s = dayMap.get(date)
-      if (s && s.scored > 0 && s.total !== 0) out.push(Math.abs(s.total))
-    }
-    return out
-  }, [dayMap, ym, today])
+  // The month's decided days so far, for the tint by size (heatOf).
+  const sizes = useMemo(() => heatSizes(dayMap, ym, today), [dayMap, ym, today])
   const weekdays = t('cal.weekdays').split(',')
+
+  // A cell is about 32px wide on a 320px phone: in dollars, $1,000 and up
+  // read in whole thousands (-$1k), where -$1.2k was clipped to "-$1…". The
+  // exact figure is in the cell's title and in the day dialog. Units keep
+  // their own compact form (a unit amount rarely reaches 1,000).
+  const cell = (n: number): string => (money.unit === null ? fmtMoneyCell(n) : money.compact(n))
 
   return (
     <article className="card calendar-card">
@@ -83,8 +61,8 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
           const parts: string[] = [humanDate(date)]
           if (summary) {
             if (summary.scored > 0) parts.push(summary.total === 0 ? t('cal.pushTip') : money.signed(summary.total))
-            if (summary.count > 1) parts.push(t('cal.betsTip', { n: summary.count }))
-            if (summary.pending > 0) parts.push(t('cal.pendingTip', { n: summary.pending }))
+            if (summary.count > 1) parts.push(tn('bet', summary.count))
+            if (summary.pending > 0) parts.push(tn('pending', summary.pending))
           } else {
             parts.push(t('cal.emptyTip'))
           }
@@ -92,17 +70,11 @@ export default function CalendarView({ ym, dayMap, onDayClick }: Props) {
           const heat = summary && date <= today && (kind === 'win' || kind === 'loss') ? heatOf(sizes, summary.total) : undefined
           return (
             <button type="button" key={date} className={classes} data-heat={heat} title={parts.join(' · ')} onClick={() => onDayClick(date)}>
+              {/* The bet count stays in the title: a badge on every busy day would crowd a 46px cell. */}
               <span className="cal-top">
                 <span className="cal-day">{day}</span>
-                {summary && summary.count > 1 && (
-                  <span className="cal-count" title={t('cal.betsTip', { n: summary.count })}>
-                    {summary.count}
-                  </span>
-                )}
               </span>
-              {summary && summary.scored > 0 && (
-                <span className="cal-amt">{summary.total === 0 ? t('cal.pushCell') : money.compact(summary.total)}</span>
-              )}
+              {summary && summary.scored > 0 && <span className="cal-amt">{summary.total === 0 ? t('cal.pushCell') : cell(summary.total)}</span>}
               {summary && summary.scored === 0 && summary.pending > 0 && <span className="cal-amt">{t('cal.openCell')}</span>}
               {summary && summary.scored > 0 && summary.pending > 0 && <i className="cal-dot" aria-hidden="true" />}
             </button>

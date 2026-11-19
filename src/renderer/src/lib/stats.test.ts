@@ -13,8 +13,11 @@ import {
   forMonth,
   groupByDay,
   isSmallSample,
+  heatOf,
+  heatSizes,
   maxDrawdown,
-  riskedOf,
+  returnPct,
+  riding,
   roi,
   SMALL_SAMPLE,
   strikeRate,
@@ -98,14 +101,43 @@ describe('win/loss counting', () => {
   })
 })
 
-describe('riskedOf', () => {
-  it('is the stake on a won or lost bet and 0 otherwise', () => {
-    expect(riskedOf(bet({ amount: 5, stake: 10 }))).toBe(10)
-    expect(riskedOf(bet({ amount: -10, stake: 10 }))).toBe(10)
-    expect(riskedOf(bet({ amount: 0, stake: 10 }))).toBe(0)
-    expect(riskedOf(bet({ status: 'void', stake: 10 }))).toBe(0)
-    expect(riskedOf(bet({ status: 'pending', stake: 10 }))).toBe(0)
-    expect(riskedOf(bet({ amount: 5 }))).toBe(0)
+describe('riding', () => {
+  it('sums the stakes of the pending bets to the cent, counting the ones with no stake apart', () => {
+    const bets = [
+      bet({ status: 'pending', stake: 0.1 }),
+      bet({ status: 'pending', stake: 0.2 }),
+      bet({ status: 'pending' }),
+      bet({ amount: 50, stake: 100 }),
+      bet({ status: 'void', stake: 30 })
+    ]
+    expect(riding(bets)).toEqual({ staked: 0.3, count: 3, unstaked: 1 })
+  })
+
+  it('is nothing with no pending bets', () => {
+    expect(riding([bet({ amount: 5, stake: 10 })])).toEqual({ staked: 0, count: 0, unstaked: 0 })
+    expect(riding([])).toEqual({ staked: 0, count: 0, unstaked: 0 })
+  })
+
+  it('is what summarize reports as pending', () => {
+    const bets = [bet({ status: 'pending', stake: 25 }), bet({ status: 'pending', stake: 10 }), bet({ amount: 1 })]
+    const s = summarize(bets)
+    expect([s.pendingCount, s.pendingStaked]).toEqual([riding(bets).count, riding(bets).staked])
+  })
+})
+
+describe('returnPct', () => {
+  it('is the result over the stake, as a percentage, for a won or lost bet with a stake', () => {
+    expect(returnPct(bet({ amount: 50, stake: 100 }))).toBe(50)
+    expect(returnPct(bet({ amount: -100, stake: 100 }))).toBe(-100)
+    expect(returnPct(bet({ amount: 91, stake: 100 }))).toBe(91)
+  })
+
+  it('is null for a free bet, a push, a void, a pending bet or a bet with no stake recorded', () => {
+    expect(returnPct(bet({ amount: 25, stake: 0 }))).toBeNull()
+    expect(returnPct(bet({ amount: 0, stake: 10 }))).toBeNull()
+    expect(returnPct(bet({ status: 'void', stake: 10 }))).toBeNull()
+    expect(returnPct(bet({ status: 'pending', stake: 10 }))).toBeNull()
+    expect(returnPct(bet({ amount: 25 }))).toBeNull()
   })
 })
 
@@ -167,6 +199,18 @@ describe('roi', () => {
     const bets = [bet({ amount: 500 }), bet({ amount: -100, stake: 100 })]
     expect(total(bets)).toBe(400)
     expect(roi(bets)?.profit).toBe(-100)
+  })
+
+  it('computes the percentage from the profit rounded to the cent: a P/L of $0.00 is exactly 0%, never float dust', () => {
+    // 45.45 - 50 + 30 - 25.45 is 1.8e-15 in floating point, which read "+0.0%" in green beside "$0.00".
+    const r = roi([45.45, -50, 30, -25.45].map((amount) => bet({ amount, stake: 50 })))
+    expect(r?.profit).toBe(0)
+    expect(r?.pct).toBe(0)
+    expect(r?.staked).toBe(200)
+    // Stakes with cents add up to the cent too, and the percentage follows the rounded pair.
+    const s = roi([bet({ amount: 0.3, stake: 0.1 }), bet({ amount: -0.1, stake: 0.2 })])
+    expect(s).toMatchObject({ profit: 0.2, staked: 0.3 })
+    expect(s?.pct).toBeCloseTo((0.2 / 0.3) * 100, 10)
   })
 })
 
@@ -269,6 +313,38 @@ describe('cumulativeSeries and drawdown', () => {
   it('measures a fall below zero from the starting point', () => {
     const down = groupByDay([bet({ date: '2026-01-01', amount: -40 })])
     expect(maxDrawdown(cumulativeSeries(down))).toBe(40)
+  })
+})
+
+describe('heatSizes and heatOf: a decided day among the month\'s, by thirds', () => {
+  const ym = { year: 2026, month: 2 }
+  const map = (...bets: ReturnType<typeof bet>[]): Map<string, ReturnType<typeof groupByDay>[number]> => new Map(groupByDay(bets).map((d) => [d.date, d]))
+
+  it('takes the |P/L| of every decided day up to today, leaving out break-even, pending-only and future days', () => {
+    const days = map(
+      bet({ date: '2026-03-01', amount: 10 }),
+      bet({ date: '2026-03-02', amount: -300 }),
+      bet({ date: '2026-03-03', amount: 0 }),
+      bet({ date: '2026-03-04', status: 'pending', stake: 5 }),
+      bet({ date: '2026-03-10', amount: 50 }),
+      bet({ date: '2026-03-20', amount: 999 })
+    )
+    expect(heatSizes(days, ym, '2026-03-15')).toEqual([10, 300, 50])
+    expect(heatSizes(days, ym, '2026-03-31')).toEqual([10, 300, 50, 999])
+    expect(heatSizes(days, { year: 2026, month: 3 }, '2026-04-30')).toEqual([])
+  })
+
+  it('ranks by thirds: the smallest third 1, the largest 3', () => {
+    const sizes = [10, 20, 30, 40, 50, 60]
+    expect([10, 20, 30, 40, 50, 60].map((s) => heatOf(sizes, s))).toEqual([1, 1, 2, 2, 3, 3])
+    expect(heatOf(sizes, -60)).toBe(3)
+  })
+
+  it('puts ties, a single day and equal days in the middle, never all big', () => {
+    expect(heatOf([40], 40)).toBe(2)
+    expect(heatOf([25, 25, 25], -25)).toBe(2)
+    // Two equal smallest days share the bottom; the one big day is the top.
+    expect([5, 5, 500].map((s) => heatOf([5, 5, 500], s))).toEqual([1, 1, 3])
   })
 })
 

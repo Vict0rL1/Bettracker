@@ -61,12 +61,15 @@ export function t(key: StringKey, vars?: Vars): string {
   return fill(DICT[current][key], vars)
 }
 
+/** The nouns `tn` counts: each has a `_one` and an `_other` key in both dictionaries. */
+export type CountedNoun = 'bet' | 'day' | 'line' | 'freeBet' | 'change' | 'move' | 'expense' | 'card' | 'budget' | 'pending' | 'winningDay' | 'losingDay'
+
 /**
  * A counted noun: `tn('bet', 3)` → "3 bets" / "3 apuestas". Both languages
  * distinguish one from many the same way, so one/other is all we need; the
  * count is passed as `{n}` so a language could move it.
  */
-export function tn(base: 'bet' | 'day' | 'line' | 'freeBet' | 'change' | 'move' | 'expense' | 'card' | 'budget', n: number, vars?: Vars): string {
+export function tn(base: CountedNoun, n: number, vars?: Vars): string {
   const key = `${base}_${n === 1 ? 'one' : 'other'}` as StringKey
   return fill(DICT[current][key], { n, ...vars })
 }

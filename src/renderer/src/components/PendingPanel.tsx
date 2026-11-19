@@ -6,6 +6,7 @@ import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
 import { formatOdds } from '../lib/odds'
 import type { OpenBet } from '../lib/pending'
+import { riding } from '../lib/stats'
 import { suggestedAmount } from '../lib/validate'
 import { toneOf } from './DayModal'
 import { CloseIcon, PencilIcon } from './icons'
@@ -39,12 +40,13 @@ export default function PendingPanel({ open, oddsFormat, onSettle, onEdit, onClo
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const riding = open.reduce((sum, o) => sum + (o.bet.stake ?? 0), 0)
+  // The same sum the pending card shows (lib/stats riding).
+  const atRisk = riding(open.map((o) => o.bet)).staked
   const pastCount = open.filter((o) => o.past).length
   const sub =
     open.length === 0
       ? t('pend.none')
-      : t('pend.sub', { bets: tn('bet', open.length), amount: money.stake(riding) }) + (pastCount > 0 ? t('pend.pastSuffix', { n: pastCount }) : '')
+      : t('pend.sub', { bets: tn('bet', open.length), amount: money.stake(atRisk) }) + (pastCount > 0 ? t('pend.pastSuffix', { n: pastCount }) : '')
 
   return (
     <div

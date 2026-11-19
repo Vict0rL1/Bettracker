@@ -1,7 +1,11 @@
+import { shiftDays } from './range'
+
 /**
  * What the balance chart draws: the P/L curve (results only, from 0) or the
  * bankroll (the starting bankroll plus deposits, withdrawals and results).
- * Remembered per device, like the range.
+ * Remembered per device, like the range. The chart's arithmetic — which
+ * dates get a label, where the axis starts and ends, the opening point — is
+ * here too, so it can be tested without drawing anything.
  */
 export type ChartView = 'pl' | 'bankroll'
 
@@ -27,6 +31,45 @@ export function saveChartView(view: ChartView): void {
   } catch {
     // Storage unavailable — the choice just won't survive a reload.
   }
+}
+
+/** A point as drawn: values already in the unit shown (dollars, or units). */
+export interface ChartPoint {
+  date: string
+  balance: number
+  dayTotal: number
+  /** Bankroll view only: that day's deposits less withdrawals, and the money put in so far. */
+  moved?: number
+  funded?: number
+  /** The point before the first day shown: the balance carried in (bankroll), or the $0 a P/L curve starts from. */
+  opening?: true
+}
+
+/**
+ * The P/L curve's opening point: $0 the day before the first scored day, as
+ * the bankroll series opens the day before its first point (lib/bankroll.ts).
+ * So one settled day already draws a line, from 0 to its result, instead of
+ * a lone dot and an empty state asking for a second day. Nothing scored:
+ * nothing, so the chart can say so.
+ */
+export function withOpening<T extends { date: string; balance: number; dayTotal: number }>(points: readonly T[]): (T | ChartPoint)[] {
+  if (points.length === 0) return []
+  const opening: ChartPoint = { date: shiftDays(points[0].date, -1), balance: 0, dayTotal: 0, opening: true }
+  return [opening, ...points]
+}
+
+/**
+ * Which dates get an x-axis label: up to `count` of them, spread evenly from
+ * the first point to the last (both always labelled), never the same date
+ * twice. Recharts spaces the rest.
+ */
+export function xTicks(data: readonly { date: string }[], count = 5): string[] {
+  if (data.length === 0) return []
+  const n = Math.min(count, data.length)
+  if (n === 1) return [data[0].date]
+  const idx = new Set<number>()
+  for (let i = 0; i < n; i++) idx.add(Math.round((i * (data.length - 1)) / (n - 1)))
+  return [...idx].map((i) => data[i].date)
 }
 
 /**
@@ -67,4 +110,25 @@ export function bankrollAxis(min: number, max: number, units: boolean): { lo: nu
   const fine = units ? 0.01 : 1
   const scale = niceScale(min, max, Math.max(Math.abs(min), Math.abs(max)) >= 1000 ? 100 : fine)
   return Math.max(Math.abs(scale.lo), Math.abs(scale.hi)) >= 1000 ? niceScale(min, max, 100) : scale
+}
+
+export interface YAxis {
+  domain: [number, number]
+  ticks: number[]
+  /** Whether to draw the zero line: always for P/L, for a bankroll only when it crosses zero. */
+  zero: boolean
+}
+
+/**
+ * The y axis of either view, on the same round ticks (bankrollAxis). P/L
+ * always includes zero, the line it is measured from; a bankroll is fitted
+ * to its own range (the balance and the money put in) and shows zero only
+ * when it gets there. A flat series — every point 0, or one point — still
+ * gets a domain with room in it, never [0, 0], which would draw nothing.
+ */
+export function yAxisFor(mode: ChartView, data: readonly ChartPoint[], units: boolean): YAxis {
+  if (data.length === 0) return { domain: [0, 1], ticks: [0, 1], zero: true }
+  const values = mode === 'bankroll' ? data.flatMap((p) => [p.balance, p.funded ?? p.balance]) : [0, ...data.map((p) => p.balance)]
+  const { lo, hi, ticks } = bankrollAxis(Math.min(...values), Math.max(...values), units)
+  return { domain: [lo, hi], ticks, zero: mode === 'pl' || (lo <= 0 && hi >= 0) }
 }

@@ -35,6 +35,18 @@ export function fmtMoneyCompact(n: number): string {
   return sign + body
 }
 
+/**
+ * A calendar cell's amount: fmtMoneyCompact under $1,000, and whole thousands
+ * from there up (+$12k, -$1k, never -$1.2k). A cell is about 32px wide on a
+ * 320px phone, where "-$1.2k" clipped to "-$1…"; the exact figure is in the
+ * cell's title and one tap away in the day dialog.
+ */
+export function fmtMoneyCell(n: number): string {
+  const a = Math.abs(n)
+  if (a < 1000) return fmtMoneyCompact(n)
+  return `${n < 0 ? '-' : '+'}$${Math.round(a / 1000)}k`
+}
+
 /** Axis ticks: unsigned-compact with natural minus. */
 export function axisMoney(n: number): string {
   const a = Math.abs(n)
@@ -47,13 +59,12 @@ export const fmtPct = (n: number): string => `${Math.round(n)}%`
 
 /**
  * Signed percentage for ROI, to one decimal — a bettor's edge lives in tenths
- * of a point, so rounding to whole percent throws away the signal.
+ * of a point, so rounding to whole percent throws away the signal. The sign
+ * goes on the rounded figure: 1e-15 (float dust) and -0.04 both read "0.0%",
+ * never "+0.0%" or "-0.0%".
  */
 export function fmtPctSigned(n: number): string {
-  const body = `${Math.abs(n).toFixed(1)}%`
-  if (n > 0) return `+${body}`
-  if (n < 0) return `-${body}`
-  return body
+  return `${withSign(n, `${Math.abs(n).toFixed(1)}`, true)}%`
 }
 
 /** Unsigned money for "amount staked" style figures: $1,240 (no cents past $1k). */

@@ -3,6 +3,7 @@ import type { BankrollMove, Bet, BetStatus } from '../../../shared/types'
 import { bet } from '../test-utils'
 import { bankrollNow, bankrollSeries, firstBetDate, moveHints, stakeNote, stakeNoteApplies, STAKE_WARN_RATIO, type Bankroll } from './bankroll'
 import { shiftDays } from './range'
+import { riding } from './stats'
 
 let seq = 0
 
@@ -28,14 +29,20 @@ function known(b: Bankroll): Extract<Bankroll, { known: true }> {
 
 describe('bankrollNow', () => {
   it('is loading until the moves and the settings have both been loaded', () => {
-    expect(bankrollNow([], null, 1000)).toEqual({ known: false, reason: 'loading' })
-    expect(bankrollNow([], [move()], undefined)).toEqual({ known: false, reason: 'loading' })
-    expect(bankrollNow([], null, undefined)).toEqual({ known: false, reason: 'loading' })
+    expect(bankrollNow([], null, 1000)).toEqual({ known: false, reason: 'loading', firstBetDate: null })
+    expect(bankrollNow([], [move()], undefined)).toEqual({ known: false, reason: 'loading', firstBetDate: null })
+    expect(bankrollNow([], null, undefined)).toEqual({ known: false, reason: 'loading', firstBetDate: null })
   })
 
   it('is unset with no starting bankroll and no moves, whatever the bets', () => {
-    expect(bankrollNow([], [], null)).toEqual({ known: false, reason: 'unset' })
-    expect(bankrollNow([bet({ amount: 50 })], [], null)).toEqual({ known: false, reason: 'unset' })
+    expect(bankrollNow([], [], null)).toEqual({ known: false, reason: 'unset', firstBetDate: null })
+    expect(bankrollNow([bet({ amount: 50 })], [], null)).toEqual({ known: false, reason: 'unset', firstBetDate: '2026-01-01' })
+  })
+
+  it('knows the first bet date even while it is not known itself: the dialog that sets it up needs the hint', () => {
+    const bets = [bet({ date: '2026-03-04', amount: 5 }), bet({ date: '2026-02-01', status: 'pending' })]
+    expect(bankrollNow(bets, null, undefined).firstBetDate).toBe('2026-02-01')
+    expect(bankrollNow(bets, [], null).firstBetDate).toBe('2026-02-01')
   })
 
   it('a starting bankroll with no moves is the start plus settled results', () => {
@@ -69,6 +76,13 @@ describe('bankrollNow', () => {
 
   it('counts a move dated in the future already', () => {
     expect(known(bankrollNow([], [move({ date: '2099-01-01', amount: -40 })], 100)).current).toBe(60)
+  })
+
+  it('what is riding is the same sum the pending card shows (riding in lib/stats), to the cent', () => {
+    const bets = [bet({ status: 'pending', stake: 0.1 }), bet({ status: 'pending', stake: 0.2 }), bet({ status: 'pending' })]
+    const b = known(bankrollNow(bets, [], 100))
+    expect(b).toMatchObject({ inPlay: 0.3, inPlayCount: 3, unstakedPending: 1 })
+    expect(b.inPlay).toBe(riding(bets).staked)
   })
 
   it('adds settled results only: pending adds nothing, push and void add 0, a free bet its win', () => {
@@ -133,6 +147,17 @@ describe('bankrollSeries', () => {
   it('puts a bet and a move on the same day in one point', () => {
     const series = bankrollSeries([bet({ date: '2026-03-01', amount: -40 })], [move({ date: '2026-03-01', amount: 200 })], 0)
     expect(series[1]).toEqual({ date: '2026-03-01', balance: 160, dayTotal: -40, moved: 200, funded: 200 })
+  })
+
+  it('nets two opposite moves on one day into one point that moved 0 (as it is today: no dot for that day, the money put in unchanged)', () => {
+    const sameDay = [move({ date: '2026-03-01', amount: 200 }), move({ date: '2026-03-01', amount: -200 })]
+    const series = bankrollSeries([bet({ date: '2026-03-01', amount: -40 })], sameDay, 1000)
+    expect(series).toEqual([
+      { date: '2026-02-28', balance: 1000, dayTotal: 0, moved: 0, funded: 1000, opening: true },
+      { date: '2026-03-01', balance: 960, dayTotal: -40, moved: 0, funded: 1000 }
+    ])
+    // A deposit and a smaller withdrawal the same day keep their net.
+    expect(bankrollSeries([], [move({ date: '2026-03-01', amount: 200 }), move({ date: '2026-03-01', amount: -50 })], 0)[1]).toMatchObject({ moved: 150, funded: 150 })
   })
 
   it('clips to the bounds, opening the day before `from` with everything earlier', () => {
@@ -353,7 +378,7 @@ describe('moveHints', () => {
     expect(moveHints({ date: '2026-03-01', amount: -500 }, moves, bankrollNow(bets, moves, 100))).toEqual(['duplicate', 'belowZero'])
     const early = [move({ id: 'd1', date: '2026-02-01', amount: 300 })]
     expect(moveHints({ date: '2026-02-01', amount: 300 }, early, bankrollNow(bets, early, 1000))).toEqual(['duplicate', 'beforeStart'])
-    const loading: Bankroll = { known: false, reason: 'loading' }
+    const loading: Bankroll = { known: false, reason: 'loading', firstBetDate: null }
     expect(moveHints({ date: '2026-03-01', amount: -5000 }, moves, loading)).toEqual([])
     expect(moveHints({ date: '2026-03-01', amount: -500 }, moves, loading)).toEqual(['duplicate'])
   })

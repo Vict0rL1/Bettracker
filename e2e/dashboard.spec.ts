@@ -47,12 +47,15 @@ test.describe('the dashboard', () => {
     await boot(page, { entries: [...SEED, open], settings: { startingBankroll: 1000 }, moves: [] })
     const key = page.locator('.key-stats')
     await expect(key.locator('.pl-card .stat-label')).toHaveText('Lifetime P/L')
-    await expect(key.locator('.bankroll-card .scope-tag')).toHaveText('All dates')
+    // With all time every card covers the same dates, so none says so, and the range's note is for the screen reader only.
+    await expect(key.locator('.scope-tag')).toHaveCount(0)
+    await expect(page.locator('.range-bar .scope-note')).toHaveClass(/visually-hidden/)
     await expect(key.locator('.pending-card .key-value')).toHaveText('1')
     await expect(key.locator('.pending-card .key-sub')).toContainText('$40.00 at risk')
 
     await page.locator('.range-bar .scope-btn', { hasText: 'This year' }).click()
     await expect(page.locator('.range-bar .scope-note')).toContainText('Bankroll, pending bets, the calendar, the month card and the history cover all dates.')
+    await expect(page.locator('.range-bar .scope-note')).not.toHaveClass(/visually-hidden/)
     await expect(page.locator('.roi-card .scope-tag')).toHaveText('This year')
     // The bankroll and pending bets do not follow the range.
     await expect(key.locator('.bankroll-card .scope-tag')).toHaveText('All dates')
@@ -80,7 +83,7 @@ test.describe('the dashboard', () => {
     await expect(page.locator('.mini-implied .mini-sub')).toHaveText('implied by the odds of 2 settled bets')
     // Days: Aug 1 is a winning day although it holds a lost bet.
     await expect(page.locator('.mini-days .stat-label')).toHaveText('Winning days')
-    await expect(page.locator('.mini-days .mini-sub')).toHaveText('1 winning, 1 losing days')
+    await expect(page.locator('.mini-days .mini-sub')).toHaveText('1 winning day, 1 losing day')
 
     await reload(page)
     await expect(page.locator('.advanced-toggle')).toHaveAttribute('aria-expanded', 'true')
