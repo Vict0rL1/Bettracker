@@ -44,6 +44,10 @@ const parse = (over: Record<string, unknown> = {}) => parseExtractRequest(JSON.s
 const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   date: '2026-11-16',
   amount: 4.5,
+  currencyBasis: 'code',
+  currency: 'EUR',
+  chargedAmount: null,
+  chargedCurrency: null,
   merchant: 'Café Central',
   category: 'coffee',
   cardLast4: '1234',
@@ -54,6 +58,12 @@ const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   ...over
 })
 const answer = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ kind: 'receipt', currency: 'EUR', expenses: [row()], warnings: [], ...over })
+/** A row as a function from before the per-expense currency answered it: none of the four currency fields. */
+const oldRow = (over: Record<string, unknown> = {}): Record<string, unknown> => {
+  const r = row()
+  for (const k of ['currency', 'currencyBasis', 'chargedAmount', 'chargedCurrency']) delete r[k]
+  return { ...r, ...over }
+}
 const CTX = { today: '2026-11-17', lang: 'en' as const }
 
 describe('the module stands alone (renderer, vitest and the Edge Function load the same file)', () => {
@@ -71,20 +81,21 @@ describe('the module stands alone (renderer, vitest and the Edge Function load t
 describe('EXTRACTION_SCHEMA', () => {
   const FORBIDDEN = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'pattern', 'multipleOf']
 
-  /** Every object schema in the tree, and every key used anywhere. */
-  function walk(node: unknown, objects: Record<string, unknown>[], keys: Set<string>): void {
-    if (Array.isArray(node)) return node.forEach((n) => walk(n, objects, keys))
+  /** Every object schema in the tree, every key used anywhere, and every `type` given. */
+  function walk(node: unknown, objects: Record<string, unknown>[], keys: Set<string>, types: unknown[] = []): void {
+    if (Array.isArray(node)) return node.forEach((n) => walk(n, objects, keys, types))
     if (typeof node !== 'object' || node === null) return
     const o = node as Record<string, unknown>
     if (o.type === 'object') objects.push(o)
+    if ('type' in o) types.push(o.type)
     for (const [k, v] of Object.entries(o)) {
       // Property names are data, not keywords.
       if (k === 'properties') {
-        for (const child of Object.values(v as Record<string, unknown>)) walk(child, objects, keys)
+        for (const child of Object.values(v as Record<string, unknown>)) walk(child, objects, keys, types)
         continue
       }
       keys.add(k)
-      walk(v, objects, keys)
+      walk(v, objects, keys, types)
     }
   }
 
@@ -104,8 +115,30 @@ describe('EXTRACTION_SCHEMA', () => {
     for (const k of FORBIDDEN) expect(keys.has(k), k).toBe(false)
   })
 
+  it('makes a value nullable with anyOf and null, never with a list of types', () => {
+    const types: unknown[] = []
+    walk(EXTRACTION_SCHEMA, [], new Set(), types)
+    expect(types.length).toBeGreaterThan(10)
+    for (const t of types) expect(typeof t, JSON.stringify(t)).toBe('string')
+    const props = EXTRACTION_SCHEMA.properties.expenses.items.properties
+    for (const nullable of [props.currency, props.chargedAmount, props.chargedCurrency, EXTRACTION_SCHEMA.properties.currency]) {
+      expect(nullable.anyOf).toContainEqual({ type: 'null' })
+      expect(nullable.anyOf).toHaveLength(2)
+    }
+  })
+
   it('offers exactly the app’s categories', () => {
     expect(EXTRACTION_SCHEMA.properties.expenses.items.properties.category.enum).toEqual([...EXPENSE_CATEGORIES])
+  })
+
+  it('has each expense’s currency, how the image shows it, and what the card was charged', () => {
+    const props = EXTRACTION_SCHEMA.properties.expenses.items.properties
+    expect(props.currencyBasis).toEqual({ type: 'string', enum: ['code', 'place', 'none'] })
+    expect(props.chargedAmount.anyOf).toContainEqual({ type: 'number' })
+    // The evidence right after the amount, before the code it settles; the picture's one currency after the rows.
+    const rowKeys = Object.keys(props)
+    expect(rowKeys.slice(rowKeys.indexOf('amount'), rowKeys.indexOf('amount') + 5)).toEqual(['amount', 'currencyBasis', 'currency', 'chargedAmount', 'chargedCurrency'])
+    expect(Object.keys(EXTRACTION_SCHEMA.properties)).toEqual(['kind', 'expenses', 'currency', 'warnings'])
   })
 })
 
@@ -121,13 +154,27 @@ describe('EXTRACTION_SYSTEM', () => {
     'bare "$"',
     'printed text only',
     'Daily Cash',
-    'negative amount'
+    'negative amount',
+    // The currency of each expense.
+    'can mix currencies',
+    'never carry one row\'s currency over',
+    'Never assume the user\'s currency',
+    'A mark like these comes first',
+    'Only evidence printed in this image counts',
+    'currencyBasis "none"',
+    'Never work a charged amount out from a rate, and never invent one'
   ])('says: %s', (words) => {
     expect(EXTRACTION_SYSTEM).toContain(words)
   })
 
   it('lists every category key', () => {
     for (const c of EXPENSE_CATEGORIES) expect(EXTRACTION_SYSTEM).toContain(`- ${c}: `)
+  })
+
+  it('names every field the schema asks for', () => {
+    for (const k of [...Object.keys(EXTRACTION_SCHEMA.properties), ...Object.keys(EXTRACTION_SCHEMA.properties.expenses.items.properties)]) {
+      expect(EXTRACTION_SYSTEM, k).toMatch(new RegExp(`\\b${k}\\b`))
+    }
   })
 })
 
@@ -317,12 +364,14 @@ describe('cleanModelText', () => {
 })
 
 describe('normalizeExtraction', () => {
+  const ROW = { date: '2026-11-16', amount: 4.5, merchant: 'Café Central', category: 'coffee', cardLast4: '1234', cardHint: null, note: '', pending: false, confidence: 'high' }
+
   it('passes a good answer through', () => {
     expect(normalizeExtraction(answer(), CTX)).toEqual({
       kind: 'receipt',
       currency: 'EUR',
       warnings: [],
-      expenses: [{ date: '2026-11-16', amount: 4.5, merchant: 'Café Central', category: 'coffee', cardLast4: '1234', cardHint: null, note: '', pending: false, confidence: 'high' }]
+      expenses: [{ ...ROW, currency: 'EUR', currencyBasis: 'code', chargedAmount: null, chargedCurrency: null }]
     })
   })
 
@@ -336,9 +385,108 @@ describe('normalizeExtraction', () => {
 
   it('reads an unknown kind as other, and the currency in capitals or not at all', () => {
     expect(normalizeExtraction(answer({ kind: 'photo' }), CTX)?.kind).toBe('other')
-    expect(normalizeExtraction(answer({ currency: 'usd' }), CTX)?.currency).toBe('USD')
-    expect(normalizeExtraction(answer({ currency: 'dollars' }), CTX)?.currency).toBeNull()
-    expect(normalizeExtraction(answer({ currency: 7 }), CTX)?.currency).toBeNull()
+    const currency = (r: Record<string, unknown>) => normalizeExtraction(answer({ expenses: [row(r)] }), CTX)?.expenses[0].currency
+    expect(currency({ currency: 'usd' })).toBe('USD')
+    expect(currency({ currency: ' cad ' })).toBe('CAD')
+    expect(currency({ currency: 'dollars' })).toBeNull()
+    expect(currency({ currency: 7 })).toBeNull()
+    // The same in an answer from before the per-expense currency, which has only the picture's.
+    expect(normalizeExtraction(answer({ currency: 'usd', expenses: [oldRow()] }), CTX)?.currency).toBe('USD')
+    expect(normalizeExtraction(answer({ currency: 'dollars', expenses: [oldRow()] }), CTX)?.currency).toBeNull()
+    expect(normalizeExtraction(answer({ currency: 7, expenses: [oldRow()] }), CTX)?.currency).toBeNull()
+  })
+
+  describe('the currency of each expense', () => {
+    const one = (r: Record<string, unknown>, over: Record<string, unknown> = {}) => normalizeExtraction(answer({ expenses: [row(r)], ...over }), CTX)?.expenses[0]
+
+    it('a code with how the image shows it: an explicit mark, or the place a bare "$" was paid in', () => {
+      expect(one({ currencyBasis: 'code', currency: 'USD' })).toMatchObject({ currency: 'USD', currencyBasis: 'code' })
+      expect(one({ currencyBasis: 'place', currency: 'usd' })).toMatchObject({ currency: 'USD', currencyBasis: 'place' })
+    })
+
+    it('nothing settles it: no code, whatever the model wrote next to "none"', () => {
+      expect(one({ currencyBasis: 'none', currency: null })).toMatchObject({ currency: null, currencyBasis: 'none' })
+      expect(one({ currencyBasis: 'none', currency: 'USD' })).toMatchObject({ currency: null, currencyBasis: 'none' })
+    })
+
+    it('a basis without a code, or a code without a basis it knows, is not read', () => {
+      expect(one({ currencyBasis: 'code', currency: null })).toMatchObject({ currency: null, currencyBasis: 'none' })
+      expect(one({ currencyBasis: 'code', currency: 'dollars' })).toMatchObject({ currency: null, currencyBasis: 'none' })
+      expect(one({ currencyBasis: 'guess', currency: 'USD' })).toMatchObject({ currency: null, currencyBasis: 'none' })
+      expect(one({ currencyBasis: undefined, currency: 'USD' })).toMatchObject({ currency: null, currencyBasis: 'none' })
+    })
+
+    it('what the card was charged: its number to the cent and its code, signed as the row', () => {
+      expect(one({ currency: 'USD', chargedAmount: 16.945, chargedCurrency: 'cad' })).toMatchObject({ amount: 4.5, chargedAmount: 16.95, chargedCurrency: 'CAD' })
+      // A refund's charge is a refund too, however the model signed it.
+      expect(one({ amount: -12, currency: 'USD', chargedAmount: 16.95, chargedCurrency: 'CAD' })).toMatchObject({ amount: -12, chargedAmount: -16.95 })
+      expect(one({ amount: -12, currency: 'USD', chargedAmount: -16.95, chargedCurrency: 'CAD' })).toMatchObject({ chargedAmount: -16.95 })
+      // Read even when the row's own currency isn't: the charge says what it came to.
+      expect(one({ currencyBasis: 'none', currency: null, chargedAmount: 16.95, chargedCurrency: 'CAD' })).toMatchObject({ currency: null, chargedAmount: 16.95, chargedCurrency: 'CAD' })
+    })
+
+    it.each<[string, Record<string, unknown>]>([
+      ['no number', { chargedAmount: null, chargedCurrency: 'CAD' }],
+      ['a number as text', { chargedAmount: '16.95', chargedCurrency: 'CAD' }],
+      ['0', { chargedAmount: 0, chargedCurrency: 'CAD' }],
+      ['less than a cent', { chargedAmount: 0.004, chargedCurrency: 'CAD' }],
+      ['past the cap', { chargedAmount: 1e9, chargedCurrency: 'CAD' }],
+      ['not a number', { chargedAmount: NaN, chargedCurrency: 'CAD' }],
+      ['no code', { chargedAmount: 16.95, chargedCurrency: null }],
+      ['a code that is none', { chargedAmount: 16.95, chargedCurrency: 'dollars' }],
+      ['the row’s own currency (nothing to convert)', { chargedAmount: 16.95, chargedCurrency: 'USD' }]
+    ])('no charged amount for %s', (_name, charged) => {
+      expect(one({ currency: 'USD', ...charged })).toMatchObject({ currency: 'USD', chargedAmount: null, chargedCurrency: null })
+    })
+
+    it('the picture’s one currency is what every row shares, whatever the answer says', () => {
+      const top = (rows: Record<string, unknown>[], currency: unknown = 'EUR') => normalizeExtraction(answer({ currency, expenses: rows }), CTX)?.currency
+      expect(top([row({ currency: 'USD' }), row({ currency: 'usd' })], null)).toBe('USD')
+      // A Wallet list in two currencies, or with a row that doesn't say: none for the picture.
+      expect(top([row({ currency: 'USD' }), row({ currency: 'CAD' })], 'USD')).toBeNull()
+      expect(top([row({ currency: 'USD' }), row({ currencyBasis: 'none', currency: null })], 'USD')).toBeNull()
+      expect(top([row({ currencyBasis: 'none', currency: null })], 'USD')).toBeNull()
+      // A dropped row has no say.
+      expect(top([row({ currency: 'USD' }), row({ currency: 'CAD', amount: 0 })], null)).toBe('USD')
+      // No row left: what the answer said.
+      expect(top([], 'usd')).toBe('USD')
+      expect(top([row({ amount: 0 })], 'usd')).toBe('USD')
+    })
+
+    it('an answer from a function older than this: every row in the picture’s one currency, as the app read it then', () => {
+      const out = normalizeExtraction(answer({ currency: 'USD', expenses: [oldRow(), oldRow({ amount: 9 })] }), CTX)
+      expect(out?.currency).toBe('USD')
+      expect(out?.expenses).toEqual([
+        { ...ROW, currency: 'USD', currencyBasis: 'code', chargedAmount: null, chargedCurrency: null },
+        { ...ROW, amount: 9, currency: 'USD', currencyBasis: 'code', chargedAmount: null, chargedCurrency: null }
+      ])
+      // A bare "$" then: no row's currency is read.
+      const bare = normalizeExtraction(answer({ currency: null, expenses: [oldRow()] }), CTX)
+      expect(bare?.currency).toBeNull()
+      expect(bare?.expenses[0]).toMatchObject({ currency: null, currencyBasis: 'none', chargedAmount: null, chargedCurrency: null })
+      // A row that isn't one is no sign of a newer answer.
+      expect(normalizeExtraction(answer({ currency: 'USD', expenses: ['nonsense', oldRow()] }), CTX)?.expenses[0].currency).toBe('USD')
+    })
+
+    it('reads its own output the same: the function and then the app check each answer', () => {
+      for (const raw of [
+        answer({ expenses: [row({ currency: 'USD', chargedAmount: 16.95, chargedCurrency: 'CAD' }), row({ amount: -3, currencyBasis: 'place', currency: 'CAD' }), row({ currencyBasis: 'none', currency: null })] }),
+        answer({ currency: 'USD', expenses: [oldRow(), oldRow({ amount: -2 })] }),
+        answer({ currency: null, expenses: [oldRow()] })
+      ]) {
+        const once = normalizeExtraction(raw, CTX)
+        expect(normalizeExtraction(once, CTX)).toEqual(once)
+      }
+    })
+
+    it('a newer answer is read row by row, even where a row has only one of the two fields', () => {
+      const out = normalizeExtraction(answer({ currency: 'USD', expenses: [oldRow(), oldRow({ currency: 'CAD' })] }), CTX)
+      expect(out?.expenses.map((e) => [e.currency, e.currencyBasis])).toEqual([
+        [null, 'none'],
+        [null, 'none']
+      ])
+      expect(out?.currency).toBeNull()
+    })
   })
 
   it('drops amounts of 0 or past the cap, and says so once in the user’s language', () => {

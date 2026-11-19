@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fxInput, fxView, mainDigits, NO_ORIGINAL, parseRateText, rateBoxText, settledFx, type FxAuto, type FxStored } from './expenseFx'
+import { chargedFx, fxInput, fxView, mainDigits, NO_ORIGINAL, parseRateText, rateBoxText, rateKey, settledFx, type FxAuto, type FxStored } from './expenseFx'
 import { normalizeExpense } from './validate'
 
 const ecb: FxAuto = { rate: 1.4034, asOf: '2026-11-13', source: 'service' }
@@ -183,6 +183,23 @@ describe('fxView — the two boxes and what they come to', () => {
     })
   })
 
+  describe('what a scanned picture says the card was charged in the main currency', () => {
+    const charged = chargedFx({ amount: 16.95, currency: 'CAD', paid: 12 }, 'CAD') as FxStored
+
+    it('is the converted amount as charged, with the rate behind it', () => {
+      expect(view({ charged })).toMatchObject({ rateText: '1.4125', convertedText: '16.95', rate: 1.4125, converted: 16.95, origin: { how: 'charged' } })
+    })
+
+    it('a new amount paid is converted at that rate', () => {
+      expect(view({ charged, amount: 20 })).toMatchObject({ rate: 1.4125, converted: 28.25, origin: { how: 'charged' } })
+    })
+
+    it('comes before a fetched rate and the rate typed for all rows, and after what the user typed', () => {
+      expect(view({ charged, auto: ecb, all: 1.5 })).toMatchObject({ rate: 1.4125, converted: 16.95 })
+      expect(view({ charged, typed: { lead: 'converted', text: '17' } })).toMatchObject({ converted: 17, origin: { how: 'typed' } })
+    })
+  })
+
   it('settledFx: a box left empty is no longer typed in; anything else stays', () => {
     expect(settledFx({ lead: 'rate', text: '' })).toBeNull()
     expect(settledFx({ lead: 'converted', text: '  ' })).toBeNull()
@@ -191,6 +208,26 @@ describe('fxView — the two boxes and what they come to', () => {
     expect(settledFx(typed)).toBe(typed)
     const bad = { lead: 'rate' as const, text: 'abc' }
     expect(settledFx(bad)).toBe(bad)
+  })
+})
+
+describe('chargedFx — what the card was charged, as a rate', () => {
+  it('charged in the main currency: that amount, and converted ÷ paid to 8 decimals', () => {
+    expect(chargedFx({ amount: 16.95, currency: 'CAD', paid: 12 }, 'CAD')).toEqual({ rate: 1.4125, converted: 16.95, original: 12 })
+    expect(chargedFx({ amount: 17, currency: 'CAD', paid: 12 }, 'CAD')).toEqual({ rate: 1.41666667, converted: 17, original: 12 })
+  })
+
+  it('none when it was charged in another currency, there is no charge, or no rate the app can store comes out', () => {
+    expect(chargedFx({ amount: 16.95, currency: 'EUR', paid: 12 }, 'CAD')).toBeNull()
+    expect(chargedFx(null, 'CAD')).toBeNull()
+    expect(chargedFx({ amount: 16.95, currency: 'CAD', paid: 0 }, 'CAD')).toBeNull()
+    expect(chargedFx({ amount: 0, currency: 'CAD', paid: 12 }, 'CAD')).toBeNull()
+    // Past the rate column's room.
+    expect(chargedFx({ amount: 99_000_000, currency: 'CAD', paid: 0.01 }, 'CAD')).toBeNull()
+  })
+
+  it('rateKey: a currency and a day', () => {
+    expect(rateKey('USD', '2026-11-13')).toBe('USD@2026-11-13')
   })
 })
 
