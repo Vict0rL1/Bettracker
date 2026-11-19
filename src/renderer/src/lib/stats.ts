@@ -1,5 +1,6 @@
 import type { Bet } from '../../../shared/types'
 import { bandIndex, bandOf } from './bands'
+import { CASINO_SPORT, isCasino } from './casino'
 import { monthPrefix, weekdayOf, type MonthKey } from './dates'
 import { round2 } from './validate'
 
@@ -340,7 +341,11 @@ export interface BreakdownRow {
   clvBets: number
 }
 
-/** The group a bet belongs to, or null when it can't be placed (no tag, no odds). */
+/**
+ * The group a bet belongs to, or null when it can't be placed (no tag, no
+ * odds). The casino plays are one sport however they were tagged ("casino",
+ * "Casino"): see lib/casino.ts.
+ */
 export function groupKeyOf(b: Bet, grouping: Grouping): string | null {
   switch (grouping) {
     case 'odds':
@@ -349,6 +354,8 @@ export function groupKeyOf(b: Bet, grouping: Grouping): string | null {
       return String(weekdayOf(b.date))
     case 'month':
       return b.date.slice(0, 7)
+    case 'sport':
+      return isCasino(b.sport) ? CASINO_SPORT : b.sport || null
     default:
       return b[grouping] || null
   }

@@ -323,6 +323,45 @@ Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
 
+### Jugadas de casino en Apuestas (noviembre 2026)
+
+Petición del dueño: «no solo estoy haciendo apuestas deportivas sino también
+jugando juegos de Stake como Dice, Limbo y Mines etc., quiero también que
+agregues la opción de ganar o perder […] que se mire todo limpio y
+minimalista». Detalle en `docs/casino-2026-11.md`. **Sin migración** y sin
+tocar la sincronización.
+
+- **Una jugada es una apuesta**: deporte `Casino` (`lib/casino.ts`; una
+  etiqueta «casino» escrita a mano cuenta igual), el juego como tipo, el
+  sitio como casa, sin cuota, el resultado neto como importe y lo apostado,
+  si se escribe, como stake (si no, nulo: fuera del ROI).
+- **Registro rápido**: arriba, **Deportes | Casino** (grupo de radio con
+  flechas, Inicio y Fin). Se abre en el tipo de la última apuesta, o en el
+  lado del borrador. Deportes es la hoja de antes, con las etiquetas y el
+  stake de la última apuesta **deportiva**. Casino: fecha, juego (diez
+  fichas de Stake y «Otro juego»; viene el último), importe y **Gané** /
+  **Perdí**; debajo, sitio (el último, o Stake) y lo apostado, opcional. Una
+  pérdida no puede superar lo apostado. El borrador guarda los dos lados.
+- **Dónde se ve**: «Casino · Limbo · Stake» en el historial, la lista del
+  día y las pendientes (`betTags`); en el móvil, sin «stake sin registrar»
+  ni filas de cuota vacías. En el desglose, Casino es una fila por deporte y
+  cada juego una por tipo. El formulario completo edita una jugada sin pedir
+  cuota, con el stake opcional, y conserva el deporte.
+- **Resolver una pendiente como perdida sin stake** (puede pasar con una
+  jugada) abre su formulario para escribir lo que costó, en vez de fallar;
+  la resolución en bloque la omite y lo dice (texto del aviso ampliado).
+- **Demo**: «Cargar datos de ejemplo» añade seis jugadas en Stake que suman
+  0 (la banca de la demo no cambia).
+
+**Cómo se probó.** Unitarios: `casino.test.ts` (nuevo) y casos en `quick`,
+`drafts`, `bulk`, `stats`, `csv` y `sample` (1654 tests en 61 archivos).
+e2e: `casino.spec.ts` (12; la suite pasa a 287). Capturas a 320, 390 y 1280
+px, en oscuro y claro. **Expectativas que cambian a propósito**:
+`demo.spec.ts` cuenta 66 apuestas tras cargar el ejemplo (antes 60; 67 tras
+añadir una) y `sample.test.ts` separa las 60 deportivas de las 6 jugadas
+(el español añade «Casino» a los deportes). El texto de
+`toast.settleSkipped` cambia (ninguna prueba lo leía).
+
 ### Cabecera y barras más simples (noviembre 2026)
 
 Petición del dueño tras usar la app: «puedes quitar el botón de add bet
@@ -1194,7 +1233,8 @@ src/renderer/src/lib/
   format.ts     formato de dinero en dólares o unidades (+ money.ts, el contexto)
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
-  quick.ts      valores por defecto del registro rápido
+  quick.ts      valores por defecto del registro rápido (cada lado: deportes y casino)
+  casino.ts     jugadas de casino: cuándo una apuesta lo es, el juego, sus etiquetas, la apuesta que se guarda
   uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
@@ -1267,5 +1307,6 @@ scripts/check-rates.mjs             `npm run check:rates`: el servicio de tasas 
 supabase/functions/extract-expenses/ la Edge Function de la lectura con IA (index.ts, deno.json)
 supabase/config.toml                ajustes de la CLI: sin la comprobación JWT de la pasarela para esa función
 docs/expenses-2026-11.md            los gastos: decisiones, datos, sincronización, IA, pruebas, pendientes
+docs/casino-2026-11.md              las jugadas de casino en Apuestas: datos, qué se comprobó, decisiones
 supabase/tests/                     el esquema contra un Postgres real
 ```

@@ -85,6 +85,20 @@ describe('parseCsv', () => {
 })
 
 describe('parseBetsCsv', () => {
+  it('round-trips a casino play: no odds, a stake only when wagered, the game and the site as tags', () => {
+    const plays = [
+      bet({ date: '2026-11-10', amount: 25.5, sport: 'Casino', book: 'Stake', betType: 'Limbo' }),
+      bet({ date: '2026-11-11', amount: -20, stake: 40, sport: 'Casino', book: 'Stake', betType: 'Dice' })
+    ]
+    const back = parseBetsCsv(betsToCsv(plays))
+    expect(back.rejected).toEqual([])
+    expect(back.rows).toEqual([
+      { date: '2026-11-10', amount: 25.5, stake: null, odds: null, closingOdds: null, status: 'won', sport: 'Casino', book: 'Stake', betType: 'Limbo', note: '' },
+      { date: '2026-11-11', amount: -20, stake: 40, odds: null, closingOdds: null, status: 'lost', sport: 'Casino', book: 'Stake', betType: 'Dice', note: '' }
+    ])
+    expect(back.noStake).toBe(1)
+  })
+
   it('round-trips what betsToCsv writes, pending bets included', () => {
     const original = [
       bet({ date: '2026-01-02', amount: 120.5, stake: 100, odds: 2.205, sport: 'NBA', book: 'DK', betType: 'Parlay', note: 'a,b' }),

@@ -1,4 +1,5 @@
 import { isBetStatus, type BetStatus } from '../../../shared/types'
+import type { CasinoFields, QuickKind } from '../lib/casino'
 import { draftKey } from './offline'
 
 /**
@@ -27,6 +28,10 @@ export interface QuickDraft {
   book: string
   betType: string
   profit: string
+  /** The side of the sheet that was open: none (a draft from before casino plays) is sports. */
+  kind?: QuickKind
+  /** The casino side, as typed (see lib/casino.ts): none in a draft from before casino plays. */
+  casino?: CasinoFields
 }
 
 /** The day's form: a new bet for `date`, or the edit of `editingId`. */
@@ -50,6 +55,7 @@ export interface DayDraft {
 export const MAX_DAY_DRAFTS = 20
 
 const QUICK_FIELDS = ['stake', 'odds', 'sport', 'book', 'betType', 'profit'] as const
+const CASINO_FIELDS = ['game', 'amount', 'site', 'wagered'] as const
 const DAY_FIELDS = ['savedAt', 'date', 'amount', 'stake', 'odds', 'closing', 'note', 'sport', 'book', 'betType'] as const
 
 const memory = new Map<string, unknown>()
@@ -59,7 +65,13 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /** What storage holds, if it is a quick draft: an older or hand-edited value is none. */
 const validQuick = (raw: unknown): QuickDraft | null =>
-  isRecord(raw) && hasStrings(raw, QUICK_FIELDS) && (raw.date === undefined || typeof raw.date === 'string') ? (raw as unknown as QuickDraft) : null
+  isRecord(raw) &&
+  hasStrings(raw, QUICK_FIELDS) &&
+  (raw.date === undefined || typeof raw.date === 'string') &&
+  (raw.kind === undefined || raw.kind === 'sports' || raw.kind === 'casino') &&
+  (raw.casino === undefined || (isRecord(raw.casino) && hasStrings(raw.casino, CASINO_FIELDS)))
+    ? (raw as unknown as QuickDraft)
+    : null
 
 const validDay = (raw: unknown): raw is DayDraft =>
   isRecord(raw) && hasStrings(raw, DAY_FIELDS) && isBetStatus(raw.status) && (raw.editingId === null || typeof raw.editingId === 'string')
