@@ -65,16 +65,6 @@ export interface BetInput {
   betType?: string
 }
 
-/** A settled bet: its result is known. */
-export type SettledBet = Bet & { amount: number; status: Exclude<BetStatus, 'pending'> }
-
-export const isSettled = (b: Bet): b is SettledBet => b.status !== 'pending'
-
-/** A bet whose stake is known — the subset ROI can be computed over. */
-export type StakedBet = Bet & { stake: number }
-
-export const hasStake = (b: Bet): b is StakedBet => b.stake !== null
-
 /** The status a result implies: the rule the 003 migration backfilled with. */
 export const statusForAmount = (amount: number): Exclude<BetStatus, 'pending' | 'void'> =>
   amount > 0 ? 'won' : amount < 0 ? 'lost' : 'push'

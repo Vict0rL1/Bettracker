@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { moneyFormat, scaledFormat } from './format'
-import { bankrollAxis, loadChartView, niceScale, saveChartView } from './chartView'
+import { bankrollAxis, loadChartView, niceScale, saveChartView, withOpening, xTicks, yAxisFor, type ChartPoint } from './chartView'
 
 beforeEach(() => localStorage.clear())
 afterEach(() => vi.restoreAllMocks())
@@ -81,5 +81,79 @@ describe('bankrollAxis — ticks the labels can tell apart', () => {
     const { ticks } = bankrollAxis(50, 56, true)
     expect(distinct(ticks.map(units))).toBe(true)
     expect(distinct(bankrollAxis(995, 1003, true).ticks.map(units))).toBe(true)
+  })
+})
+
+const pt = (date: string, balance: number, extra: Partial<ChartPoint> = {}): ChartPoint => ({ date, balance, dayTotal: 0, ...extra })
+
+describe('withOpening — the P/L curve starts at 0 the day before its first point', () => {
+  it('prepends the opening point, so one settled day already draws a line', () => {
+    const points = [{ date: '2026-03-01', balance: 45, dayTotal: 45 }]
+    expect(withOpening(points)).toEqual([{ date: '2026-02-28', balance: 0, dayTotal: 0, opening: true }, points[0]])
+  })
+
+  it('opens across a month or year boundary on the calendar', () => {
+    expect(withOpening([pt('2026-01-01', 10)])[0].date).toBe('2025-12-31')
+    expect(withOpening([pt('2024-03-01', 10)])[0].date).toBe('2024-02-29')
+  })
+
+  it('keeps the points as they are, and adds nothing to nothing', () => {
+    const points = [pt('2026-03-01', 45), pt('2026-03-04', -20)]
+    expect(withOpening(points).slice(1)).toEqual(points)
+    expect(withOpening([])).toEqual([])
+  })
+})
+
+describe('xTicks — which dates get a label', () => {
+  const dates = (n: number): { date: string }[] => Array.from({ length: n }, (_, i) => ({ date: `2026-03-${String(i + 1).padStart(2, '0')}` }))
+
+  it('labels the first and the last point and spreads the rest, five at most', () => {
+    expect(xTicks(dates(31))).toEqual(['2026-03-01', '2026-03-09', '2026-03-16', '2026-03-24', '2026-03-31'])
+    expect(xTicks(dates(5))).toEqual(dates(5).map((d) => d.date))
+    expect(xTicks(dates(31), 3)).toEqual(['2026-03-01', '2026-03-16', '2026-03-31'])
+  })
+
+  it('never repeats a date, and copes with one point or none', () => {
+    expect(xTicks(dates(2))).toEqual(['2026-03-01', '2026-03-02'])
+    expect(xTicks(dates(3))).toEqual(['2026-03-01', '2026-03-02', '2026-03-03'])
+    expect(xTicks(dates(1))).toEqual(['2026-03-01'])
+    expect(xTicks([])).toEqual([])
+  })
+})
+
+describe('yAxisFor — the axis of either view, on round ticks', () => {
+  it('P/L: includes zero and the round bounds around the data, with the zero line', () => {
+    const axis = yAxisFor('pl', [pt('2026-03-01', 0, { opening: true }), pt('2026-03-02', 948), pt('2026-03-03', 1650)], false)
+    // Span 1,650 at the k labels' resolution (100): steps of 500.
+    expect(axis).toEqual({ domain: [0, 2000], ticks: [0, 500, 1000, 1500, 2000], zero: true })
+    const down = yAxisFor('pl', [pt('2026-03-01', 0, { opening: true }), pt('2026-03-02', -120), pt('2026-03-03', 40)], false)
+    expect(down.domain).toEqual([-150, 50])
+    expect(down.zero).toBe(true)
+  })
+
+  it('P/L: a flat series at zero (every day a push) still has room in its domain, never [0, 0]', () => {
+    const flat = yAxisFor('pl', [pt('2026-03-01', 0, { opening: true }), pt('2026-03-02', 0), pt('2026-03-03', 0)], false)
+    expect(flat.domain[0]).toBeLessThan(flat.domain[1])
+    expect(flat.domain[0]).toBeLessThanOrEqual(0)
+    expect(flat.domain[1]).toBeGreaterThanOrEqual(0)
+    expect(flat.ticks.length).toBeGreaterThan(1)
+    expect(flat.zero).toBe(true)
+    const flatUnits = yAxisFor('pl', [pt('2026-03-01', 0), pt('2026-03-02', 0)], true)
+    expect(flatUnits.domain[0]).toBeLessThan(flatUnits.domain[1])
+    expect(yAxisFor('pl', [], false).domain[0]).toBeLessThan(yAxisFor('pl', [], false).domain[1])
+  })
+
+  it('bankroll: fitted to the balance and the money put in, zero only when it crosses it', () => {
+    const up = yAxisFor('bankroll', [pt('2026-03-01', 1000, { funded: 1000, opening: true }), pt('2026-03-02', 1120, { funded: 1000 })], false)
+    expect(up).toEqual({ domain: [1000, 1200], ticks: [1000, 1100, 1200], zero: false })
+    const under = yAxisFor('bankroll', [pt('2026-03-01', 100, { funded: 100 }), pt('2026-03-02', -20, { funded: 100 })], false)
+    expect(under.zero).toBe(true)
+    expect(under.domain[0]).toBeLessThanOrEqual(-20)
+    expect(under.domain[1]).toBeGreaterThanOrEqual(100)
+  })
+
+  it('bankroll: a flat series has room in its domain too', () => {
+    const flat = yAxisFor('bankroll', [pt('2026-03-01', 1000, { funded: 1000 }), pt('2026-03-02', 1000, { funded: 1000 })], false)
+    expect(flat.domain[0]).toBeLessThan(flat.domain[1])
   })
 })

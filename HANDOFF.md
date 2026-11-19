@@ -381,6 +381,62 @@ añadir una) y `sample.test.ts` separa las 60 deportivas de las 6 jugadas
 (el español añade «Casino» a los deportes). El texto de
 `toast.settleSkipped` cambia (ninguna prueba lo leía).
 
+### Pulido 2.0: Apuestas (noviembre 2026)
+
+La parte de Apuestas del encargo «BetTracker 2.0» (mejorar lo que hay sin
+rediseñar; la precisión de los cálculos por delante). Detalle en
+`docs/bets-polish-2026-11.md`. **Sin migración**, sin dependencias nuevas y
+sin tocar la sincronización.
+
+- **ROI al céntimo**: el porcentaje sale del beneficio y lo apostado
+  redondeados como se muestran; un P/L de $0.00 es 0.0 % en tinta neutra,
+  nunca «+0.0%» en verde por polvo de coma flotante (`roi` en
+  `lib/stats.ts`, `fmtPctSigned` pone el signo sobre la cifra redondeada).
+- **Un solo origen** para el dinero en juego (`riding`), el retorno por
+  apuesta (`returnPct`), la probabilidad implícita (`lib/odds.ts`) y la fecha
+  de la primera apuesta (`bankroll.firstBetDate`, también sin bankroll
+  conocido). Fuera `riskedOf`, `isSettled`, `hasStake`, `SettledBet`,
+  `StakedBet` y la insignia `cal-count`.
+- **La franja dice cada cosa una vez**: lo en juego solo en pendientes
+  («$40.00 en juego»), el bankroll siempre lo aportado («$1,380 aportados» /
+  «contributed»), el P/L apuestas y días; pendientes a 0 en tinta neutra; la
+  media del stake pasa de la cabecera a la línea del ROI («… · media $55.00
+  · …»); un rango sin apuestas dice «Sin apuestas en {rango}» en P/L, ROI y
+  gráfico, y «Registra tu primera apuesta» solo sin apuestas; las etiquetas
+  «Todas las fechas» y la nota del rango solo con un rango distinto de Todo
+  (la nota queda oculta para el lector de pantalla); plurales con `tn()`
+  («1 pendiente», «1 día ganador»); «30 días» en vez de «Últimos 30 días».
+- **Gráfico**: líneas rectas en P/L y bankroll (lo aportado sigue en
+  escalón), punto de apertura en $0 para el P/L (una apuesta ya dibuja; el
+  texto de «al menos dos días» desaparece), eje del P/L con marcas redondas
+  (nunca `[0, 0]`), burbuja con signo, 24 px a la derecha para la última
+  fecha. La lógica pura en `lib/chartView.ts` (`xTicks`, `yAxisFor`,
+  `withOpening`), con tests. Y un *error boundary* (`ChartBoundary`): si el
+  trozo del gráfico no se puede descargar (primera ejecución sin conexión),
+  la tarjeta lo dice y el resto del panel sigue en pie; antes React
+  desmontaba toda la app (la suite lo destapó al bastar una apuesta para
+  pedir el gráfico). Sin reintento en la página: Chromium recuerda el módulo
+  que falló; llega con la siguiente carga.
+- **Calendario**: desde $1.000 miles enteros en la celda («-$1k», «+$12k»,
+  `fmtMoneyCell`), que caben a 320 px; la cifra exacta en el `title` y el
+  día. `heatOf`/`heatSizes` en `lib/stats.ts`, con tests.
+- **Teléfono**: ROI antes que el mes (CSS `order`; el DOM no cambia), para
+  que el mes quede sobre el calendario.
+
+**Cómo se probó.** `npm run typecheck`, 1695 unitarios en 62 archivos
+(nuevos `dates.test.ts` y casos en `stats`, `format`, `bankroll`,
+`chartView`, `i18n`), `npm run build` y la suite e2e completa (306, con
+`e2e/hero.spec.ts` nuevo, 15). Capturas a 320, 390 y 1280 px, en oscuro y
+claro y en español: todo, un rango sin apuestas, pendientes a 0 y un día de
+más de $1.000. **Expectativas que cambian a propósito**: `dashboard.spec`
+(sin rango no hay «All dates» ni nota visible; «1 winning day, 1 losing
+day»), `history.spec` (sin etiqueta sin rango), `pending.spec` (la línea del
+P/L ya no dice «riding»; «$70.00 at risk · 2 past their date» en
+pendientes), `bankroll.spec` («$1,000 contributed»), `stats.spec` («avg
+$55.00» en la línea del ROI; el mes dibuja con un día), `units.spec` («avg
+2.75u»), `bankroll.test` (`firstBetDate` en el bankroll no conocido),
+`stats.test` (fuera `riskedOf`).
+
 ### Cabecera y barras más simples (noviembre 2026)
 
 Petición del dueño tras usar la app: «puedes quitar el botón de add bet

@@ -1,23 +1,54 @@
 import type { Bet } from '../../../shared/types'
 import { bandIndex, bandOf } from './bands'
 import { CASINO_SPORT, isCasino } from './casino'
-import { monthPrefix, weekdayOf, type MonthKey } from './dates'
+import { daysInMonth, monthPrefix, toDateStr, weekdayOf, type MonthKey } from './dates'
+import { impliedProbability } from './odds'
 import { round2 } from './validate'
 
 export { round2 }
-
-/**
- * Only won and lost bets put money at risk for ROI purposes. A push or a void
- * returns the stake, so counting it in the denominator would drag ROI toward
- * zero on every tie; a pending bet has no result yet.
- */
-export const riskedOf = (b: Bet): number => (b.status === 'won' || b.status === 'lost' ? (b.stake ?? 0) : 0)
 
 /** A bet with a known outcome that counts toward the record: won, lost or push. */
 const scored = (b: Bet): boolean => b.status === 'won' || b.status === 'lost' || b.status === 'push'
 
 /** Net result over the settled bets (a pending bet contributes nothing). */
 export const total = (bets: readonly Bet[]): number => round2(bets.reduce((sum, b) => sum + (b.amount ?? 0), 0))
+
+/** What the pending bets have on the table. */
+export interface Riding {
+  /** Their stakes summed, to the cent. A pending bet with no stake adds nothing. */
+  staked: number
+  /** How many bets are pending, whatever their stake. */
+  count: number
+  /** Of those, how many recorded no stake, so `staked` leaves them out. */
+  unstaked: number
+}
+
+/**
+ * The money riding on the pending bets — the one place it is added up, for
+ * the pending card, the pending panel, the summary and the bankroll alike.
+ */
+export function riding(bets: readonly Bet[]): Riding {
+  let staked = 0
+  let count = 0
+  let unstaked = 0
+  for (const b of bets) {
+    if (b.status !== 'pending') continue
+    count++
+    if (b.stake === null) unstaked++
+    else staked += b.stake
+  }
+  return { staked: round2(staked), count, unstaked }
+}
+
+/**
+ * One bet's return on its stake, as a percentage: +50 on 100 is +50%. Only a
+ * won or lost bet with a stake above 0 has one; a free bet, a push, a void, a
+ * pending bet or a bet with no stake recorded reads null.
+ */
+export function returnPct(b: Bet): number | null {
+  if ((b.status !== 'won' && b.status !== 'lost') || b.amount === null || b.stake === null || b.stake <= 0) return null
+  return (b.amount / b.stake) * 100
+}
 
 export const forMonth = (bets: readonly Bet[], ym: MonthKey): Bet[] => {
   const prefix = monthPrefix(ym)
@@ -126,7 +157,13 @@ export interface Roi {
  * treated as 0 would send ROI toward infinity, treated as the profit would
  * invent data — `missing` reports how many); free bets with a stake of 0 (no
  * money was risked, so they can't have a return — see `bonusProfit`); pushes
- * and voids (the stake came back; see `riskedOf`); and pending bets.
+ * and voids (the stake came back, so nothing was risked for ROI purposes:
+ * counting them in the denominator would drag ROI toward zero on every tie);
+ * and pending bets.
+ *
+ * The percentage is computed from the profit and the stake rounded to the
+ * cent, as they are shown: 45.45 − 50 + 30 − 25.45 adds up to 1.8e-15 in
+ * floating point, which would read "+0.0%" in green beside a P/L of $0.00.
  *
  * Returns null when nothing qualifies.
  */
@@ -147,7 +184,9 @@ export function roi(bets: readonly Bet[]): Roi | null {
     counted++
   }
   if (counted === 0 || staked <= 0) return null
-  return { pct: (profit / staked) * 100, staked: round2(staked), profit: round2(profit), counted, missing }
+  const stakedR = round2(staked)
+  const profitR = round2(profit)
+  return { pct: (profitR / stakedR) * 100, staked: stakedR, profit: profitR, counted, missing }
 }
 
 export interface Bonus {
@@ -181,9 +220,6 @@ export function averageStake(bets: readonly Bet[]): number | null {
   }
   return n === 0 ? null : round2(sum / n)
 }
-
-/** The probability a decimal price implies: 1 / odds. */
-export const impliedProbability = (odds: number): number => 1 / odds
 
 export interface Implied {
   /** Mean implied probability, as a percentage. */
@@ -294,6 +330,42 @@ export function maxDrawdown(points: readonly BalancePoint[]): number {
     if (fall > worst) worst = fall
   }
   return round2(worst)
+}
+
+/**
+ * The |P/L| of each decided day of a month up to `today` (YYYY-MM-DD), for
+ * heatOf: a day with a result other than break-even. Days still to come are
+ * never tinted, so they don't count.
+ */
+export function heatSizes(dayMap: ReadonlyMap<string, DaySummary>, ym: MonthKey, today: string): number[] {
+  const out: number[] = []
+  for (let d = 1; d <= daysInMonth(ym); d++) {
+    const date = toDateStr(ym.year, ym.month, d)
+    if (date > today) break
+    const s = dayMap.get(date)
+    if (s && s.scored > 0 && s.total !== 0) out.push(Math.abs(s.total))
+  }
+  return out
+}
+
+/**
+ * How big a day's P/L is next to the month's other decided days, by thirds:
+ * 1 the smallest third, 3 the largest. The calendar's tint deepens with it,
+ * so the big days stand out at a glance. `sizes` is every decided day's |P/L|
+ * up to today (heatSizes). Ties share a bucket by their middle rank, so a
+ * month of one decided day, or of equal days, sits in the middle rather than
+ * reading as all big.
+ */
+export function heatOf(sizes: readonly number[], total: number): 1 | 2 | 3 {
+  const size = Math.abs(total)
+  let below = 0
+  let upTo = 0
+  for (const s of sizes) {
+    if (s < size) below++
+    if (s <= size) upTo++
+  }
+  const p = (below + upTo) / 2 / sizes.length
+  return p <= 1 / 3 ? 1 : p <= 2 / 3 ? 2 : 3
 }
 
 /** Best and worst net day in one pass. Either side is null when no such day exists. */
@@ -460,19 +532,13 @@ export function summarize(bets: readonly Bet[]): Summary {
   const series = cumulativeSeries(days)
   const betWl = betWinLoss(bets)
   const dayWl = dayWinLoss(days)
-  let pendingCount = 0
-  let pendingStaked = 0
-  for (const b of bets) {
-    if (b.status !== 'pending') continue
-    pendingCount++
-    pendingStaked += b.stake ?? 0
-  }
+  const open = riding(bets)
   return {
     days,
     total: total(bets),
     bets: bets.length,
-    pendingCount,
-    pendingStaked: round2(pendingStaked),
+    pendingCount: open.count,
+    pendingStaked: open.staked,
     dayCount: days.length,
     dayWl,
     betWl,

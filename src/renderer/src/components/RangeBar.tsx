@@ -30,7 +30,10 @@ export default function RangeBar({ range, onChange }: Props) {
           </button>
         ))}
       </div>
-      <p className="scope-note" id="range-scope">
+      {/* What the range does and doesn't cover: worth a line once one is
+          chosen; with all time there is nothing to tell apart, so it stays
+          for the screen reader only (the group's description). */}
+      <p className={`scope-note ${range.kind === 'all' ? 'visually-hidden' : ''}`} id="range-scope">
         {t('range.scope')}
       </p>
       {range.kind === 'custom' && (

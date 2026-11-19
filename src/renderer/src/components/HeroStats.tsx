@@ -2,11 +2,11 @@ import { useId, useMemo, useState, type ReactNode } from 'react'
 import type { Bet } from '../../../shared/types'
 import type { Bankroll } from '../lib/bankroll'
 import { monthLabel, monthYearShort, sameMonth, shortDate, currentMonth, type MonthKey } from '../lib/dates'
-import { fmtMoney, fmtMoneyPlain, fmtPct, fmtPctSigned, fmtProb } from '../lib/format'
+import { fmtMoney, fmtMoneyPlain, fmtPct, fmtPctSigned, fmtProb, type MoneyFormat } from '../lib/format'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
 import type { OpenBet } from '../lib/pending'
-import { forMonth, isSmallSample, round2, SMALL_SAMPLE, summarize, type Summary, type WinLoss } from '../lib/stats'
+import { forMonth, isSmallSample, riding, SMALL_SAMPLE, summarize, type Summary, type WinLoss } from '../lib/stats'
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from './icons'
 
 /*
@@ -16,7 +16,9 @@ import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from './icons'
  *  - HeroStats: the month (with its own month to month navigation) and ROI;
  *  - AdvancedStats: the rest (strike rate, CLV, winning days, streak, best
  *    and worst day, drawdown), in a section that opens on demand.
- * Each says what it covers: the chosen range, or all dates.
+ * Each says what it covers once a range other than all time is chosen: the
+ * range, or all dates whatever the range. With all time there is nothing to
+ * tell apart, so nothing is said.
  */
 
 interface KeyProps {
@@ -24,6 +26,8 @@ interface KeyProps {
   lifetime: Summary
   /** The range's name when one is chosen, null for all time. */
   rangeName: string | null
+  /** Whether the account has any bet at all, whatever the range: tells "no bets in this range" from "no bets yet". */
+  hasBets: boolean
   /** Always over every bet, whatever the range: a bankroll is a balance, not a period. */
   bankroll: Bankroll
   /** No session or no connection: a bankroll still loading waits for one. */
@@ -45,6 +49,9 @@ interface HeroProps {
 }
 
 const tone = (n: number): string => (n > 0 ? 'win' : n < 0 ? 'loss' : 'flat')
+
+/** In units the big figures carry the exact dollars on hover. */
+const dollarsTitle = (money: MoneyFormat, n: number): string | undefined => (money.unit === null ? undefined : fmtMoney(n))
 
 interface MiniProps {
   label: string
@@ -79,45 +86,50 @@ function Mini({ label, value, sub, toneClass = '', title, onClick, className = '
   )
 }
 
-/** What a number covers: the chosen range, or every date whatever the range. */
-function Scope({ range }: { range: string | null | 'all-dates' }) {
+/**
+ * What a number covers, said only while a range other than all time is
+ * chosen: the range itself, or every date whatever the range. With all time
+ * every number covers the same dates, and a tag on each would only repeat it.
+ */
+function Scope({ covers, rangeName }: { covers: 'range' | 'all-dates'; rangeName: string | null }) {
   const { t } = useLang()
-  const text = range === 'all-dates' ? t('scope.allDates') : (range ?? t('range.all'))
+  if (rangeName === null) return null
   return (
-    <span className="scope-tag" title={range === 'all-dates' ? t('scope.allDatesTitle') : t('scope.rangeTitle')}>
-      {text}
+    <span className="scope-tag" title={covers === 'all-dates' ? t('scope.allDatesTitle') : t('scope.rangeTitle')}>
+      {covers === 'all-dates' ? t('scope.allDates') : rangeName}
     </span>
   )
 }
 
 /** P/L over the range, the bankroll, the bets still open: what is looked at most. */
-export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenBankroll, onOpenPending }: KeyProps) {
+export function KeyStats({ lifetime, rangeName, hasBets, bankroll, offline, open, onOpenBankroll, onOpenPending }: KeyProps) {
   const { t, tn } = useLang()
   const money = useMoney()
-  const dollarsTitle = (n: number): string | undefined => (money.unit === null ? undefined : fmtMoney(n))
 
+  // What is riding is said once, on the pending card: the P/L line counts
+  // bets and days, the bankroll line what was contributed.
   const lifetimeSub =
     lifetime.bets === 0
-      ? t('hero.firstBet')
+      ? hasBets && rangeName !== null
+        ? t('hero.noBetsRange', { range: rangeName })
+        : t('hero.firstBet')
       : t('hero.lifetimeSub', {
           bets: tn('bet', lifetime.bets),
           days: tn('day', lifetime.dayCount),
           month: monthYearShort(lifetime.first ?? '')
-        }) + (lifetime.pendingCount > 0 ? t('hero.riding', { n: lifetime.pendingCount, amount: money.stake(lifetime.pendingStaked) }) : '')
+        })
 
   const plValue = money.signed(lifetime.total)
   const bankrollValue = bankroll.known ? money.bankroll(bankroll.current) : bankroll.reason === 'unset' ? '—' : '…'
   const bankrollSub = bankroll.known
-    ? bankroll.inPlay > 0
-      ? t('hero.bankrollRiding', { amount: money.stake(bankroll.inPlay) })
-      : bankroll.funded < 0
-        ? t('hero.bankrollTakenOut', { amount: money.bankroll(-bankroll.funded) })
-        : t('hero.bankrollFunded', { amount: money.bankroll(bankroll.funded) })
+    ? bankroll.funded < 0
+      ? t('hero.bankrollTakenOut', { amount: money.bankroll(-bankroll.funded) })
+      : t('hero.bankrollFunded', { amount: money.bankroll(bankroll.funded) })
     : bankroll.reason === 'unset'
       ? t('hero.bankrollSetUp')
       : t(offline ? 'hero.bankrollOffline' : 'hero.bankrollLoading')
 
-  const atRisk = round2(open.reduce((sum, o) => sum + (o.bet.stake ?? 0), 0))
+  const atRisk = riding(open.map((o) => o.bet)).staked
   const past = open.filter((o) => o.past).length
   const pendingSub =
     open.length === 0
@@ -132,7 +144,7 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
         </div>
         {/* Keyed by its text, like every figure here: a new value mounts and
             settles in (num-in). The text is final at once, never counted up. */}
-        <div key={plValue} className={`life-value ${tone(lifetime.total)}`} title={dollarsTitle(lifetime.total)}>
+        <div key={plValue} className={`life-value ${tone(lifetime.total)}`} title={dollarsTitle(money, lifetime.total)}>
           {plValue}
         </div>
         <div className="stat-sub">{lifetimeSub}</div>
@@ -146,7 +158,7 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
       >
         <span className="stat-head">
           <span className="stat-label">{t('hero.bankroll')}</span>
-          <Scope range="all-dates" />
+          <Scope covers="all-dates" rangeName={rangeName} />
         </span>
         <span key={bankrollValue} className={`life-value key-value ${bankroll.known && bankroll.current <= 0 ? 'loss' : ''}`}>
           {bankrollValue}
@@ -157,9 +169,10 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
       <button type="button" className={`card stat-card key-card pending-card ${open.length > 0 ? 'has-open' : ''}`} title={t('key.pendingTitle')} onClick={onOpenPending}>
         <span className="stat-head">
           <span className="stat-label">{t('key.pending')}</span>
-          <Scope range="all-dates" />
+          <Scope covers="all-dates" rangeName={rangeName} />
         </span>
-        <span key={open.length} className="life-value key-value">
+        {/* Nothing waiting is a quiet 0, in the flat tone, not a headline. */}
+        <span key={open.length} className={`life-value key-value ${open.length === 0 ? 'flat' : ''}`}>
           {open.length}
         </span>
         <span className="stat-sub key-sub">{pendingSub}</span>
@@ -172,8 +185,6 @@ export function KeyStats({ lifetime, rangeName, bankroll, offline, open, onOpenB
 export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNext, onResetMonth }: HeroProps) {
   const { t, tn } = useLang()
   const money = useMoney()
-  // In units the big figures carry the exact dollars on hover.
-  const dollarsTitle = (n: number): string | undefined => (money.unit === null ? undefined : fmtMoney(n))
   const month = useMemo(() => summarize(forMonth(bets, ym)), [bets, ym])
 
   const monthValue = money.signed(month.total)
@@ -181,8 +192,8 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
   const monthSub =
     month.bets === 0
       ? t('hero.noBetsMonth')
-      : `${tn('bet', month.bets)} · ${t('hero.daysRecord', { w: month.dayWl.wins, l: month.dayWl.losses })}` +
-        (month.pendingCount > 0 ? t('hero.pendingSuffix', { n: month.pendingCount }) : '')
+      : `${tn('bet', month.bets)} · ${t('hero.daysRecord', { w: tn('winningDay', month.dayWl.wins), l: tn('losingDay', month.dayWl.losses) })}` +
+        (month.pendingCount > 0 ? t('hero.pendingSuffix', { pending: tn('pending', month.pendingCount) }) : '')
 
   const { roi, bonus } = lifetime
   const roiValue = roi ? fmtPctSigned(roi.pct) : '—'
@@ -190,19 +201,23 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
 
   // ROI only speaks for the bets that recorded a stake. When that's a subset,
   // its profit differs from lifetime P/L above — "63 of 79 bets" is what stops
-  // the two numbers from looking like they contradict each other.
+  // the two numbers from looking like they contradict each other. The average
+  // stake sits in the same line, beside the total staked it is the average of.
   const roiSub = roi
     ? t('hero.roiSub', {
         profit: money.signed(roi.profit),
         staked: money.stake(roi.staked),
+        avg: t('hero.avgStake', { amount: money.stake(lifetime.avgStake ?? roi.staked / roi.counted) }),
         counted:
           roi.missing > 0
             ? t('hero.roiSubset', { counted: roi.counted, total: tn('bet', roi.counted + roi.missing) })
             : tn('bet', roi.counted)
       })
-    : lifetime.bets === 0
+    : bets.length === 0
       ? t('hero.roiNeedsStake')
-      : t('hero.roiNone')
+      : lifetime.bets === 0 && rangeName !== null
+        ? t('hero.noBetsRange', { range: rangeName })
+        : t('hero.roiNone')
 
   return (
     <section className="hero hero-2">
@@ -224,7 +239,7 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
           </div>
         </div>
         {/* Keyed by its text: a new value mounts and settles in (num-in). */}
-        <div key={monthValue} className={`hero-value ${tone(month.total)}`} title={dollarsTitle(month.total)}>
+        <div key={monthValue} className={`hero-value ${tone(month.total)}`} title={dollarsTitle(money, month.total)}>
           {monthValue}
         </div>
         <div className="stat-sub">{monthSub}</div>
@@ -234,20 +249,16 @@ export default function HeroStats({ bets, lifetime, rangeName, ym, onPrev, onNex
         <div className="stat-head">
           <span className="stat-label">{t('hero.roi')}</span>
           <span className="stat-chips">
-            <Scope range={rangeName} />
+            <Scope covers="range" rangeName={rangeName} />
             {smallSample && (
               <span className="chip chip-static chip-warn" title={t('hero.smallSampleTitle', { n: roi.counted, min: SMALL_SAMPLE })}>
                 {t('hero.smallSample')}
               </span>
             )}
-            {lifetime.avgStake !== null && (
-              <span className="chip chip-static" title={t('hero.avgStakeTitle')}>
-                {t('hero.avgStake', { amount: money.stake(lifetime.avgStake) })}
-              </span>
-            )}
           </span>
         </div>
-        <div key={roiValue} className={`life-value ${roi ? tone(roi.pct) : 'flat'}`}>
+        {/* The tone follows the profit to the cent, as the percentage is computed from it (lib/stats roi). */}
+        <div key={roiValue} className={`life-value ${roi ? tone(roi.profit) : 'flat'}`}>
           {roiValue}
         </div>
         <div className="stat-sub">
@@ -313,7 +324,7 @@ export function AdvancedStats({ lifetime }: { lifetime: Summary }) {
         className="mini-days"
         label={t('hero.greenDays')}
         value={lifetime.dayRate === null ? '—' : fmtPct(lifetime.dayRate)}
-        sub={lifetime.dayRate === null ? t('hero.noDecisive') : t('hero.greenSub', { w: lifetime.dayWl.wins, l: lifetime.dayWl.losses })}
+        sub={lifetime.dayRate === null ? t('hero.noDecisive') : t('hero.greenSub', { w: tn('winningDay', lifetime.dayWl.wins), l: tn('losingDay', lifetime.dayWl.losses) })}
         title={t('hero.greenTitle')}
       />
       <Mini
@@ -380,7 +391,7 @@ export function AdvancedSection({ rangeName, children }: { rangeName: string | n
       <h2 className="advanced-head">
         <button type="button" className="advanced-toggle" aria-expanded={open} aria-controls={id} onClick={toggle}>
           <span className="advanced-title">{t('adv.title')}</span>
-          <Scope range={rangeName} />
+          <Scope covers="range" rangeName={rangeName} />
           <span className="advanced-hint">{t('adv.hint')}</span>
           <ChevronDownIcon />
         </button>

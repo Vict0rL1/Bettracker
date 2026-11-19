@@ -1566,11 +1566,6 @@ input[type='number']::-webkit-outer-spin-button {
   font-weight: 600;
 }
 
-/* The bet count stays in the cell's title; no badge on every day. */
-.cal-count {
-  display: none;
-}
-
 .cal-amt {
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -3976,6 +3971,11 @@ tr.is-pending td:first-child {
   margin-right: 4px;
 }
 
+/* With all time there is no scope tag before the count, and no dot either. */
+.hist-count:first-child::before {
+  content: none;
+}
+
 /* Sits on the toggle's row on a wide screen; its words are asserted. */
 .scope-note {
   flex: 1 1 320px;
@@ -4951,14 +4951,25 @@ tr.is-pending td:first-child {
     right: 16px;
   }
 
-  /* Stacked: ROI's divider lies on top. */
+  /* Stacked, ROI first and the month under it, right above the calendar it
+     drives (the DOM, and so the keyboard, keep month then ROI). The divider
+     goes with the card drawn second, as a line along its top. */
+  .hero.hero-2 > .month-card {
+    order: 2;
+  }
+
   .hero.hero-2 > .roi-card::before {
+    content: none;
+  }
+
+  .hero.hero-2 > .month-card::before {
+    content: '';
+    position: absolute;
     top: 0;
-    bottom: auto;
     left: 16px;
     right: 16px;
-    width: auto;
     height: 1px;
+    background: var(--divider);
   }
 
   .hero .hero-value,

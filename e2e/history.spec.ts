@@ -10,8 +10,8 @@ test.describe('history filters', () => {
     await page.fill('.filter-search', 'live')
     await expect(rows(page)).toHaveCount(1)
     await expect(page.locator('.history-card .hist-count')).toHaveText('1 of 3 bets')
-    // The stats' date range does not narrow the history unless asked: it says so.
-    await expect(page.locator('.history-card .scope-tag')).toHaveText('All dates')
+    // With all time chosen above there is nothing to tell apart, so the history says nothing about dates (with a range it says "All dates").
+    await expect(page.locator('.history-card .scope-tag')).toHaveCount(0)
     await page.locator('.history-card .chip', { hasText: 'Clear' }).click()
     await expect(rows(page)).toHaveCount(3)
   })
