@@ -396,15 +396,19 @@ test('currency: amounts follow the new currency without conversion; a wide symbo
   // What is stored is the same number.
   expect((await server(page, 'expenses')).map((e) => e.amount)).toEqual(['12.50'])
 
-  // Colombian pesos: three letters before the digits.
+  // Peruvian soles: three letters before the digits (the main currency is written with its narrow symbol, which for
+  // most pesos and dollars is "$"; soles have none in en-US, so their code stands in).
   await page.locator('.exp-manage-btn').click()
-  await select.selectOption('COP')
-  await expect.poll(() => page.evaluate(() => (JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { expense_currency?: string }).expense_currency)).toBe('COP')
+  await select.selectOption('PEN')
+  await expect.poll(() => page.evaluate(() => (JSON.parse(localStorage.getItem('e2e:settings') ?? '{}') as { expense_currency?: string }).expense_currency)).toBe('PEN')
   await settings.locator('.expset-done').click()
+  await expect(page.locator('.spend-total')).toHaveText(/^PEN\s12\.50$/)
   await page.locator('.add-expense-btn').click()
   const sheet = page.locator('.expense-modal')
   await sheet.locator('.exp-amount').fill('12500')
-  await expect(sheet.locator('.amount-cur')).toHaveText('COP')
+  await expect(sheet.locator('.amount-cur')).toHaveText('PEN')
+  // The sheet's own currency box says the same, and is the main one until changed.
+  await expect(sheet.locator('.exp-currency')).toHaveValue('PEN')
   const cur = await sheet.locator('.amount-cur').boundingBox()
   const input = await sheet.locator('.exp-amount').boundingBox()
   const padding = await sheet.locator('.exp-amount').evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft))
@@ -664,9 +668,10 @@ test('before 008: only proof counts; expenses wait as Update needed, budgets and
   await expect(settings.locator('.budget-input').first()).toBeDisabled()
   await settings.locator('.expset-done').click()
 
-  // 008 runs.
+  // 008 runs, and 009 after it (every expense write names 009's columns: expenses-fx.spec.ts covers the database in between).
   await page.evaluate(() => {
     localStorage.setItem('e2e:migrated-008', '1')
+    localStorage.setItem('e2e:migrated-009', '1')
     window.dispatchEvent(new Event('online'))
   })
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
@@ -736,4 +741,234 @@ test('on a 320px phone the review fits, in Spanish and in English', async ({ pag
       await expect(page.locator('.view-tab-expenses')).toHaveText('Expenses')
     }
   }
+})
+
+// ---- the polish of November 2026: category glyphs, the month against the one before, a merchant's last category and card ----
+
+/** A date of the month `back` months before this one, on that day number. */
+const monthDay = (back: number, day: number): string => ((d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(day)}`)(new Date(new Date().getFullYear(), new Date().getMonth() - back, 1))
+
+test('each category has its glyph wherever it is named, for the eye only: the names and what a screen reader hears stay as they were', async ({ page }) => {
+  await boot(page, {
+    backend: 'live',
+    view: 'expenses',
+    cards: [cardA],
+    expenses: [
+      expense({ id: '10000000-0000-4000-8000-000000000001', date: TODAY, amount: 4.5, cardId: CARD_A, category: 'coffee', merchant: 'Café Central' }),
+      expense({ id: '10000000-0000-4000-8000-000000000002', date: TODAY, amount: 60, category: 'groceries', merchant: 'Metro' }),
+      // A category a newer app wrote: filed, and drawn, as "Other".
+      expense({ id: '10000000-0000-4000-8000-000000000003', date: TODAY, amount: 9, category: 'pets', merchant: 'Vet' })
+    ],
+    budgets: [budget({ scope: 'total', monthlyLimit: 500 }), budget({ scope: 'card', target: CARD_A, monthlyLimit: 300 }), budget({ scope: 'category', target: 'coffee', monthlyLimit: 40 })],
+    ai: { rows: [{ date: TODAY, amount: 23.18, merchant: 'IGA', category: 'groceries', cardLast4: null, cardHint: null, note: '', pending: false, confidence: 'high' }] }
+  })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  const glyph = (cat: string): string => `svg.cat-icon[data-cat-icon="${cat}"]`
+
+  // The list: one glyph in each row's category cell, the cell's text unchanged.
+  const row = (merchant: string) => page.locator('.exp-row', { hasText: merchant })
+  await expect(row('Café Central').locator('.exp-cat')).toHaveText('Coffee')
+  await expect(row('Café Central').locator(`.exp-cat ${glyph('coffee')}`)).toHaveCount(1)
+  await expect(row('Metro').locator(`.exp-cat ${glyph('groceries')}`)).toHaveCount(1)
+  await expect(row('Vet').locator('.exp-cat')).toHaveText('Other')
+  await expect(row('Vet').locator(`.exp-cat ${glyph('other')}`)).toHaveCount(1)
+
+  // Where the money went, and the budgets: a category's row has its glyph; the month's and a card's have none.
+  await expect(page.locator(`.spend-cat-row[data-cat="groceries"] ${glyph('groceries')}`)).toHaveCount(1)
+  await expect(page.locator('.spend-cat-row[data-cat="groceries"] .spend-cat-name')).toHaveText('Groceries')
+  await expect(page.locator(`.budget-row.budget-category ${glyph('coffee')}`)).toHaveCount(1)
+  await expect(page.locator('.budget-row.budget-total .cat-icon, .budget-row.budget-card .cat-icon')).toHaveCount(0)
+
+  // Every glyph is decoration: hidden from screen readers, never focusable, and in a neutral ink (colour is for money).
+  const all = page.locator('svg.cat-icon')
+  expect(await all.count()).toBeGreaterThan(6)
+  expect(await all.evaluateAll((els) => els.every((el) => el.getAttribute('aria-hidden') === 'true' && el.getAttribute('focusable') === 'false'))).toBe(true)
+  const inks = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement)
+    const probe = document.createElement('span')
+    document.body.append(probe)
+    const rgb = (token: string): string => {
+      probe.style.color = style.getPropertyValue(token).trim()
+      return getComputedStyle(probe).color
+    }
+    const out = ['--text', '--text-2', '--text-3'].map(rgb)
+    probe.remove()
+    return out
+  })
+  for (const color of await all.evaluateAll((els) => els.map((el) => getComputedStyle(el).color))) expect(inks).toContain(color)
+
+  // The sheet: the eleven categories, each chip with its own glyph and still named by its word alone.
+  await page.locator('.add-expense-btn').click()
+  const sheet = page.locator('.expense-modal')
+  const chips = sheet.locator('.cat-chip')
+  await expect(chips).toHaveCount(11)
+  expect(await chips.evaluateAll((els) => els.every((el) => el.querySelector('svg.cat-icon')?.getAttribute('data-cat-icon') === el.getAttribute('data-cat')))).toBe(true)
+  await expect(sheet.getByRole('button', { name: 'Coffee', exact: true })).toHaveAttribute('data-cat', 'coffee')
+  await expect(sheet.getByRole('button', { name: 'Food & restaurants', exact: true })).toHaveAttribute('data-cat', 'food')
+
+  // The review of a scan: the glyph before the row's category.
+  await sheet.locator('.exp-scan-btn').click()
+  await page.setInputFiles('.exp-scan-input', scanFile)
+  const read = page.locator('.exp-review-row')
+  await expect(read).toHaveCount(1)
+  await expect(read.locator(`.exp-review-meta ${glyph('groceries')}`)).toHaveCount(1)
+  await expect(read.locator('.exp-review-meta')).toHaveText(/Groceries/)
+  await read.locator('.exp-review-include').uncheck()
+  await page.keyboard.press('Escape')
+  await expect(sheet).toHaveCount(0)
+
+  // The budgets' boxes: the category ones, not the month's nor a card's.
+  await page.locator('.budget-edit-btn').click()
+  const settings = page.locator('.expense-settings-modal')
+  await expect(settings.locator('.budget-box-category')).toHaveCount(11)
+  await expect(settings.locator('.budget-box-category svg.cat-icon')).toHaveCount(11)
+  await expect(settings.locator('.budget-box-total svg.cat-icon, .budget-box-card svg.cat-icon')).toHaveCount(0)
+  // The box is still named by the category alone.
+  await expect(settings.getByLabel('Coffee', { exact: true })).toHaveValue('40')
+  await settings.locator('.expset-done').click()
+  await expect(settings).toHaveCount(0)
+
+  // On a phone the glyph leads each card of the list.
+  await page.setViewportSize({ width: 390, height: 844 })
+  const item = page.locator('.exp-item', { hasText: 'Café Central' })
+  await expect(item.locator(`.exp-item-open > ${glyph('coffee')}`)).toHaveCount(1)
+  const [icon, merchant] = [await item.locator('svg.cat-icon').boundingBox(), await item.locator('.exp-item-merchant').boundingBox()]
+  if (!icon || !merchant) throw new Error('no boxes')
+  expect(icon.x + icon.width).toBeLessThanOrEqual(merchant.x)
+  await expect(item.locator('.exp-item-open')).toHaveAccessibleName(/^Edit expense: Café Central, /)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+})
+
+test('under Spent, the month against the one before it: day for day, in words and a neutral arrow; gone when there is nothing to compare with', async ({ page }) => {
+  // The 1st of each month is never after today's day number, so both are always inside what is compared.
+  await boot(page, {
+    backend: 'live',
+    view: 'expenses',
+    cards: [cardA],
+    expenses: [
+      expense({ id: '10000000-0000-4000-8000-000000000001', date: monthDay(0, 1), amount: 62, cardId: CARD_A, category: 'groceries', merchant: 'Metro' }),
+      expense({ id: '10000000-0000-4000-8000-000000000002', date: monthDay(0, 1), amount: 50, category: 'food', merchant: 'Cena' }),
+      expense({ id: '10000000-0000-4000-8000-000000000003', date: monthDay(1, 1), amount: 100, cardId: CARD_A, category: 'groceries', merchant: 'Metro' })
+    ],
+    budgets: []
+  })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  const vs = page.locator('.spend-total-card .spend-vs')
+  await expect(vs).toHaveText('12% more than at this point last month')
+  await expect(vs).toHaveAttribute('data-direction', 'more')
+  await expect(vs.locator('svg[aria-hidden="true"]')).toHaveCount(1)
+  // What it is compared with, to the cent, for whoever hovers.
+  expect(await vs.getAttribute('title')).toMatch(/^Through .+: \$100\.00$/)
+  // Spending more is not a loss: the line is in the ink of the count above it, never red or green.
+  await expect(vs).toHaveCSS('color', await page.locator('.spend-total-card .stat-sub').first().evaluate((el) => getComputedStyle(el).color))
+  // Nothing about it moves once the figures have settled in.
+  await page.waitForFunction(() => document.getAnimations().length === 0)
+
+  // Less, once a refund this month brings it under: the arrow turns, the words say so.
+  await addExpense(page, { amount: '30', refund: true, merchant: 'Devolución' })
+  await expect(vs).toHaveText('18% less than at this point last month')
+  await expect(vs).toHaveAttribute('data-direction', 'less')
+
+  // In Spanish.
+  await menu(page, '.lang-btn')
+  await expect(vs).toHaveText('18% menos que el mes pasado a estas alturas')
+  await page.keyboard.press('Escape')
+  await menu(page, '.lang-btn')
+  await page.keyboard.press('Escape')
+  await expect(vs).toHaveText('18% less than at this point last month')
+
+  // Last month, whole, has no month before it with expenses: nothing is said.
+  await page.locator('.exp-month-nav .nav-btn').first().click()
+  await expect(page.locator('.spend-total')).toHaveText('$100.00')
+  await expect(page.locator('.spend-vs')).toHaveCount(0)
+  // Next month has not started: nothing either.
+  await page.locator('.exp-today').click()
+  await page.locator('.exp-month-nav .nav-btn').nth(1).click()
+  await expect(page.locator('.spend-total')).toHaveText('$0.00')
+  await expect(page.locator('.spend-vs')).toHaveCount(0)
+})
+
+test('a merchant typed before brings its last category and card, until the user chooses them; an expense being edited keeps its own', async ({ page }) => {
+  await boot(page, {
+    backend: 'live',
+    view: 'expenses',
+    cards: [cardA, cardB],
+    expenses: [
+      expense({ id: '10000000-0000-4000-8000-000000000001', date: TODAY, amount: 5.4, cardId: CARD_B, category: 'coffee', merchant: 'Starbucks' }),
+      expense({ id: '10000000-0000-4000-8000-000000000002', date: monthDay(1, 1), amount: 7, cardId: CARD_A, category: 'food', merchant: 'Starbucks' }),
+      expense({ id: '10000000-0000-4000-8000-000000000003', date: TODAY, amount: 22, cardId: null, category: 'transport', merchant: 'Uber' })
+    ],
+    budgets: []
+  })
+  await expect(page.locator('.sync-badge')).toHaveText('Synced')
+  await page.locator('.add-expense-btn').click()
+  const sheet = page.locator('.expense-modal')
+  const chip = (cat: string) => sheet.locator(`.cat-chip[data-cat="${cat}"]`)
+  const cardBtn = (name: string) => sheet.locator('.exp-paycard-seg .scope-btn', { hasText: name })
+  const merchant = sheet.locator('.exp-merchant')
+  const brought = sheet.locator('.exp-merchant-last')
+
+  // The sheet opens on its defaults, and suggests the merchants typed before, the latest first, each once.
+  await expect(chip('other')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('No card')).toHaveAttribute('aria-pressed', 'true')
+  expect(await sheet.locator('datalist option').evaluateAll((els) => els.map((el) => (el as HTMLOptionElement).value).sort())).toEqual(['Starbucks', 'Uber'])
+  await expect(brought).toBeHidden()
+
+  // The whole name, whatever its case: the category and card of its latest expense, and a line that says so.
+  await sheet.locator('.exp-amount').fill('6.10')
+  await merchant.fill('Starb')
+  await expect(chip('other')).toHaveAttribute('aria-pressed', 'true')
+  await merchant.fill('starbucks')
+  await expect(chip('coffee')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('Débito B')).toHaveAttribute('aria-pressed', 'true')
+  await expect(brought).toHaveText('As last time: Coffee · Débito B')
+  expect(await merchant.getAttribute('aria-describedby')).toBe(await brought.getAttribute('id'))
+
+  // Typed on past it: back to what the sheet opened with, and nothing is claimed.
+  await merchant.fill('Starbucks Reserve')
+  await expect(chip('other')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('No card')).toHaveAttribute('aria-pressed', 'true')
+  await expect(brought).toBeHidden()
+
+  // "No card" is brought like a card.
+  await merchant.fill('Uber')
+  await expect(chip('transport')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('No card')).toHaveAttribute('aria-pressed', 'true')
+  await expect(brought).toHaveText('As last time: Transport · No card')
+
+  // A category the user chose stays theirs; the card still follows.
+  await chip('entertainment').click()
+  await expect(brought).toHaveText('As last time: No card')
+  await merchant.fill('Starbucks')
+  await expect(chip('entertainment')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('Débito B')).toHaveAttribute('aria-pressed', 'true')
+  await expect(brought).toHaveText('As last time: Débito B')
+  // …and once the card is chosen too, the merchant changes nothing more.
+  await cardBtn('Visa A').click()
+  await expect(brought).toBeHidden()
+  await merchant.fill('Uber')
+  await expect(chip('entertainment')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('Visa A')).toHaveAttribute('aria-pressed', 'true')
+  await sheet.locator('.exp-save').click()
+  await expect(sheet).toHaveCount(0)
+  await expect.poll(async () => (await server(page, 'expenses')).find((r) => r.amount === 6.1)).toMatchObject({ merchant: 'Uber', category: 'entertainment', card_id: CARD_A })
+
+  // What is saved is what the merchant brought when nothing was chosen.
+  await page.locator('.add-expense-btn').click()
+  await sheet.locator('.exp-amount').fill('4.75')
+  await merchant.fill('Starbucks')
+  await expect(brought).toHaveText('As last time: Coffee · Débito B')
+  await sheet.locator('.exp-save').click()
+  await expect(sheet).toHaveCount(0)
+  await expect.poll(async () => (await server(page, 'expenses')).find((r) => r.amount === 4.75)).toMatchObject({ merchant: 'Starbucks', category: 'coffee', card_id: CARD_B })
+
+  // Editing: the expense's own category and card are never changed by retyping its merchant.
+  await page.locator('.exp-row', { hasText: '$22.00' }).locator('.exp-edit').click()
+  await expect(sheet.locator('h2')).toHaveText('Edit expense')
+  await merchant.fill('Starbucks')
+  await expect(chip('transport')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cardBtn('No card')).toHaveAttribute('aria-pressed', 'true')
+  await expect(brought).toBeHidden()
+  await page.keyboard.press('Escape')
+  await expect(sheet).toHaveCount(0)
 })

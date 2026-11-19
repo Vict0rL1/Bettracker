@@ -19,6 +19,9 @@ const expense = (n: number, over: Partial<Expense> = {}): Expense => ({
   id: id(300 + n),
   date: '2026-11-10',
   amount: 4.5,
+  originalAmount: null,
+  originalCurrency: null,
+  fxRate: null,
   cardId: CARD_A,
   merchant: 'Café Central',
   category: 'coffee',
@@ -100,6 +103,46 @@ describe('readBackup', () => {
     expect('expenses' in read.backup).toBe(false)
     expect('expenseCards' in read.backup).toBe(false)
     expect('expenseBudgets' in read.backup).toBe(false)
+  })
+
+  it('keeps what an expense paid in another currency says (009): what was paid, its code and the rate', () => {
+    const usd = expense(4, { amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+    const refund = expense(5, { amount: -7.02, originalAmount: -5, originalCurrency: 'USD', fxRate: 1.40341235 })
+    const made = makeBackup(bets, [], settings, { id: ME, email: null }, new Date('2026-11-18T09:00:00Z'), { ...extras, expenses: [usd, refund, expense(1)] })
+    const read = readBackup(JSON.stringify(made))
+    if (!read.ok) throw new Error(read.key)
+    expect(read.backup.expenses).toEqual(made.expenses)
+    expect(read.backup.expenses?.find((e) => e.id === usd.id)).toMatchObject({ amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+    expect(read.backup.expenses?.find((e) => e.id === expense(1).id)).toMatchObject({ originalAmount: null, originalCurrency: null, fxRate: null })
+  })
+
+  it('a file from before 009 has none of the three: each expense reads as one in the user’s own currency', () => {
+    const before009 = (full.expenses as Expense[]).map(({ originalAmount: _a, originalCurrency: _c, fxRate: _r, ...e }) => e)
+    expect('originalAmount' in before009[0]).toBe(false)
+    const read = readBackup(JSON.stringify({ ...full, expenses: before009 }))
+    if (!read.ok) throw new Error(read.key)
+    expect(read.backup.expenses).toEqual(full.expenses)
+    for (const e of read.backup.expenses ?? []) expect(e).toMatchObject({ originalAmount: null, originalCurrency: null, fxRate: null })
+  })
+
+  it('drops an expense whose original is only half there or makes no sense, like any other bad entry', () => {
+    const usd = expense(4, { amount: 16.84, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4034 })
+    const file = {
+      ...full,
+      expenses: [
+        usd,
+        { ...usd, id: id(310), fxRate: null },
+        { ...usd, id: id(311), originalCurrency: 'usd' },
+        { ...usd, id: id(312), originalAmount: '12' },
+        { ...usd, id: id(313), fxRate: 0 },
+        { ...usd, id: id(314), originalAmount: -12 },
+        { ...usd, id: id(315), originalCurrency: 840 }
+      ]
+    }
+    const read = readBackup(JSON.stringify(file))
+    if (!read.ok) throw new Error(read.key)
+    expect(read.bad).toEqual([])
+    expect(read.backup.expenses?.map((e) => e.id)).toEqual([usd.id])
   })
 
   it('treats an expense list that is not a list as absent: the bets and moves can still be restored', () => {

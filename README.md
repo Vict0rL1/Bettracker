@@ -25,7 +25,10 @@ couple of taps, each **card** kept apart, **monthly budgets** (for the month,
 per card and per category) and one chart of what all the cards spent. Type an
 expense, or let **AI** read it from a photo of a receipt or an Apple Wallet
 screenshot (optional, see [AI reading of receipts](#ai-reading-of-receipts-optional)).
-Expenses are shown in the **currency** you choose; bets stay in dollars.
+Expenses are shown in the **currency** you choose (your main one); an expense
+paid in **another currency** (a USD charge when you keep your accounts in CAD)
+is recorded as paid and converted to yours at that day's exchange rate. Bets
+stay in dollars.
 
 One React UI runs two ways:
 
@@ -151,7 +154,14 @@ keyboard (arrows, Home/End, Escape back to the button).
      [`008_expenses.sql`](supabase/migrations/008_expenses.sql)
      (the Expenses view: expenses, cards, monthly budgets and the currency
      expenses are shown in; it runs after 007 and 004, and stops with a
-     message if either is missing). Your existing bets are untouched —
+     message if either is missing) and
+     [`009_expense_original_currency.sql`](supabase/migrations/009_expense_original_currency.sql)
+     (an expense paid in another currency: three columns on `expenses` for
+     what was paid, its currency and the rate; it runs after 008, and stops
+     with a message if 008 is missing). Not sure which you have run?
+     [`supabase/check_migrations.sql`](supabase/check_migrations.sql) is a
+     read-only query for the SQL editor that lists 002 to 009 with **yes** or
+     **NO** next to each; it changes nothing. Your existing bets are untouched —
      old ones simply have no stake or odds recorded, and 003 gives each the
      status its result implies. Without 006 everything works, except that
      editing a lost free bet ($0 stake, $0 result) turns it into a push (its
@@ -161,7 +171,11 @@ keyboard (arrows, Home/End, Escape back to the button).
      a bad connection). Without 008 the bets and the bankroll work as before;
      the Expenses view says the database needs it, what you add there waits
      on the device as **Update needed**, and budgets and the currency can't
-     be set until it has run.
+     be set until it has run. Without 009 (and with 008) the Expenses view
+     reads and shows everything, and budgets and the currency work, but an
+     expense you add or edit waits on the device as **Update needed** (every
+     such change names 009's columns): the view says which file to run, and
+     what waits is sent by itself once it has.
    - *Upgrading an install people are using?* Run the migrations **before**
      you deploy the new version. Devices still on the old version keep
      working in between: their writes carry no status, and 003 gives them the
@@ -267,9 +281,21 @@ offline included — turn the Wi-Fi off and changes wait on the device, then
 sync when it's back. A bar across the top says it's the demo, and **Start
 over** (two clicks) empties it. Signing out leads to the sign-in screen; any
 email and a password of 6 or more characters sign you back in. The
-**Network** URL works on your phone too; each browser has its own demo. None
-of the demo's code goes into `npm run build` (only its three strings and the
-banner's CSS do).
+**Network** URL works on your phone too; each browser has its own demo.
+
+**Load sample data**, in the same bar, fills the demo so you can look at the
+app full before putting anything real in it: two months of a made-up
+person's bets (sixty, with a starting bankroll and a deposit) and everyday
+expenses in Canadian dollars (two cards, some paid in US dollars with their
+rate, a refund, rows read by AI, four budgets with one near its limit and
+one over). It is the same every time, dated back from today, and it replaces
+whatever the demo holds (it asks first when there is anything to replace);
+the app then reloads on the view you were on. From there it is ordinary
+data: edit it, add to it, or **Start over**.
+
+None of the demo's code or sample data goes into `npm run build` (only its
+strings and the banner's CSS do); the e2e suite reads the built scripts to
+make sure.
 
 ## Put it on your phone (deploy the PWA)
 
@@ -328,10 +354,16 @@ given OS's installer must be built on that OS.
 | `npm run typecheck` | Type-check the web + desktop code and the e2e suite |
 | `npm run test:e2e` | Browser tests with Playwright against a built copy (no backend needed), on ports 4183, 4182 and 4181 (`E2E_PORT`, `E2E_DEMO_PORT`, `E2E_DEV_PORT` move them). The first time, run `npx playwright install chromium` |
 | `bash supabase/tests/run.sh` | Run the migrations and `schema.sql` against a throwaway Postgres and check the result. Needs `psql`, `createdb`, `dropdb` and `pg_dump`, with the `PG*` variables pointing at a server where it may create databases (all named `bettracker_test_*`) |
+| `npm run check:rates` | Ask the **real** exchange-rate service for the latest rate, a past weekday and a past Saturday, and read the answers with the app's own parser. Needs internet access; see [Other currencies](#other-currencies-and-exchange-rates) |
 
 CI (`.github/workflows/ci.yml`) runs on every push and pull request: a secret
 scan (gitleaks), the unit tests, the type-check and the build, the schema
-checks against Postgres, and the e2e suite.
+checks against Postgres, and the e2e suite. None of it touches the network:
+the tests answer for Supabase, Anthropic and the exchange-rate service
+themselves. The one check that calls a third party, `npm run check:rates`,
+has a workflow of its own (`.github/workflows/rates-contract.yml`): run it by
+hand from the Actions tab, and it also runs on a pull request that touches
+the rates code. The main CI never depends on it.
 
 ## Settings
 
@@ -475,9 +507,9 @@ works offline like any other edit.
 ## Expenses
 
 The **Expenses** tab (next to **Bets**, under the header) is for everyday
-spending: a coffee, a taxi, the groceries. It needs migration 008 (see
-[setup](#1-create-the-supabase-project)); until it has run, the view says so
-and what you add waits on the device.
+spending: a coffee, a taxi, the groceries. It needs migrations 008 and 009
+(see [setup](#1-create-the-supabase-project)); until they have run, the view
+says which one is missing and what you add waits on the device.
 
 - **An expense** has a date, an amount, a card (or none), a merchant, a
   category (coffee, food & restaurants, groceries, transport, shopping,
@@ -489,6 +521,17 @@ and what you add waits on the device.
   expense below zero: it shows in green and lowers that month's spending.
   Edit and delete from the list; each comes with an **Undo**. It all works
   offline and syncs like the bets.
+- **Merchants you have typed before** are suggested as you type (the latest
+  first). In a new expense, one of them also brings the **category and card
+  it was last filed under**, and a line under the box says so ("As last
+  time: Coffee · Visa"). It only fills what you haven't chosen yourself in
+  that sheet, it follows the name as it stands (type on past "Uber" to "Uber
+  Eats" and you get Uber Eats' own), and it never touches an expense you are
+  editing.
+- **Each category has a small glyph** next to its name wherever it is named:
+  the sheet's chips, the list (leading each row on a phone), the categories,
+  the scan review and the budgets. Decoration only, in a neutral ink (colour
+  is kept for money), and hidden from screen readers.
 - **Cards** — as many as you like (name, last 4 digits, credit or debit),
   under **Expense settings**. Deleting a card that has expenses archives it:
   it leaves the pickers and its expenses keep its name. An expense whose card
@@ -498,11 +541,22 @@ and what you add waits on the device.
   80%, red once over) and never block anything. Two devices that set the same
   budget meet on one row.
 - **Currency** — expenses are shown in the currency picked in **Expense
-  settings** (USD by default; EUR, MXN, COP, ARS, CLP, PEN and more). Changing
-  it converts nothing: the same numbers are shown with the new symbol. Bets
-  stay in dollars, and units never apply to expenses.
+  settings**: your main currency (USD by default; CAD, EUR, MXN, COP, ARS,
+  CLP, PEN and more). Its code stands next to the month's title and amounts
+  are written with its short symbol (`$16.80` for Canadian dollars too).
+  Changing it converts nothing: the same numbers are shown with the new
+  symbol. Bets stay in dollars, and units never apply to expenses.
+- **Other currencies** — an expense can be paid in a currency that isn't
+  yours: pick it next to the amount, and the app converts it (see
+  [Other currencies and exchange rates](#other-currencies-and-exchange-rates)).
 - **The month** — what was spent, what is left of the budget, each card's
-  share, the daily average and where the month is heading; one chart of every
+  share, the daily average and where the month is heading. Under what was
+  spent, one line compares it with **the month before**: day for day while
+  the month is under way ("12% less than at this point last month": both
+  months up to today's day number, never part of a month against a whole
+  one), whole months for a past one. An arrow and plain words, no colour;
+  hover it for the figure it is compared with. It is left out when the month
+  before has no expenses. Then one chart of every
   card's spending (running total against the budget, or per day), the
   categories, and the list (a table on a computer, cards on a phone; search,
   and filter by card and category). The arrows and `←`/`→` change the month,
@@ -511,8 +565,72 @@ and what you add waits on the device.
   screenshot and fills in the expenses for you to check before anything is
   saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).
 - **Export CSV** (in the list) writes every expense, with the columns `date,
-  amount, currency, card, card_last4, merchant, category, note, source`. The
-  bets' CSV is unchanged.
+  amount, currency, card, card_last4, merchant, category, note, source,
+  original_amount, original_currency, fx_rate`. `amount` is in your main
+  currency (`currency`); the last three are filled for an expense paid in
+  another one (what was paid, in what, and the rate) and empty otherwise. They
+  were added at the end, so a spreadsheet built on the first nine still reads
+  them where it expects. The bets' CSV is unchanged.
+
+### Other currencies and exchange rates
+
+Say your main currency is Canadian dollars and a subscription charges you in
+US dollars. In **Add expense**, pick **USD** in the box next to the amount and
+type what you paid. Under it the app shows the **rate** of that day and the
+amount **in CAD**, and saves both: `USD 12.00` as paid, `$16.80` as what it
+counts for. Totals, budgets, the chart and the categories always use the
+amount in your main currency; the list shows the original beside it, small,
+written with its code so a bare `$` always means your own currency.
+
+- **Both boxes can be typed in.** Type the amount your bank actually charged
+  (banks add their own fee) and the rate follows it; type a rate and the
+  amount follows. What you type is kept when you change the date; empty the
+  box and leave it to get the day's rate back.
+- **The line under them says where the rate is from**: "Rate of Nov 13 (ECB)",
+  "Saved with this expense" when you edit one, or "Typed by you". Editing an
+  expense shows what was saved and asks for nothing until you change its date
+  or currency.
+- **No rate, no guess.** If there is no rate (no connection and none saved,
+  or a currency the service doesn't publish, such as COP), the two boxes stay
+  empty and say so; the expense is saved once you type the rate or the amount
+  in your currency. An amount in dollars is never saved as if it were yours.
+- **Scan receipt** works the same way for a whole picture: the review has a
+  **Currency of the picture** box (an Apple Wallet screen shows a bare `$` for
+  US and Canadian dollars alike, so you can say which), each row shows what
+  was read and what it comes to, and one field gives a rate to every row that
+  has none. A row without a rate is left out of **Add N** until it has one.
+- The currency you last paid in is offered first, after your own.
+
+**Where the rates come from.** [Frankfurter](https://frankfurter.dev), a free
+service with no account and no key that publishes the European Central Bank's
+reference rates: one rate per business day, around 16:00 CET, for about
+thirty currencies (USD, CAD, EUR, GBP, MXN, BRL, JPY, CHF and others; not
+COP, ARS, CLP or PEN). A weekend or a holiday uses the business day before
+it, and the line says which day the rate is of. These are reference rates:
+what your bank charged will differ a little, which is why the amount is
+yours to correct.
+
+**What leaves the device.** One request per pair and day, straight from the
+app to `api.frankfurter.dev`, carrying **two currency codes and a date** and
+nothing else: not the amount, not the merchant, no account, no cookie, no
+key, no referrer. It doesn't go through Supabase. In the main currency
+nothing is ever asked. The app's content security policy allows that one host
+besides Supabase. The demo (`npm run demo`) asks the same service when you
+pick another currency there: it is the one request the demo sends anywhere.
+
+**Offline.** Rates are kept on the device (one small cache for the device,
+not per user: a rate is nobody's data; signing out leaves it, and it is
+dropped with the other caches if storage runs full). A rate already fetched
+is not asked for again; without a connection the newest saved rate of that
+pair is used, and the line says which day it is of.
+
+**Checking the real service.** The tests never call it (they answer in its
+place), so `npm run check:rates` is how its answers are checked for real: it
+asks for the latest rate, a past weekday and a past Saturday, reads them with
+the same code the app uses (`src/renderer/src/lib/fx.ts`), checks the CORS
+header a browser needs, prints what it got, and exits non-zero if the app
+would not read something as expected. Without internet access it says it
+could not reach the service and checks nothing.
 
 ## AI reading of receipts (optional)
 
@@ -537,11 +655,12 @@ the answer again) and returns the expenses it read. It stores nothing.
 
 ### Set it up
 
-In this order: (1) run migration `008_expenses.sql` in the SQL editor
-(after 007); (2) deploy the function and set its secrets; (3) deploy the
-app. In any other order nothing is lost: expenses wait as **Update needed**
-until 008 runs, and scanning says AI reading isn't set up until the function
-is there, while typing an expense works.
+In this order: (1) run migrations `008_expenses.sql` and
+`009_expense_original_currency.sql` in the SQL editor (after 007); (2) deploy
+the function and set its secrets; (3) deploy the app. In any other order
+nothing is lost: expenses wait as **Update needed** until 008 and 009 have
+run, and scanning says AI reading isn't set up until the function is there,
+while typing an expense works.
 
 You need the [Supabase CLI](https://supabase.com/docs/guides/cli), run here
 through `npx` at the version these steps were last checked with, **3.2.0**
@@ -605,8 +724,8 @@ npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-
   field the function uses (`fallbacks`, `output_config.format`,
   `stop_details`, the error codes) isn't typed in that version.
 - **Undo**: `npx supabase@3.2.0 functions delete extract-expenses --remote=<ref>`
-  (the app goes back to "not set up"). 008 is additive and needs no undoing
-  for the app to keep working.
+  (the app goes back to "not set up"). 008 and 009 are additive and need no
+  undoing for the app to keep working.
 
 ### What it costs
 
@@ -644,9 +763,12 @@ Bettracker/
 ├── electron-builder.yml        # desktop packaging targets
 ├── playwright.config.ts        # e2e suite (e2e/), run against a built copy
 ├── .github/workflows/ci.yml    # CI: secrets scan, tests, build, schema, e2e
+├── .github/workflows/rates-contract.yml  # the real exchange-rate service, checked apart (by hand, and on PRs that touch the rates code)
+├── scripts/check-rates.mjs     # `npm run check:rates`: that check
 ├── supabase/
 │   ├── schema.sql              # run once in your Supabase project
-│   ├── migrations/             # 001–008, for installs made before each change
+│   ├── migrations/             # 001–009, for installs made before each change
+│   ├── check_migrations.sql    # read-only: which of them this project already has
 │   ├── functions/extract-expenses/  # the Edge Function that reads receipts with Claude (optional)
 │   ├── config.toml             # Supabase CLI settings: that function's gateway JWT check off
 │   └── tests/                  # runs schema.sql and the migrations against a real Postgres
@@ -673,8 +795,10 @@ Bettracker/
         ├── data/moves.ts       # deposits and withdrawals (+ useMoves.ts, their cache, outbox and sync)
         ├── data/rowTable.ts    # expenses, cards and budgets on the server (+ rowStorage.ts, useRowSync.ts: one sync for the three)
         ├── data/extract.ts     # calls the extract-expenses function
+        ├── data/fxRates.ts     # exchange rates: the request, the device's cache, what is used offline
+        ├── lib/fx.ts           # their pure part: the URL, reading the answer, the conversion, the cache's shape
         ├── lib/                # supabase client (requests time out after 30 s), validation, csv, odds, dates, stats, bankroll, format, strings, …
-        ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e) and its entry
+        ├── demo/               # `npm run demo`: the fake Supabase (shared with e2e), its entry and the sample data
         └── components/         # HeroStats, CalendarView, BalanceChart, Breakdown, … (expenses/: the Expenses view)
 ```
 
@@ -774,13 +898,19 @@ Deposits and withdrawals live in `bankroll_moves` (migration 005): `id`
 conflict key, as for bets). The starting bankroll and the unit size are
 settings (`user_settings`, migration 004).
 
-The expenses (migration 008) live in three tables, each row with an `id`
+The expenses (migrations 008 and 009) live in three tables, each row with an `id`
 generated on the device, its `user_id`, `created_at` and `updated_at` (the
 conflict key, as for bets). Each table is locked to its user by row-level
 security, and a deleted row stays deleted (007):
 
 - `expenses`: `date`, `amount` (`> 0` spent, `< 0` a refund or credit, never
-  `0`, in the expenses' currency), `card_id` (a card's id or `null`, with
+  `0`, always in the expenses' currency: every total reads it),
+  `original_amount`, `original_currency` and `fx_rate` (migration 009: for an
+  expense paid in another currency, what was paid, signed like `amount`, its
+  ISO code, and the units of the expenses' currency per 1 of it, with 8
+  decimals; all three set or all three `null`; `amount` is normally their
+  product, but it may be what the bank charged, so nothing insists on it),
+  `card_id` (a card's id or `null`, with
   **no** foreign key: an expense can reach the server before its card, and
   one whose card isn't there shows as "No card"), `merchant`, `category` (one
   of the fixed keys: `coffee`, `food`, `groceries`, `transport`, `shopping`,
@@ -821,7 +951,9 @@ Everything that goes in or out is under **Import & export** in the menu (☰).
 withdrawal, the settings, and the expenses with their cards and budgets:
 `{ "format": "bettracker-backup", "version": 1, "exportedAt", "account",
 "bets", "moves", "settings", "expenses", "expenseCards", "expenseBudgets" }`
-(the expenses' currency is one of the settings, `expenseCurrency`). It is
+(the expenses' currency is one of the settings, `expenseCurrency`; an expense
+paid in another currency carries its `originalAmount`, `originalCurrency`
+and `fxRate`, which a backup from before them simply lacks). It is
 offered once all of that has loaded on the device. The expense lists came
 later and are optional, so a backup from before them still restores, and an
 older version of the app reads a new backup and ignores them. **This version

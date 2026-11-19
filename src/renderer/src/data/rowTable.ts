@@ -29,6 +29,12 @@ export interface RowTableSpec<T extends RowBase, I> extends RowStorageSpec<T, I>
   normalize: (input: I) => I
   /** A row back as the input that would write it (an Undo's re-add). */
   toInput: (row: T) => I
+  /**
+   * Expenses only: a write can be refused for a column the database doesn't have yet while the table reads fine
+   * (migration 009 adds three columns that every add and edit names). A read that goes through then says nothing
+   * about the queue: only a write that goes through ends the wait (as for the bets and closing_odds).
+   */
+  columnsMayLag?: boolean
   /** Budgets only: ids come from the content (stableId.ts), so an add can meet a row this device never saw. */
   stableIds?: boolean
   /** Budgets only: the table's other UNIQUE key as [column, value] pairs, to find the row an add collided with under another id. */

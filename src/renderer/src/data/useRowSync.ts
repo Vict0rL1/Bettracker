@@ -78,6 +78,11 @@ const REALTIME_DEBOUNCE_MS = 400
  * the queue ('behind'), never refused, and its refused write says why once
  * per episode, for the three tables together (`notice`). Only a read or a
  * write that goes through proves the table (`tableReady`).
+ *
+ * The expenses can also wait for migration 009 alone: the table is there and
+ * reads fine, but every add and edit names the three columns 009 adds, so
+ * the database refuses the write (PGRST204, 'behind' too). It waits the same
+ * way, and is sent by itself once 009 has run (`migration009` below).
  */
 export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSync<T, I> {
   const { table, userId, canSync } = o
@@ -248,7 +253,10 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
         setServer(rows)
         setOffline(false)
         proven()
-        setBehind(false)
+        // The table is there, so nothing queued for it waits for it any more. Unless its writes can wait for a column
+        // while it reads fine (the expenses and 009): then only a write that goes through ends the wait, or every
+        // read would end the episode and the next retry say "your database is behind" again.
+        if (!spec.columnsMayLag) setBehind(false)
       }
       let installed = true
       try {
@@ -548,4 +556,16 @@ export function useRowSync<T extends RowBase, I>(o: RowSyncOptions<T, I>): RowSy
 export function migration008(tables: readonly Pick<RowSync<unknown, unknown>, 'tableReady' | 'tableMissing'>[]): { has008: boolean; needs008: boolean } {
   const has008 = tables.some((t) => t.tableReady)
   return { has008, needs008: !has008 && tables.some((t) => t.tableMissing) }
+}
+
+/**
+ * Whether the expenses wait for migration 009 (an expense paid in another
+ * currency: three columns every add and edit names). Known only from a write
+ * the database refused for them: the expenses table itself has been read or
+ * written in this session (so it is not 008 that is missing) and a queued
+ * change of it waits for a migration. With nothing queued there is nothing
+ * to say, and nothing that waits.
+ */
+export function migration009(expenses: Pick<RowSync<unknown, unknown>, 'tableReady' | 'blocked'>, needs008: boolean): boolean {
+  return !needs008 && expenses.tableReady && expenses.blocked
 }

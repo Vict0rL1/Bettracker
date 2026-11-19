@@ -1,7 +1,9 @@
+import { toCategory } from '../../lib/categories'
 import { fmtPct } from '../../lib/format'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
 import type { BudgetLine } from '../../lib/spend'
+import CategoryIcon from './CategoryIcon'
 
 interface Props {
   lines: BudgetLine[]
@@ -40,6 +42,7 @@ export default function BudgetsPanel({ lines, loaded, onEdit }: Props) {
             return (
               <li key={line.budget.id} className={`budget-row budget-${line.scope} is-${level}`} data-target={line.budget.target}>
                 <span className="budget-name" title={name}>
+                  {line.scope === 'category' && <CategoryIcon category={toCategory(line.budget.target)} size={14} />}
                   {name}
                 </span>
                 <span className="budget-figures">{t('spend.budgetOf', { spent: money.plain(spent), limit: money.plain(limit ?? 0) })}</span>

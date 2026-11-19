@@ -155,12 +155,24 @@ export type CardKind = 'credit' | 'debit'
 export type BudgetScope = 'total' | 'card' | 'category'
 export const BUDGET_SCOPES: readonly BudgetScope[] = ['total', 'card', 'category']
 
-/** One expense (table `expenses`, migration 008). amount: + spent, − refund or credit, never 0. */
+/**
+ * One expense (table `expenses`, migration 008). amount: + spent, − refund or
+ * credit, never 0, always IN THE USER'S EXPENSE CURRENCY (every total, budget
+ * and chart reads it). An expense paid in another currency also says what was
+ * paid (migration 009): originalAmount, originalCurrency and fxRate, all three
+ * set or all three null.
+ */
 export interface Expense {
   id: string
   /** Local calendar date, YYYY-MM-DD. */
   date: string
   amount: number
+  /** What was paid, in the currency it was paid in (signed like amount); null for an expense in the user's own currency. */
+  originalAmount: number | null
+  /** That currency's ISO 4217 code ("USD"), or null. */
+  originalCurrency: string | null
+  /** Units of the expense currency per 1 unit of the original (8 decimals), or null. amount is normally original × rate, unless the user typed what the bank charged. */
+  fxRate: number | null
   /** A card's id, or null. May name a card this device doesn't have (no FK): shown as "No card". */
   cardId: string | null
   merchant: string
@@ -174,8 +186,12 @@ export interface Expense {
 
 export interface ExpenseInput {
   date: string
-  /** Signed: + spent, − refund or credit. */
+  /** Signed: + spent, − refund or credit. In the user's expense currency. */
   amount: number
+  /** Paid in another currency: all three, or none (omitted or null). */
+  originalAmount?: number | null
+  originalCurrency?: string | null
+  fxRate?: number | null
   cardId?: string | null
   merchant?: string
   /** A category key; one the app doesn't know is stored as 'other'. */

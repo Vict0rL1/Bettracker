@@ -1,0 +1,42 @@
+# Contrato del servicio de tasas de cambio (Frankfurter, tasas del BCE), con
+# el servicio de verdad: scripts/check-rates.mjs pide la última tasa, un día
+# laborable pasado y un sábado pasado, y lee las respuestas con el mismo código
+# que usa la app (src/renderer/src/lib/fx.ts).
+#
+# Va aparte del CI principal a propósito: el CI de cada push y cada PR no
+# puede depender de un tercero. Este solo corre a mano (Actions → Rates
+# contract → Run workflow) y en los PR que tocan el módulo de tasas, el script
+# o este archivo. Si falla, la app sigue funcionando (se escribe la tasa a
+# mano); dice qué cambió en el servicio.
+name: Rates contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/renderer/src/lib/fx.ts'
+      - 'src/renderer/src/data/fxRates.ts'
+      - 'scripts/check-rates.mjs'
+      - '.github/workflows/rates-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rates-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tasas:
+    name: Tasas de cambio (servicio real)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # El script compila lib/fx.ts con el paquete typescript del proyecto.
+      - run: npm ci
+      - run: npm run check:rates

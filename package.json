@@ -23,7 +23,8 @@
     "dev:desktop": "electron-vite dev",
     "build:desktop": "npm run typecheck && electron-vite build && electron-builder",
     "build:desktop:dir": "electron-vite build && electron-builder --dir",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false && tsc -p e2e/tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false && tsc -p e2e/tsconfig.json",
+    "check:rates": "node scripts/check-rates.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7"

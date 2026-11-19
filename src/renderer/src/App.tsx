@@ -41,10 +41,10 @@ import { StorageWriteError } from './data/store'
 import { hasStoredSession } from './lib/supabase'
 import { useBetSync } from './data/useBetSync'
 import { useMoves } from './data/useMoves'
-import { migration008, useRowSync } from './data/useRowSync'
+import { migration008, migration009, useRowSync } from './data/useRowSync'
 import { budgetsTable, cardsTable, expensesTable } from './data/expenses'
 import { CARDS_SPEC } from './data/expenseSpecs'
-import { loadExpenseLast, saveExpenseLast } from './data/expenseLast'
+import { loadExpenseLast, rememberPayCurrency, saveExpenseLast } from './data/expenseLast'
 import type { ExtractOutcome } from './data/extract'
 import { dayDraftId, loadDayDraft, loadQuickDraft, saveDayDraft, saveQuickDraft, type QuickDraft } from './data/drafts'
 import {
@@ -265,6 +265,8 @@ export default function App() {
   const rowQueues = [expenses, cards, budgets]
   // 008 is known only from positive evidence: a read or a write of its tables went through (see useRowSync).
   const { has008, needs008 } = migration008(rowQueues)
+  // 009 (an expense paid in another currency) is known missing only from an expense write refused for its columns.
+  const needs009 = migration009(expenses, needs008)
   // One badge for every queue. A settings change, a deposit or an expense is
   // a queued change too: the badge says what holds it back (or that it is on
   // its way) even when no bet is queued. An empty queue has no say.
@@ -607,7 +609,8 @@ export default function App() {
   const handleAddExpense = useCallback(
     async (input: ExpenseInput): Promise<void> => {
       const { saved, id } = await expenses.add(input)
-      if (activeUserId) saveExpenseLast(activeUserId, { cardId: input.cardId ?? null, category: toCategory(input.category) })
+      // The card and category for next time, and the currency when it was paid in another one.
+      if (activeUserId) saveExpenseLast(activeUserId, { cardId: input.cardId ?? null, category: toCategory(input.category), ...(input.originalCurrency ? { currency: input.originalCurrency } : {}) })
       done(saved, savedNote(t(input.amount < 0 ? 'toast.refundAdded' : 'toast.expenseAdded'), input.date), () => expenses.remove(id))
     },
     [expenses, activeUserId, done, savedNote, t]
@@ -616,10 +619,13 @@ export default function App() {
   const handleAddExpenses = useCallback(
     async (inputs: ExpenseInput[]): Promise<void> => {
       const { saved, ids } = await expenses.addMany(inputs)
+      // A picture in another currency: offered first the next time.
+      const paidIn = inputs.find((i) => i.originalCurrency)?.originalCurrency
+      if (activeUserId && paidIn) rememberPayCurrency(activeUserId, paidIn)
       const message = ids.length === 1 ? t('toast.expenseAdded') : t('toast.expensesAdded', { expenses: tn('expense', ids.length) })
       done(saved, savedNote(message), () => expenses.removeMany(ids))
     },
-    [expenses, done, savedNote, t, tn]
+    [expenses, activeUserId, done, savedNote, t, tn]
   )
 
   const handleUpdateExpense = useCallback(
@@ -1457,6 +1463,7 @@ export default function App() {
                 settingsLoaded={settingsLoaded}
                 offline={isOffline || sessionEnded}
                 needs008={needs008}
+                needs009={needs009}
                 currency={settings.expenseCurrency}
                 scanBlocked={scanBlocked}
                 onAdd={openExpense}

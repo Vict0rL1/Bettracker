@@ -93,8 +93,11 @@ test('before 008, queued changes wait as Update needed, said once for the three 
   await expect(page.locator('.data-backup')).toBeEnabled()
   await expect(page.locator('.data-restore')).toBeEnabled()
   await page.keyboard.press('Escape')
-  // 008 runs.
-  await page.evaluate(() => localStorage.setItem('e2e:migrated-008', '1'))
+  // 008 runs, and 009 after it (every expense write names 009's columns).
+  await page.evaluate(() => {
+    localStorage.setItem('e2e:migrated-008', '1')
+    localStorage.setItem('e2e:migrated-009', '1')
+  })
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
   await expect(page.locator('.sync-badge')).toHaveText('Synced')
   expect((await server(page, 'expenses'))?.length).toBe(1)

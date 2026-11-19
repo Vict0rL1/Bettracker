@@ -1,13 +1,17 @@
 import type { ExpenseBudget, ExpenseCard } from '../../../../shared/types'
-import { monthInline, type MonthKey } from '../../lib/dates'
+import { humanDate, monthInline, type MonthKey } from '../../lib/dates'
+import { fmtPct } from '../../lib/format'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
-import { budgetState, NO_CARD, pace, totalBudget, type MonthSpend } from '../../lib/spend'
+import { budgetState, comparisonChange, NO_CARD, pace, totalBudget, type MonthComparison, type MonthSpend } from '../../lib/spend'
+import { ArrowDownIcon, ArrowUpIcon } from '../icons'
 import { inkOf } from './inks'
 
 interface Props {
   ym: MonthKey
   month: MonthSpend
+  /** The month against the one before it (lib/spend.ts vsLastMonth), or null when there is nothing to compare with. */
+  versus: MonthComparison | null
   budgets: readonly ExpenseBudget[]
   cards: readonly ExpenseCard[]
   cardsLoaded: boolean
@@ -20,15 +24,34 @@ const TOP_CARDS = 3
 
 /**
  * The month in four figures, one strip like the bets' key numbers: what was
- * spent (net of refunds), the budget left (the tile opens the budgets), what
- * each card spent, and the daily average with where the month is heading.
- * Neutral ink throughout; only a budget near or over its limit takes colour.
+ * spent (net of refunds) and how that compares with the month before, the
+ * budget left (the tile opens the budgets), what each card spent, and the
+ * daily average with where the month is heading. Neutral ink throughout;
+ * only a budget near or over its limit takes colour: spending more than last
+ * month is said with an arrow and in words, never in red.
  */
-export default function SpendSummary({ ym, month, budgets, cards, cardsLoaded, today, onManageBudgets }: Props) {
+export default function SpendSummary({ ym, month, versus, budgets, cards, cardsLoaded, today, onManageBudgets }: Props) {
   const { t, tn } = useLang()
   const money = useMoney()
 
   const totalValue = money.plain(month.total)
+
+  // Against the month before: day for day in the current month, whole months for a past one.
+  const change = versus ? comparisonChange(versus) : null
+  const toDate = versus?.previousThrough ?? null
+  const versusText = ((): string | null => {
+    if (!versus || !change) return null
+    const lastMonth = monthInline(versus.previousMonth)
+    if (change.direction === 'same') return toDate ? t('spend.vsSame') : t('spend.vsSameMonth', { month: lastMonth })
+    const by = change.pct === null ? money.plain(Math.abs(versus.diff)) : change.pct === 0 ? '<1%' : fmtPct(change.pct)
+    if (toDate) return t(change.direction === 'more' ? 'spend.vsMore' : 'spend.vsLess', { change: by })
+    return t(change.direction === 'more' ? 'spend.vsMoreMonth' : 'spend.vsLessMonth', { change: by, month: lastMonth })
+  })()
+  const versusTitle = !versus
+    ? undefined
+    : toDate
+      ? t('spend.vsTitle', { date: humanDate(toDate), amount: money.plain(versus.previous) })
+      : t('spend.vsTitleMonth', { month: monthInline(versus.previousMonth), amount: money.plain(versus.previous) })
 
   const total = totalBudget(budgets)
   const state = budgetState(month.total, total?.monthlyLimit ?? null)
@@ -70,6 +93,12 @@ export default function SpendSummary({ ym, month, budgets, cards, cardsLoaded, t
             </>
           )}
         </span>
+        {versusText !== null && change && (
+          <span className="stat-sub spend-vs" data-direction={change.direction} title={versusTitle}>
+            {change.direction === 'more' ? <ArrowUpIcon /> : change.direction === 'less' ? <ArrowDownIcon /> : null}
+            <span>{versusText}</span>
+          </span>
+        )}
       </article>
 
       <button type="button" className="card stat-card key-card spend-budget-card" onClick={onManageBudgets}>

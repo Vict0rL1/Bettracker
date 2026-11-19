@@ -459,6 +459,62 @@ describe('fake Supabase: the expenses, cards and budgets of migration 008', () =
     expect((await fake.from('user_settings').insert({ user_id: 'u1', updated_at: at })).data).toMatchObject({ expense_currency: 'USD' })
   })
 
+  describe('migration 009: an expense paid in another currency', () => {
+    const noColumn = (c: string) => ({ message: `Could not find the '${c}' column of 'expenses' in the schema cache`, code: 'PGRST204' })
+    const usd = { id: 'e1', date: '2026-11-13', amount: 16.84, original_amount: 12, original_currency: 'USD', fx_rate: 1.4034, updated_at: at }
+
+    it('without it, a write that names any of the three columns is refused whatever the value, naming the first', async () => {
+      const fake = install('e2e:', false)
+      migrate('e2e:')
+      localStorage.setItem('e2e:migrated-008', '1')
+      expect(await fake.from('expenses').insert(usd).select()).toMatchObject({ data: null, error: noColumn('original_amount'), status: 400 })
+      // As the app sends an expense in the user's own currency: the three as nulls.
+      expect((await fake.from('expenses').insert({ id: 'e2', amount: 4, original_amount: null, original_currency: null, fx_rate: null, updated_at: at })).error).toEqual(noColumn('original_amount'))
+      expect((await fake.from('expenses').insert({ id: 'e3', amount: 4, fx_rate: 1.4, updated_at: at })).error).toEqual(noColumn('fx_rate'))
+      expect(all('e2e:', 'expenses')).toEqual([])
+      // A write that names none of them (an app from before 009) goes in, and so does a delete.
+      expect((await fake.from('expenses').insert({ id: 'old', amount: 4, updated_at: at }).select()).error).toBeNull()
+      expect((await fake.from('expenses').update({ amount: 5, original_currency: 'USD', updated_at: later }).eq('id', 'old').lte('updated_at', later)).error).toEqual(noColumn('original_currency'))
+      expect(all('e2e:', 'expenses')).toMatchObject([{ id: 'old', amount: 4 }])
+      expect((await fake.from('expenses').delete().eq('id', 'old')).count).toBe(1)
+      // Only the expenses have these columns: the other tables are not asked about them.
+      expect((await fake.from('expense_cards').insert({ id: 'c', name: 'Visa', updated_at: at })).error).toBeNull()
+    })
+
+    it('without it, reads answer rows without the three keys (a list, one row, a page)', async () => {
+      const fake = install('e2e:', false)
+      migrate('e2e:')
+      localStorage.setItem('e2e:migrated-008', '1')
+      localStorage.setItem('e2e:expenses', JSON.stringify([usd]))
+      const list = await fake.from('expenses').select('*', { count: 'exact' }).range(0, 999)
+      expect(list.count).toBe(1)
+      expect(list.data).toEqual([{ id: 'e1', date: '2026-11-13', amount: 16.84, updated_at: at }])
+      const one = (await fake.from('expenses').select('*').eq('id', 'e1').maybeSingle()).data
+      expect(one).toEqual({ id: 'e1', date: '2026-11-13', amount: 16.84, updated_at: at })
+      // What the database holds is untouched: the columns show once 009 has run.
+      localStorage.setItem('e2e:migrated-009', '1')
+      expect((await fake.from('expenses').select('*').eq('id', 'e1').maybeSingle()).data).toEqual(usd)
+    })
+
+    it('with it, the three are columns like the rest: added, edited under the conflict rule, cleared', async () => {
+      const fake = install('e2e:', false)
+      migrate('e2e:')
+      localStorage.setItem('e2e:migrated-008', '1')
+      localStorage.setItem('e2e:migrated-009', '1')
+      expect((await fake.from('expenses').insert(usd).select()).data).toMatchObject({ original_amount: 12, original_currency: 'USD', fx_rate: 1.4034 })
+      const cleared = await fake.from('expenses').update({ amount: 16.84, original_amount: null, original_currency: null, fx_rate: null, updated_at: later }).eq('id', 'e1').lte('updated_at', later)
+      expect(cleared.data).toMatchObject({ id: 'e1', original_amount: null, original_currency: null, fx_rate: null })
+      expect(all('e2e:', 'expenses')).toMatchObject([{ id: 'e1', original_amount: null }])
+    })
+
+    it('009 needs 008: without the table there is nothing to add columns to', async () => {
+      const fake = install('e2e:', false)
+      migrate('e2e:')
+      localStorage.setItem('e2e:migrated-009', '1')
+      expect((await fake.from('expenses').insert(usd)).error?.code).toBe('PGRST205')
+    })
+  })
+
   it('loses the answer of a write to them as it does for the rest: the write lands', async () => {
     const fake = install('e2e:', false)
     migrate('e2e:')

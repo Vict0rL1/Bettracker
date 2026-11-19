@@ -27,7 +27,8 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   botones: en Gastos el principal es **Añadir gasto**; `T` y el **+** del
   móvil abren la hoja de gasto. Las flechas cambian el mes, compartido con el
   calendario de apuestas.
-- **El mes**: gastado (los reembolsos restan), presupuesto restante, gasto
+- **El mes**: gastado (los reembolsos restan) y cómo va frente al mes
+  anterior, presupuesto restante, gasto
   por tarjeta (las tres primeras y «+n más»), media diaria y a qué ritmo va el
   mes; un gráfico que apila el gasto de cada tarjeta con tintas neutras
   («Sin tarjeta», punteada) en dos vistas, acumulado contra la línea del
@@ -41,7 +42,9 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   baja lo gastado. El importe se lee como se teclea: «4,50», «1.234,50»,
   «1,234.50» y, en una moneda sin céntimos, «12.500»; debajo de la casilla se
   ve cómo se ha entendido («= $4.50»). La hoja recuerda la última tarjeta y
-  categoría del dispositivo. Alta, edición y borrado tienen Deshacer y
+  categoría del dispositivo, sugiere los comercios ya escritos y, con uno de
+  ellos, trae la categoría y la tarjeta con que se archivó la última vez
+  (ver «Pulido de noviembre»). Alta, edición y borrado tienen Deshacer y
   funcionan sin conexión.
 - **Tarjetas**: las que se quieran (nombre de hasta 40 caracteres, últimos 4
   dígitos opcionales, crédito o débito). Borrar una que tiene gastos la
@@ -53,13 +56,17 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   nunca bloquean nada.
 - **Moneda** de los gastos (ISO 4217, USD por defecto; la lista ofrece USD,
   EUR, MXN, COP, ARS, CLP, PEN, UYU, BOB, PYG, CRC, GTQ, HNL, NIO, DOP, BRL,
-  GBP y CAD). Cambiarla no convierte nada, y la app lo dice. Las apuestas
-  siguen en dólares y las unidades nunca se aplican a los gastos (la vista
-  tiene su propio `MoneyContext`).
+  GBP y CAD). Es la moneda principal del usuario. Cambiarla no convierte
+  nada, y la app lo dice. Las apuestas siguen en dólares y las unidades nunca
+  se aplican a los gastos (la vista tiene su propio `MoneyContext`).
+- **Gastos en otra moneda**: un gasto se puede pagar en una moneda que no es
+  la principal; la app guarda lo pagado y lo convierte (ver «Otras monedas y
+  tasas de cambio» abajo).
 - **Escanear recibo**: una foto de un recibo o una captura de Apple Wallet
   se lee con IA y se **revisa** antes de guardar nada (ver «IA» abajo).
 - **CSV de gastos** desde la lista (todas las columnas, con las guardas de
-  fórmula del CSV de apuestas). El CSV de apuestas no cambia.
+  fórmula del CSV de apuestas; lo pagado en otra moneda, su código y la tasa
+  van en tres columnas al final). El CSV de apuestas no cambia.
 - **Copia completa**: incluye los gastos, tarjetas, presupuestos y la moneda;
   esta versión aún no los restaura (ver «Copia»).
 - Todo en inglés y español (`i18n.test` exige que estén las mismas claves).
@@ -84,6 +91,293 @@ cuatro policies de RLS, publicación de realtime y los dos triggers de la 007
 (una fila borrada no vuelve con un alta reenviada). `supabase/tests/checks.sql`
 (sección 11) lo comprueba todo contra Postgres, con RLS ejercida como un
 usuario conectado, en las tres variantes de `run.sh`.
+
+## Otras monedas y tasas de cambio (migración 009)
+
+Petición del usuario, tal cual: «la moneda principal que quiero es dólar
+canadiense pero en algunas transacciones tengo usd entonces me gustaría que
+en la app registrara los gastos y los convierta a cad».
+
+**Qué hace.** La moneda de los ajustes (CAD) es la principal: en ella están
+todos los totales, presupuestos, gráficos y categorías, igual que antes. Un
+gasto pagado en otra moneda (USD) guarda además lo que se pagó, en qué
+moneda y con qué tasa, y cuenta por su importe convertido.
+
+**Datos** (`supabase/migrations/009_expense_original_currency.sql`, aditiva y
+re-ejecutable, después de la 008; se para con un mensaje si falta la tabla;
+`schema.sql` la repite igual). Tres columnas nuevas en `expenses`:
+
+| Columna | Tipo | Qué es |
+|---|---|---|
+| `original_amount` | `numeric(12,2)` | lo pagado, en su moneda; con el mismo signo que `amount`, nunca 0, mismo tope |
+| `original_currency` | `text` | su código ISO 4217 (`^[A-Z]{3}$`) |
+| `fx_rate` | `numeric(18,8)` | unidades de la moneda principal por 1 de la original, mayor que 0 |
+
+Las tres nulas (un gasto en la moneda principal: todas las filas de antes) o
+las tres con valor; cinco constraints con nombre lo exigen. **`amount` no
+cambia de significado**: sigue siendo el importe en la moneda principal.
+Normalmente es `round(original × tasa)`, pero el usuario puede escribir lo
+que cobró el banco (que añade su comisión), así que la base no comprueba que
+los tres cuadren. `checks.sql` (sección 12) lo prueba en las tres variantes
+de `run.sh`: filas de antes, altas de una app anterior a la 009, la regla de
+conflicto, cada constraint y las policies.
+
+En el código: `Expense` y `ExpenseInput` ganan `originalAmount`,
+`originalCurrency` y `fxRate`; `normalizeExpense` los valida (todos o
+ninguno, código ISO, tasa finita mayor que 0 redondeada a 8 decimales,
+original al céntimo y con el signo del importe); `expenseSpecs.ts` los lee,
+escribe e hidrata (un trío a medias o sin sentido se lee como «sin original»,
+nunca como medio original: el gasto se sigue viendo y enviando por su
+importe); la copia completa los guarda (opcionales en el archivo: una copia
+anterior sigue leyéndose) y el CSV los añade al final (`original_amount`,
+`original_currency`, `fx_rate`).
+
+**Antes de la 009** (la base tiene la 008). Se sigue el precedente de
+`closing_odds` en las apuestas: toda alta o edición de un gasto envía las
+tres columnas (nulas si está en la moneda principal), PostgREST contesta
+PGRST204 («Could not find the 'original_amount' column of 'expenses' in the
+schema cache») y `data/errors.ts` lo clasifica como «falta actualizar»: el
+cambio **espera en la cola**, nunca se rechaza, y se envía solo cuando corre
+la 009. Se avisa una vez, no en cada reintento, y la vista Gastos muestra un
+aviso fijo que nombra el archivo de la 009 (`migration009` en
+`useRowSync.ts`: la tabla se ha leído o escrito en esta sesión y hay un
+cambio de gastos esperando una migración). Leer, los presupuestos y la
+moneda funcionan igual que con la 009. Un detalle de la capa de
+sincronización: para las tarjetas y los presupuestos una lectura que funciona
+da por terminada la espera (la tabla existe); para los gastos ya no, porque
+la tabla puede leerse mientras sus escrituras esperan una columna
+(`columnsMayLag` en la descripción de la tabla). Sin eso, cada lectura
+«curaba» el estado y el siguiente reintento volvía a avisar.
+
+**De dónde salen las tasas.** De Frankfurter (`api.frankfurter.dev`), un
+servicio gratuito, sin cuenta ni clave, que publica las tasas de referencia
+del Banco Central Europeo: una por día hábil, hacia las 16:00 CET, de unas
+treinta monedas (USD, CAD, EUR, GBP, MXN, BRL…; no COP, ARS, CLP ni PEN).
+`GET /v1/{fecha | latest}?base=USD&symbols=CAD` responde
+`{"amount":1.0,"base":"USD","date":"2026-11-13","rates":{"CAD":1.4034}}`; un
+fin de semana o un festivo responde con el día hábil anterior (el `date` de
+la respuesta dice cuál), y para hoy o una fecha futura se pide `latest`.
+
+- `lib/fx.ts` es la parte pura, **sin imports**: la URL, la lectura
+  defensiva de la respuesta (objeto, misma base, fecha real, tasa numérica,
+  finita y mayor que 0; cualquier otra forma es «sin tasa», nunca una tasa
+  inventada), la conversión en unidades enteras (`convert`: céntimos × la
+  tasa con 8 decimales en `BigInt`, redondeo a la mitad hacia arriba, a los
+  decimales de la moneda principal), `rateFrom` (la tasa que hay detrás de lo
+  que cobró el banco) y la caché (forma, vigencia y poda).
+- `data/fxRates.ts` hace la petición: `getRate(de, a, fecha, { signal })`
+  devuelve `{ ok: true, rate, asOf, source: 'service' | 'cache' | 'last' }` o
+  `{ ok: false, reason: 'offline' | 'unsupported' | 'unavailable' }` y **nunca
+  lanza**. Un `fetch` normal con `credentials: 'omit'` y `referrerPolicy:
+  'no-referrer'`, sin cabeceras propias (así no hay preflight) y con un
+  plazo de 8 s; **no** pasa por el cliente de Supabase. Un 4xx para un par
+  (salvo 408, 425 y 429, que son «ahora no») es «sin tasas para este par» y
+  se recuerda durante la sesión.
+- **Caché**: una sola clave del dispositivo, `bettracker:fx` (no por
+  usuario: una tasa no es dato de nadie; cerrar sesión no la borra y «Empezar
+  de cero» de la demo tampoco). Prescindible (se va con las demás cachés si
+  el almacenamiento se llena) y con tope de 300 entradas. La tasa de un día
+  ya publicado no se vuelve a pedir; la de hoy pedida antes de que el banco
+  publique (que es la de ayer) vale 6 horas. Sin poder llegar al servicio se
+  usa esa misma entrada o, si no hay, la más reciente del par (`source:
+  'last'`), y la interfaz dice de qué día es.
+- **CSP**: `connect-src` de `src/renderer/index.html` admite
+  `https://api.frankfurter.dev` además de Supabase (es el único sitio donde
+  se define; Electron carga el mismo archivo).
+
+**Privacidad.** Lo único que sale del dispositivo hacia el servicio son dos
+códigos de moneda y una fecha: ni el importe, ni el comercio, ni la cuenta,
+ni cookies, ni la clave de Supabase, ni el referrer. En la moneda principal
+no se pide nada. La suite e2e lo comprueba en cada petición que intercepta.
+La demo (`npm run demo`) pregunta al mismo servicio de verdad cuando se elige
+otra moneda (corre en el navegador del usuario): es lo único que envía a
+alguna parte; la lectura con IA de la demo sigue sin salir del navegador.
+
+**La hoja de gasto.** Junto al importe hay un selector nativo con la moneda
+del pago: la principal por defecto; después, la última otra moneda usada en
+el dispositivo (`data/expenseLast.ts`), el dólar y el resto de la lista. Con
+otra moneda aparece debajo un bloque con la **tasa** y el importe **en la
+moneda principal**, los dos editables, y una línea que dice de dónde sale la
+tasa («Tasa del 13 nov (BCE)», «Guardada con este gasto», «Escrita por ti»,
+la tasa guardada de tal día si no hay conexión).
+
+- Escribir la tasa recalcula el importe convertido; escribir el importe
+  convertido (lo que cobró el banco) recalcula la tasa. Solo se guarda como
+  texto la casilla en la que escribió el usuario; la otra se deriva siempre
+  (`fxView` en `lib/expenseFx.ts`), así que no pueden desajustarse.
+- Cambiar la fecha o la moneda vuelve a pedir la tasa, **salvo** que el
+  usuario haya escrito la suya (se respeta). Vaciar la casilla y salir de
+  ella devuelve la tasa del día.
+- Mientras se pide: texto («Buscando la tasa…»), sin animación, y nada
+  bloquea el teclado.
+- Sin tasa (sin conexión y sin ninguna guardada, o un par que el servicio no
+  publica), las casillas quedan vacías con una indicación, y guardar muestra
+  un error en la casilla: **un importe en dólares nunca se guarda como si
+  fuera la moneda principal**.
+- Editar un gasto en otra moneda muestra lo guardado y no pide nada hasta
+  que cambian la fecha o la moneda. Si entonces no se consigue la tasa nueva,
+  se conserva la guardada y la línea lo dice.
+- Se guarda `amount` = convertido, con `originalAmount`, `originalCurrency`
+  y `fxRate`; un reembolso es negativo en los dos importes. Volver a la
+  moneda principal borra el original.
+- Cambiar la moneda principal en los ajustes sigue sin convertir nada. Un
+  gasto cuyo original está en la que ahora es la principal se muestra y se
+  edita por su importe.
+
+**Listas e importes.** Los importes van en la moneda principal, escrita con
+su símbolo estrecho (`currencyDisplay: 'narrowSymbol'`: `$` para el dólar
+canadiense, `€`, `£`; el código sale junto al título del mes). Un gasto en
+otra moneda enseña además lo pagado, pequeño y en tinta neutra, escrito con
+el código («USD 12.00», `codeAmount`): un `$` a secas siempre es la moneda
+principal. En la tabla va al lado del importe y en el móvil, bajo él; la tasa
+está en el `title` y en la hoja.
+
+**La revisión del escaneo.** La lectura trae un `currency` (código ISO o
+nulo); el contrato y la Edge Function no cambian. Arriba de la revisión hay
+un selector «Moneda de la imagen»: la de la lectura si es un código válido y,
+si no, la principal (Apple Wallet enseña un `$` a secas tanto para CAD como
+para USD, así que el usuario puede decir «esto son USD»). El aviso antiguo de
+«la moneda no coincide» desaparece: ahora es este flujo.
+
+- Con una moneda distinta de la principal, cada fila es un gasto en otra
+  moneda: se pide la tasa de cada fecha distinta (la caché lo deja en pocas
+  llamadas), cada fila enseña lo leído y lo convertido, y al abrirla tiene
+  tasa e importe convertido como la hoja.
+- Una fila sin tasa lo dice y **no entra en «Añadir N»** hasta tenerla; un
+  campo arriba, «Tasa para las filas sin tasa», las rellena. Si se añaden las
+  que sí la tienen, las demás se quedan en la revisión.
+- **Duplicados**: misma moneda y mismo importe pagados, o mismo importe en la
+  moneda principal (más las reglas de fecha, tarjeta y comercio de antes).
+  Así la misma compra leída dos veces se reconoce aunque cada vez tocara una
+  tasa distinta. Se vuelven a mirar cuando cambia la moneda de la imagen o
+  llega una tasa.
+
+**Comprobación con el servicio de verdad.** Las pruebas nunca tocan la red:
+la suite e2e intercepta el host en `e2e/harness.ts` (opción `fx`: tasas fijas
+como USD→CAD 1,4000, y modos para fallar, no llegar, «par sin tasas» o
+tardar). Sin esa opción, **cualquier petición al host hace fallar la prueba**
+y, además, el Chromium de la suite no puede resolver ese nombre
+(`playwright.config.ts`). Lo que sí habla con el servicio real es
+`scripts/check-rates.mjs` (`npm run check:rates`): pide `latest`, un día
+laborable pasado y un sábado pasado, lee las respuestas con el **mismo**
+`lib/fx.ts` (lo compila con el paquete `typescript`), comprueba
+`access-control-allow-origin` enviando un `Origin`, imprime lo recibido y
+sale con error si algo no cuadra. Tiene su propio workflow,
+`.github/workflows/rates-contract.yml` (a mano, y en los PR que tocan el
+módulo de tasas, el script o el propio workflow), **fuera del CI principal**,
+que no debe depender de un tercero.
+
+**Qué migraciones tengo.** `supabase/check_migrations.sql` es una consulta de
+solo lectura para el editor SQL: lista de la 002 a la 009 con «yes» o «NO».
+`run.sh` la prueba tras cada migración.
+
+## Pulido de noviembre
+
+De la misma petición («aparte de mejorar la estética de la app que tú
+sugieras y mejoras que sientas que necesite la app»). Cuatro cosas, ninguna
+con migración ni cambios en la sincronización.
+
+**Iconos de categoría.** `components/expenses/CategoryIcon.tsx` tiene los
+once, uno por clave (`coffee`, `food`, `groceries`, `transport`, `shopping`,
+`entertainment`, `health`, `home`, `subscriptions`, `travel`, `other`):
+taza, tenedor y cuchillo, carro, coche, bolsa, entrada, cruz de farmacia,
+casa, flechas que vuelven, avión y tres puntos. Dibujados para esta app (no
+salen de ninguna colección): `viewBox` de 16, trazo de 1,5 con extremos
+redondos, sin relleno y con `currentColor`. Reglas:
+
+- Son adorno junto a un nombre que ya está escrito: `aria-hidden` y
+  `focusable="false"`. El nombre accesible de cada ficha, fila o casilla
+  sigue siendo solo su texto.
+- Tinta neutra (`--text-3`; la de la ficha cuando está elegida). Nunca
+  verde, rojo ni ámbar: el color es dinero.
+- Dónde: las fichas de categoría de la hoja, la columna de categoría de la
+  tabla, delante de cada tarjeta de la lista en el móvil (la fila pasa a ser
+  una rejilla: icono | dos líneas), el desglose por categoría, la revisión
+  del escaneo, las filas de categoría del panel de presupuestos y sus
+  casillas en el editor. El total y las tarjetas no llevan icono.
+- Una categoría que la app no conoce se dibuja como «Otros», igual que se
+  archiva.
+
+**Frente al mes anterior.** Bajo «Gastado en…» hay una línea más:
+`vsLastMonth(gastos, mes, hoy)` en `lib/spend.ts`.
+
+- El **mes en curso** se compara **día por día**: los dos meses hasta el
+  número de día de hoy (el 31 contra un mes más corto cuenta ese mes hasta su
+  último día). Nunca diez días contra un mes entero. Un gasto fechado después
+  de hoy está en el total del mes, pero no en lo comparado.
+- Un **mes pasado** se compara entero con el anterior. Un mes futuro, nada.
+- No sale si el mes anterior **no tiene ningún gasto**.
+- Cómo se dice (`comparisonChange`): «12% más que el mes pasado a estas
+  alturas», «8% menos que en octubre de 2026», «Lo mismo que…» (solo si
+  coincide al céntimo; una diferencia que redondea a 0 es «<1%»). Si el mes
+  anterior no llevaba nada neto gastado a esas alturas, o tan poco que el
+  porcentaje pasaría de 1000, se dice el importe («$45.00 más…»).
+- Una flecha (un SVG, oculta al lector) y las palabras, en la tinta de la
+  línea de arriba. **Sin color**: gastar más no es perder. El `title` da la
+  cifra con la que se compara («Hasta el 18 oct 2026: $1,204.31»).
+- Las sumas van en céntimos enteros, como el resto de `spend.ts`.
+
+**El comercio trae su categoría y su tarjeta.** La hoja ya tenía la lista de
+comercios escritos (`merchantSuggestions`: cada uno una vez, el más reciente
+primero, 50 como mucho). Ahora, en un **gasto nuevo**:
+
+- `merchantLast(gastos, texto)` da la categoría y la tarjeta del gasto más
+  reciente de **exactamente** ese comercio (sin contar mayúsculas ni espacios
+  de los extremos; «Uber» no es «Uber Eats»).
+- `followMerchant` (en `lib/expenseForm.ts`, pura) las pone en la hoja
+  mientras el usuario **no haya elegido** categoría o tarjeta en esa hoja;
+  cada una por separado (`free`). Lo que el usuario elige no se toca más.
+- Sigue al texto **tal como está**: si se sigue escribiendo y deja de ser un
+  comercio conocido, las casillas vuelven a como abrió la hoja (`base`). Así
+  el resultado no depende de por dónde se pasó al teclear.
+- «Sin tarjeta» se adopta como una tarjeta más. Una tarjeta archivada o que
+  este dispositivo no conoce no: se queda la de la hoja.
+- Bajo la casilla, una línea dice qué trajo («Como la última vez: Café ·
+  Visa»), en una región `aria-live` que está siempre en la página.
+- **No** actúa al editar un gasto (sus datos son suyos) ni en una hoja que
+  vuelve de «Añadir tarjeta» (se queda con lo que traía).
+
+**Datos de ejemplo de la demo.** La barra de la demo tiene «Cargar datos de
+ejemplo» junto a «Empezar de cero». Sirve para ver la app llena antes de
+decidir nada: migrar, cambiar la moneda, usar los presupuestos.
+
+- `demo/sample.ts`, `sampleData(ahora, { userId, lang })`: **siempre las
+  mismas filas**, con las fechas contadas desde hoy y nada fechado después.
+  Las apuestas salen de un generador con semilla (`BET_SEED`); los gastos,
+  de dos meses escritos a mano (`THIS_MONTH`, hasta el día de hoy, y
+  `LAST_MONTH`, entero).
+- Qué trae: 60 apuestas en 58 días (ganadas, perdidas, alguna en «push» y 4
+  abiertas; deporte según el día de la semana, casa, tipo, cuota y, en
+  muchas, cuota de cierre), banca inicial de 500 y un ingreso de 250; dos
+  tarjetas («Visa TD» y «Amex Cobalt»); gastos en **CAD** con comercios de
+  Canadá, varios **pagados en USD** con sus tres campos (`original_amount`,
+  `original_currency`, `fx_rate` entre 1,38 y 1,41; `amount` es la conversión
+  que haría la app, con `convert` de `lib/fx.ts`), un reembolso, filas con
+  origen IA y alguna sin tarjeta; y cuatro presupuestos: total, Visa TD,
+  suscripciones y ocio.
+- **Uno cerca del límite y otro pasado, cualquier día**: las suscripciones
+  y las entradas del concierto son del día 1, así que el mes en curso los
+  enseña aunque se cargue el día 1 (un test recorre 400 días seguidos).
+- Las pocas palabras que no son nombres propios (algunas notas, «Fútbol»)
+  salen en el idioma de la interfaz al cargar.
+- Los sellos (`created_at`, `updated_at`) nunca son posteriores al momento
+  de cargar: una fila sellada en el futuro ganaría todos los conflictos a
+  las ediciones del usuario.
+- `loadSampleData` llama a `resetDemo` y escribe las tablas del servidor
+  falso (`demo:rows`, `demo:moves`, `demo:settings`, `demo:expenses`,
+  `demo:expense-cards`, `demo:expense-budgets`); la app recarga y las lee
+  del «servidor» como cualquier dispositivo. `bettracker:view` es del
+  dispositivo, así que vuelve a la misma vista. Los presupuestos llevan el
+  id que la app misma les daría (`budgetId`).
+- Reemplaza todo lo que haya. Si la demo ya tiene algo (`demoHasData`: una
+  fila en el servidor falso, ajustes cambiados o un cambio en cola en el
+  dispositivo), **pregunta antes** con el mismo gesto que «Empezar de cero»
+  (segundo clic en 4 s). Vacía, carga al primer clic.
+- Cargar no pide ninguna tasa de cambio (las filas ya la traen).
+- **Solo en la demo**: `DemoBanner` es lo único que lo importa y solo se
+  monta con `MODE === 'demo'`. `e2e/demo.spec.ts` lee todos los scripts del
+  build real (también los que se cargan a demanda) y comprueba que no llevan
+  ni un comercio del ejemplo ni la semilla de sus ids.
 
 ## Sincronización
 
@@ -158,7 +452,8 @@ tarjeta se reconoce en el cliente por los 4 últimos dígitos o el nombre que
 la imagen muestra (`lib/cardMatch.ts`); una fila que parece un gasto ya
 guardado (misma fecha, importe y tarjeta, comercio parecido) sale
 desmarcada junto a ese gasto; las filas dudosas o sin fecha salen abiertas;
-se avisa si la moneda leída no es la de los gastos. «Añadir N gastos» encola
+la moneda de la imagen se elige arriba, y si no es la principal cada fila se
+convierte (ver «Otras monedas y tasas de cambio»). «Añadir N gastos» encola
 N altas normales, con Deshacer. La imagen no se guarda en ningún sitio: ni en
 el almacenamiento, ni en borradores, ni en la copia, ni en el servidor.
 
@@ -240,8 +535,11 @@ ningún otro sitio).
   movimientos y ajustes); «Restaurar» solo a movimientos y ajustes, así que
   un dispositivo que nunca cargó los gastos puede restaurar apuestas.
 - El CSV de gastos (`date, amount, currency, card, card_last4, merchant,
-  category, note, source`; BOM, CRLF y guardas de fórmula) sale de la lista
-  de la vista; el diálogo de importar y exportar lo menciona.
+  category, note, source, original_amount, original_currency, fx_rate`; BOM,
+  CRLF y guardas de fórmula) sale de la lista de la vista; el diálogo de
+  importar y exportar lo menciona. Las tres últimas columnas llegaron con la
+  009 y van al final para que una hoja hecha sobre las nueve primeras siga
+  valiendo; están vacías en un gasto en la moneda principal.
 
 ## Decisiones (y por qué)
 
@@ -254,8 +552,20 @@ reabrieron; las que más pesan:
   un gasto puede llegar antes que su tarjeta.
 - **Ids deterministas de presupuesto**: un presupuesto por ámbito y destino
   aunque dos dispositivos lo creen a la vez.
-- **Moneda solo de los gastos, sin conversión**, y activable solo con
-  prueba de la 008.
+- **Moneda solo de los gastos**, activable solo con prueba de la 008.
+  Cambiarla no convierte lo guardado; lo que se convierte es un gasto pagado
+  en otra moneda, al añadirlo (009).
+- **`amount` siempre en la moneda principal** y el original aparte, en tres
+  columnas opcionales: ningún total, presupuesto ni gráfico tuvo que cambiar,
+  y las filas y las apps de antes siguen valiendo.
+- **La base no exige que `amount` sea original × tasa**: el importe es lo
+  que el usuario dice que le cobraron.
+- **Tasas del BCE por Frankfurter**: gratis, sin clave y con CORS abierto,
+  así que la app pregunta directamente y no hace falta otra Edge Function ni
+  otro secreto. A cambio no hay tasas de todas las monedas: donde no hay, se
+  escribe a mano.
+- **Sin tasa no se guarda**: mejor una casilla vacía que un importe en otra
+  moneda contado como si fuera la principal.
 - **IA en una Edge Function con la clave en sus secretos y lista de
   permitidos**; el build rechaza una clave de Anthropic en el `.env`.
 - **La tarjeta la decide el cliente**: al modelo solo van pistas.
@@ -278,8 +588,22 @@ reabrieron; las que más pesan:
   guarda que impide imports y globales de un entorno concreto en el módulo
   compartido), `backup` (listas opcionales, moneda, `currencyWritable`) y los
   cambios que forzaron en `errors`, `drain`, `offline`, `store`, `settings`,
-  `validate`, `supabaseEnv`, `timeoutFetch`, `demo` y `fakeSupabase`.
-- **SQL**: `checks.sql` sección 11 en las variantes A, B y C de `run.sh`.
+  `validate`, `supabaseEnv`, `timeoutFetch`, `demo` y `fakeSupabase`. Con las
+  otras monedas: `fx` (URL, lectura de la respuesta, conversión, caché; con
+  una guarda de que el módulo no importa nada), `fxRates` (con un `fetch` de
+  mentira: caché, sin conexión, 4xx, plazo, cancelación, nunca lanza),
+  `expenseFx` (las dos casillas y lo que se guarda), y los casos nuevos de
+  `validate`, `rowTable`, `rowStorage`, `errors`, `fakeSupabase`, `backup`,
+  `expenseCsv`, `currency`, `expenseForm`, `expenseReview`, `expenseLast`,
+  `useRowSync` y `store`. Con el pulido: `spend` (`vsLastMonth`,
+  `comparisonChange`, `merchantLast`), `expenseForm` (`followMerchant`),
+  `demo` (`demoHasData`) y `sample` (las filas del ejemplo pasan por
+  `normalizeInput`, `normalizeExpense`, `normalizeCard` y `normalizeBudget`
+  sin cambiar; ids únicos; nada en el futuro; presupuestos cerca y pasado
+  los 400 días que recorre).
+- **SQL**: `checks.sql` secciones 11 (008) y 12 (009) en las variantes A, B y
+  C de `run.sh`, que además prueba `check_migrations.sql` tras cada
+  migración.
 - **e2e** (Playwright, sin red): `expenses.spec.ts` (12 pruebas: pestañas y
   teclado; alta, edición y borrado sin conexión con Deshacer; sincronización y
   cierre de sesión con una escritura en vuelo; tarjetas; presupuestos;
@@ -291,7 +615,22 @@ reabrieron; las que más pesan:
   diálogos a 320 y 390 px, en es y en, sin desbordar; ningún campo por debajo
   de 16 px), `demo.spec.ts` (escaneo de ejemplo; «Empezar de cero» vacía los
   gastos) y `backup.spec.ts` (la copia lleva gastos, tarjetas, presupuestos y
-  moneda; la moneda solo se ofrece con la 008 probada).
+  moneda; la moneda solo se ofrece con la 008 probada). Con las otras
+  monedas, `expenses-fx.spec.ts` (7: un gasto en USD con CAD de principal, de
+  la hoja al servidor, la lista y el CSV, y su edición sin pedir nada; sin
+  tasa no se guarda, y sin conexión convierte la última tasa guardada; un
+  servicio lento no bloquea nada; antes de la 009; la revisión en USD con
+  duplicado por lo pagado; la revisión sin tasas y la tasa para todas; la
+  hoja y la revisión a 320 px en español). El servicio de tasas lo contesta
+  el harness, y una petición a él que una prueba no haya pedido la hace
+  fallar. Con el pulido, tres más en `expenses.spec.ts` (cada categoría con
+  su icono donde se nombra, oculto al lector y en tinta neutra, también en
+  el móvil; la comparación con el mes anterior, sin color, en es y en, y
+  ausente sin mes anterior; el comercio que trae categoría y tarjeta, lo que
+  el usuario elige y la edición, que no cambia) y cuatro en `demo.spec.ts`
+  (cargar el ejemplo en una demo vacía y volver a la misma vista, con sus
+  presupuestos, sus USD y sus apuestas; preguntar antes si hay datos; en
+  español; y que los scripts del build real no llevan el ejemplo).
 - **La función**: `deno check` (Deno 2.9.6) pasó en la etapa 2 contra los
   tipos reales del SDK y de supabase-js. Nunca se ha llamado a Anthropic ni a
   un proyecto de Supabase real.
@@ -299,7 +638,7 @@ reabrieron; las que más pesan:
 ## Despliegue
 
 En el README, «AI reading of receipts (optional)», y en `HANDOFF.md`, «Qué
-hay que hacer a mano». Orden: (1) la 008 en el editor SQL, después de la 007;
+hay que hacer a mano». Orden: (1) la 008 y la 009 en el editor SQL, después de la 007;
 (2) la función y sus secretos con la CLI (`npx supabase@3.2.0`, desde la
 raíz del repositorio, con `--env-file` y `--no-verify-jwt`;
 `supabase/config.toml` guarda `verify_jwt = false`); (3) la app. En otro
@@ -324,3 +663,15 @@ añadir un test que compare los dos archivos.
 - Probar en vivo, contra el proyecto real: la 008, el despliegue de la
   función y una lectura de verdad (latencia de 10 a 60 s; el límite de tiempo
   de las Edge Functions del plan tiene que pasar de ~110 s).
+- **El servicio de tasas, en vivo**: desde aquí no se puede llegar a
+  `api.frankfurter.dev`, así que su contrato solo está comprobado contra lo
+  documentado. Ejecutar `npm run check:rates` (o el workflow «Rates
+  contract») desde una máquina con internet antes de darlo por bueno, y la
+  009 en el proyecto real.
+- **Monedas sin tasa publicada** (COP, ARS, CLP, PEN…): hoy se escribe la
+  tasa o el importe a mano. Otra fuente de tasas sería otra decisión (clave,
+  coste, privacidad).
+- **Gastos guardados antes sin convertir**: un cargo en USD apuntado como si
+  fuera CAD sigue como estaba; se corrige editándolo (elegir USD y guardar).
+  La revisión del escaneo no lo marca como duplicado de la misma compra
+  leída ahora en USD, porque es otro importe en otra moneda.

@@ -4,6 +4,7 @@ import { fmtPct } from '../../lib/format'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
 import type { CategoryShare } from '../../lib/spend'
+import CategoryIcon from './CategoryIcon'
 
 interface Props {
   shares: CategoryShare[]
@@ -33,7 +34,10 @@ export default function CategoryBreakdown({ shares, active, onPick }: Props) {
               <li key={s.category} className="spend-cat-row" data-cat={s.category}>
                 <button type="button" className="spend-cat-btn" aria-pressed={pressed} onClick={() => onPick(pressed ? 'all' : s.category)}>
                   <span className="spend-cat-main">
-                    <span className="spend-cat-name">{t(categoryKey(s.category))}</span>
+                    <span className="spend-cat-name">
+                      <CategoryIcon category={s.category} size={14} />
+                      {t(categoryKey(s.category))}
+                    </span>
                     <span className={`spend-cat-amount${s.amount < 0 ? ' refund' : ''}`}>{money.plain(s.amount)}</span>
                   </span>
                   <span className="bd-bar" aria-hidden="true">

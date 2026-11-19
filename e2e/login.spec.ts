@@ -1,11 +1,14 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { APP_URL, DEMO_URL } from './urls'
-import { menu } from './harness'
+import { forbidRates, menu } from './harness'
 
 // The production build (playwright.config.ts) without the harness: the real
 // supabase-js, signing in against https://example.supabase.co — which these
 // tests play with page.route, answering as Supabase does.
 type Answer = { status: number; body: object } | 'offline'
+
+// No harness here, so its guard is put in by hand: nothing on these screens may ask the exchange-rate service anything.
+test.beforeEach(({ context }) => forbidRates(context))
 
 const CORS = {
   'access-control-allow-origin': '*',

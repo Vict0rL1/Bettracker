@@ -62,13 +62,20 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    un mensaje si falta alguna: las tablas de gastos, tarjetas y presupuestos
    mensuales y la moneda de los gastos en `user_settings`; sin ella las
    apuestas funcionan igual, y la vista Gastos avisa y guarda lo que se añada
-   en el dispositivo). Todas son aditivas y re-ejecutables (`if not exists`,
-   `drop … if exists` antes de cada constraint, policy y trigger).
-   `supabase/schema.sql` contiene lo mismo acumulado por si prefieres
-   ejecutar un solo archivo. La 001 ya estaba aplicada antes de este
-   trabajo.
-2. **Lectura con IA (opcional)**, después de la 008 y antes de publicar la
-   app. Es la Edge Function `extract-expenses`; se despliega con la CLI de
+   en el dispositivo) → `009_expense_original_currency.sql` (después de la
+   008, y se para con un mensaje si falta: tres columnas en `expenses` para un
+   gasto pagado en otra moneda, lo pagado, su moneda y la tasa; sin ella todo
+   se ve y los presupuestos y la moneda funcionan, pero cada gasto que se
+   añada o edite espera en el dispositivo como «Falta actualizar», y la vista
+   Gastos dice qué archivo falta). Todas son aditivas y re-ejecutables (`if
+   not exists`, `drop … if exists` antes de cada constraint, policy y
+   trigger). `supabase/schema.sql` contiene lo mismo acumulado por si
+   prefieres ejecutar un solo archivo. La 001 ya estaba aplicada antes de
+   este trabajo. **Para saber cuáles faltan**: pegar
+   `supabase/check_migrations.sql` en el editor SQL; solo lee, y lista de la
+   002 a la 009 con «yes» o «NO».
+2. **Lectura con IA (opcional)**, después de la 008 y la 009 y antes de
+   publicar la app. Es la Edge Function `extract-expenses`; se despliega con la CLI de
    Supabase desde la raíz del repositorio (importa
    `src/shared/expenseExtraction.ts`, así que el editor del panel no sirve).
    Pasos, coste y privacidad en el README, «AI reading of receipts
@@ -194,6 +201,15 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
   conexión no se sabe y tampoco se activan), porque una moneda enviada a una
   base sin la columna frenaría el resto de ajustes. Una restauración tampoco
   toca la moneda sin esa prueba.
+- **La 009 tampoco hace falta para arrancar.** Con la 008 y sin la 009, leer
+  gastos, tarjetas y presupuestos funciona, y los presupuestos y la moneda se
+  pueden cambiar. Lo que espera son las altas y ediciones de gastos: todas
+  envían las tres columnas de la 009 (nulas si el gasto está en la moneda
+  principal), como toda apuesta envía `closing_odds`, y la base las rechaza
+  con PGRST204. Se quedan en la cola («Falta actualizar · n en cola», un
+  aviso, no uno por reintento; la vista Gastos muestra un aviso fijo con el
+  nombre del archivo) y se envían solas en cuanto corre la 009. Nunca se
+  rechazan ni se pierden. Los borrados de gastos sí pasan.
 - Las comprobaciones de esto contra un Postgres real están en
   `supabase/tests/` (ver "Cómo probar").
 
@@ -202,17 +218,21 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
 Para verla sin Supabase ni `.env`: `npm run demo` (http://localhost:5172).
 Entra ya con sesión y sin datos, contra un backend falso que guarda todo en
 el navegador; funciona igual que contra Supabase, sin conexión incluido.
-Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic).
+Una barra arriba dice que es la demo, con "Empezar de cero" (doble clic) y
+"Cargar datos de ejemplo": dos meses de apuestas y de gastos de una persona
+inventada, para ver la app llena antes de meter nada propio (pregunta antes
+si la demo ya tiene datos, y recarga en la misma vista).
 Tras cerrar sesión, cualquier email y una contraseña de 6 caracteres o más
 vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 1270 tests unitarios en 54 archivos (vitest)
+npm test            # 1575 tests unitarios en 59 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 251 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 267 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
+npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
 npx --yes deno@2.9.6 check --config supabase/functions/extract-expenses/deno.json supabase/functions/extract-expenses/index.ts
 ```
@@ -224,7 +244,13 @@ El `deno check` de la función se ejecutó en la etapa 2 de los gastos y pasó
 propio hace falta `DENO_CERT` apuntando a él. No está en CI todavía (ver
 pendientes en `docs/expenses-2026-11.md`). Ninguna prueba llama a Anthropic
 ni a Supabase: la lectura con IA de la demo y de la suite e2e la contesta el
-servidor falso.
+servidor falso. Tampoco al servicio de tasas de cambio: lo contesta el
+harness (opción `fx`). Lo único que habla con él es `npm run check:rates`
+(`scripts/check-rates.mjs`), que lee sus respuestas con el mismo
+`lib/fx.ts` de la app y tiene su propio workflow
+(`.github/workflows/rates-contract.yml`, a mano y en los PR que tocan las
+tasas). En este entorno no llega al host y solo dice, sin más, que no pudo
+conectar: **está por ejecutar desde una máquina con internet**.
 
 CI (`.github/workflows/ci.yml`) corre en cada push y PR: escaneo de secretos
 con gitleaks, tests y build, el esquema SQL contra un Postgres de usar y
@@ -232,13 +258,17 @@ tirar, y la suite e2e.
 
 `supabase/tests/run.sh` monta la base de tres formas: (A) el esquema con el
 que se publicó la app (`supabase/tests/original_schema.sql`) con filas,
-subido con las migraciones 001→008, cada una dos veces; (B) lo mismo subido
+subido con las migraciones 001→009, cada una dos veces (y, tras cada una,
+comprueba que `supabase/check_migrations.sql` dice «yes» justo para las que
+ya han corrido); (B) lo mismo subido
 con `schema.sql` dos veces; (C) una instalación desde cero con `schema.sql`
 dos veces y todas las migraciones encima, con filas escritas como las
 escribe una versión antigua (sin `status`). En A y B comprueba el backfill;
 en C, el trigger; en las tres, las escrituras de versiones antiguas y
 nuevas, las constraints y, para `bankroll_moves` y las tres tablas de gastos
-(sección 11 de `checks.sql`), la regla de conflicto, la cascada al borrar el
+(sección 11 de `checks.sql`; la 12 es la 009: las tres columnas del gasto en
+otra moneda, sus cinco constraints, una app anterior que no las nombra), la
+regla de conflicto, la cascada al borrar el
 usuario y las policies ejercidas como un usuario
 conectado (rol `authenticated`, que crea `stubs.sql`; por eso necesita un
 superusuario, como el `postgres` de CI: hace falta crear el rol y luego
@@ -262,7 +292,15 @@ estado bajo `e2e:` en vez de `demo:`; `e2e/demo.spec.ts` prueba la demo tal
 cual se construye (`npm run demo:serve`, en el puerto 4182). `'behind'` es
 una base sin la 004 ni la 005; `'behind-005'`, con la 004 y sin la 005
 (`e2e:migrated-005` la "ejecuta"); `'behind-008'`, con la 004, la 005 y la
-007 y sin la 008 (`e2e:migrated-008`). La opción `moves` siembra la caché de
+007 y sin la 008 (`e2e:migrated-008`); `'behind-009'`, con todo hasta la 008
+y sin la 009 (`e2e:migrated-009`: sin ella las lecturas de gastos no traen
+las tres columnas y una escritura que las nombre recibe PGRST204). La opción
+`fx` hace que el harness conteste por el servicio de tasas de cambio
+(`api.frankfurter.dev`; por defecto 1 USD = 1,4 CAD, con modos `fail`,
+`offline`, `unsupported`, `garbage` y `delayMs`; `setFx` lo cambia a mitad
+de prueba y `fxRequests` da lo pedido). **Sin `fx`, una petición a ese host
+hace fallar la prueba**, y el Chromium de la suite tampoco puede resolver su
+nombre (`playwright.config.ts`): ninguna prueba toca la red. La opción `moves` siembra la caché de
 ingresos y retiradas del dispositivo (sin ella, el dispositivo nunca los ha
 cargado); `expenses`, `cards` y `budgets`, las de gastos, tarjetas y
 presupuestos (con `moves` y sin ellas valen `[]`; `null`, ninguna caché);
@@ -273,6 +311,112 @@ la página). En este entorno hizo falta `NO_PROXY='*'` para que
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Pulido de Gastos y datos de ejemplo (noviembre 2026)
+
+La parte de «mejorar la estética de la app que tú sugieras y mejoras que
+sientas que necesite» de la misma petición. Cuatro cosas, sin migración y
+sin tocar la sincronización; el detalle está en `docs/expenses-2026-11.md`,
+«Pulido de noviembre».
+
+- **Un icono por categoría** (`components/expenses/CategoryIcon.tsx`): once
+  dibujos propios de trazo, en una caja de 16 px, con la tinta del texto
+  (nunca un color: el color es dinero) y ocultos al lector de pantalla. Van
+  junto al nombre de la categoría en las fichas de la hoja, la lista (en el
+  móvil, delante de cada tarjeta), el desglose, la revisión del escaneo, los
+  presupuestos y su editor.
+- **«Frente al mes pasado»** bajo lo gastado: el mes en curso se compara día
+  por día (los dos meses hasta el número de día de hoy) y un mes pasado,
+  entero. Una flecha y palabras («29% menos que el mes pasado a estas
+  alturas»), sin color; no sale si el mes anterior no tiene gastos.
+  `vsLastMonth` y `comparisonChange` en `lib/spend.ts`.
+- **El comercio trae su última categoría y tarjeta**: al escribir en un
+  gasto nuevo un comercio ya usado, la hoja adopta las de su gasto más
+  reciente mientras el usuario no las haya elegido en esa hoja, y lo dice
+  bajo la casilla («Como la última vez: Café · Visa»). `merchantLast` en
+  `lib/spend.ts` y `followMerchant` en `lib/expenseForm.ts`. Al editar un
+  gasto no cambia nada.
+- **Datos de ejemplo en la demo**: el botón «Cargar datos de ejemplo» de la
+  barra (`demo/sample.ts`). Sesenta apuestas en dos meses, banca inicial y
+  un ingreso, dos tarjetas, los gastos del mes pasado y de este hasta hoy en
+  CAD (varios pagados en USD con su tasa, un reembolso, filas leídas por IA)
+  y cuatro presupuestos, uno cerca del límite y otro pasado sea cual sea el
+  día. Siempre los mismos, con las fechas contadas desde hoy. Solo existe en
+  la demo: una prueba e2e lee los scripts del build real y comprueba que no
+  están.
+
+**Cómo se probó.** Unitarios: `spend` (`vsLastMonth`, `comparisonChange`,
+`merchantLast`), `expenseForm` (`followMerchant`), `demo` (`demoHasData`) y
+el nuevo `sample` (cada fila pasa las mismas validaciones que la app, y 400
+días seguidos dan todos un presupuesto cerca y otro pasado). e2e: tres en
+`expenses.spec.ts` (iconos, comparación, comercios) y cuatro en
+`demo.spec.ts` (cargar en vacío y volver a la misma vista, preguntar con
+datos, español, y que el build real no lleva los datos). Capturas a 1280 y
+390 px, en oscuro y claro. **Ninguna expectativa anterior cambió.**
+
+### Gastos en otra moneda (noviembre 2026)
+
+Petición del usuario: «la moneda principal que quiero es dólar canadiense
+pero en algunas transacciones tengo usd entonces me gustaría que en la app
+registrara los gastos y los convierta a cad». Detalle completo en
+`docs/expenses-2026-11.md`, «Otras monedas y tasas de cambio». En corto:
+
+- **La moneda de los ajustes es la principal** (CAD) y todo lo que suma
+  sigue en ella. Un gasto se puede pagar en **otra moneda** (USD): la hoja
+  tiene un selector junto al importe y, debajo, la **tasa** del día y el
+  importe **en la moneda principal**, los dos editables (escribir uno
+  recalcula el otro; lo que escribe el usuario se respeta al cambiar la
+  fecha). Una línea dice de dónde sale la tasa. Sin tasa no se guarda: nunca
+  un importe en dólares como si fuera la moneda principal.
+- **Datos**: migración 009, tres columnas opcionales en `expenses`
+  (`original_amount`, `original_currency`, `fx_rate`; las tres o ninguna).
+  `amount` no cambia de significado: es el importe en la moneda principal, y
+  puede ser lo que cobró el banco en vez de original × tasa. La copia
+  completa y el CSV de gastos (tres columnas al final) los llevan.
+- **Tasas**: del Banco Central Europeo, por Frankfurter
+  (`api.frankfurter.dev`, gratis y sin clave). La petición lleva dos códigos
+  de moneda y una fecha, nada más, y no pasa por Supabase. Se guardan en el
+  dispositivo (`bettracker:fx`, una clave sin usuario, prescindible), así
+  que sin conexión se convierte con la última guardada y se dice de qué día
+  es. La CSP admite ese host. Monedas que el servicio no publica (COP, ARS,
+  CLP, PEN…): la tasa se escribe a mano.
+- **Listas**: la moneda principal se escribe con su símbolo estrecho (`$`
+  para CAD; el código va junto al título del mes) y lo pagado en otra moneda,
+  pequeño y con su código («USD 12.00»).
+- **Revisión del escaneo**: selector «Moneda de la imagen» arriba (Wallet
+  enseña `$` a secas para CAD y USD); en otra moneda cada fila se convierte
+  con la tasa de su día, una fila sin tasa no entra en «Añadir N» y un campo
+  da una tasa a todas las que no tienen. Los duplicados se reconocen por lo
+  pagado (misma moneda e importe) o por el importe en la moneda principal. El
+  aviso antiguo de «la moneda no coincide» desaparece.
+- **Antes de la 009** los gastos esperan como «Falta actualizar» (ver «Orden
+  de despliegue seguro»).
+- **`supabase/check_migrations.sql`**: consulta de solo lectura que dice qué
+  migraciones tiene ya el proyecto.
+- **Comprobación del servicio real**: `npm run check:rates`
+  (`scripts/check-rates.mjs`) y el workflow `rates-contract.yml`, aparte del
+  CI principal.
+
+**Cómo se probó.** Unitarios nuevos: `fx`, `fxRates`, `expenseFx`, y casos
+en `validate`, `rowTable`, `rowStorage`, `rowOps`, `errors`, `fakeSupabase`,
+`backup`, `expenseCsv`, `currency`, `expenseForm`, `expenseReview`,
+`expenseLast`, `useRowSync`, `store` y `demo`. SQL: sección 12 de
+`checks.sql` y `check_migrations.sql` tras cada migración. e2e:
+`expenses-fx.spec.ts` (7). **No se ha podido hablar con el servicio de tasas
+desde este entorno** (el host no es alcanzable): su contrato está escrito
+según su documentación y `npm run check:rates` aquí solo llega a decir que
+no pudo conectar. Hay que ejecutarlo (o el workflow) desde una máquina con
+internet. Tampoco se ha aplicado la 009 al proyecto real.
+
+**Expectativas de pruebas que cambian a propósito.** `currency.test.ts`: la
+moneda principal usa el símbolo estrecho (`$` en vez de `MX$`, `CA$`,
+`COP`…). `expenseCsv.test.ts`: tres columnas más. Los tests de
+`rowTable`, `rowOps`, `rowStorage`, `validate` y `expenseForm` esperan los
+tres campos nuevos (nulos). `expenseReview.test.ts`: una lectura en USD con
+otra moneda principal ya no es un importe «con decimales de más» sino una
+fila en otra moneda. e2e: en `expenses.spec.ts` la prueba del símbolo ancho
+usa soles (`PEN`) porque el peso colombiano ahora es `$`, y las dos pruebas
+que «ejecutan» la 008 a mano ejecutan también la 009.
 
 ### Gastos (noviembre 2026)
 
@@ -1000,16 +1144,21 @@ src/renderer/src/lib/
   strings.ts, i18n.ts
   view.ts       vista Apuestas o Gastos, recordada por dispositivo
   categories.ts, stableId.ts            categorías de gasto; ids deterministas de presupuesto
-  currency.ts   formato de la moneda de los gastos
-  spend.ts      gasto del mes, proyección, presupuestos, datos del gráfico, filtros
-  expenseForm.ts, expenseReview.ts      la hoja de gasto (importes como se teclean); la revisión de lo leído por la IA
+  currency.ts   formato de la moneda de los gastos (símbolo estrecho la principal; con código lo pagado en otra)
+  fx.ts         tasas de cambio, la parte pura y sin imports: URL, lectura de la respuesta, conversión, caché
+  expenseFx.ts  gasto en otra moneda: las casillas de tasa e importe convertido y lo que se guarda
+  spend.ts      gasto del mes, proyección, comparación con el mes anterior, presupuestos, datos del gráfico, filtros,
+                comercios ya escritos y cómo se archivó cada uno la última vez
+  expenseForm.ts, expenseReview.ts      la hoja de gasto (importes como se teclean; el comercio trae su categoría
+                                        y tarjeta); la revisión de lo leído por la IA
   cardMatch.ts  tarjeta por últimos 4 dígitos o nombre
   expenseCsv.ts CSV de gastos
   scanImage.ts, scanImageDom.ts         la imagen a escanear: tamaño, tipo, JPEG
 src/renderer/src/demo/
   fakeSupabase.ts   el Supabase falso de la demo y de la suite e2e
   start.ts          entrada de `npm run demo` (va delante de main.tsx)
-  demo.ts           usuario de la demo y "Empezar de cero"
+  demo.ts           usuario de la demo, "Empezar de cero" y si la demo tiene datos
+  sample.ts         "Cargar datos de ejemplo": dos meses de apuestas y gastos, siempre los mismos, fechados desde hoy
 src/renderer/src/data/
   bets.ts, offline.ts, useBetSync.ts      apuestas: servidor, caché, outbox
   settings.ts, useSettings.ts             ajustes: lo mismo en pequeño
@@ -1024,7 +1173,8 @@ src/renderer/src/data/
   rowTable.ts, rowStorage.ts, useRowSync.ts, rowOps.ts
                                           gastos, tarjetas y presupuestos: servidor, almacenamiento y sincronización
   expenseSpecs.ts, expenses.ts            las tres tablas descritas para esa capa
-  expenseLast.ts                          última tarjeta y categoría usadas en el dispositivo
+  expenseLast.ts                          última tarjeta, categoría y otra moneda usadas en el dispositivo
+  fxRates.ts                              tasas de cambio: la petición, la caché del dispositivo, qué se usa sin conexión
   extract.ts                              llamada a la Edge Function extract-expenses
 src/renderer/src/lib/betForm.ts     los problemas de cada casilla, en palabras; rechazos
 src/renderer/src/lib/importPlan.ts  revisión de una importación: duplicados, huella del archivo
@@ -1045,14 +1195,19 @@ src/renderer/src/components/
 src/renderer/src/components/expenses/
   ExpensesView, SpendSummary, SpendChart(+Inner), BudgetsPanel, CategoryBreakdown,
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
-  BudgetEditor, CurrencyPicker, useDialog
-e2e/*.spec.ts                       251 comprobaciones (mobile.spec.ts: el móvil;
+  BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
+  CategoryIcon (los once iconos de categoría)
+e2e/*.spec.ts                       267 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;
-                                    expenses.spec.ts y expenses-sync.spec.ts: los gastos)
+                                    expenses.spec.ts y expenses-sync.spec.ts: los gastos;
+                                    expenses-fx.spec.ts: los gastos en otra moneda)
 e2e/urls.ts                         los puertos de la suite (E2E_PORT, E2E_DEMO_PORT, E2E_DEV_PORT)
-supabase/migrations/00{2,3,4,5,6,7,8}_*.sql, supabase/schema.sql
+supabase/migrations/00{2,3,4,5,6,7,8,9}_*.sql, supabase/schema.sql
+supabase/check_migrations.sql       consulta de solo lectura: qué migraciones tiene ya el proyecto
+scripts/check-rates.mjs             `npm run check:rates`: el servicio de tasas real, leído con lib/fx.ts
+.github/workflows/rates-contract.yml  ese chequeo, aparte del CI (a mano y en PR que tocan las tasas)
 supabase/functions/extract-expenses/ la Edge Function de la lectura con IA (index.ts, deno.json)
 supabase/config.toml                ajustes de la CLI: sin la comprobación JWT de la pasarela para esa función
 docs/expenses-2026-11.md            los gastos: decisiones, datos, sincronización, IA, pruebas, pendientes

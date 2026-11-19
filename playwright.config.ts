@@ -11,6 +11,13 @@ const chromium =
 // Made of parts so the CI secret scan has nothing that looks like a key.
 const PLACEHOLDER_KEY = ['sb', 'publishable', 'e2e', 'placeholder'].join('_')
 
+// The one third party the app ever calls by itself: the exchange-rate service
+// (expenses paid in another currency). The specs answer for it (e2e/harness.ts,
+// which fails a test that reaches it unasked); this makes sure of it from the
+// other side: the browser can't even resolve its name, so no run of the suite
+// ever depends on it or sends it anything, whatever a spec forgets.
+const NO_RATES_HOST = '--host-resolver-rules=MAP api.frankfurter.dev ~NOTFOUND'
+
 // The suite never talks to a real backend. The app is built with placeholder
 // credentials (well-formed, so the build's .env check lets them through and
 // main.tsx renders the app instead of the "not configured" screen) and every
@@ -28,7 +35,7 @@ export default defineConfig({
     baseURL: APP_URL,
     // The app follows the browser language; the specs assert English copy.
     locale: 'en-US',
-    launchOptions: chromium ? { executablePath: chromium } : {},
+    launchOptions: { ...(chromium ? { executablePath: chromium } : {}), args: [NO_RATES_HOST] },
     trace: 'retain-on-failure'
   },
   webServer: [

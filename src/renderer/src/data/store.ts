@@ -201,10 +201,12 @@ export class StorageWriteError extends Error {
 /**
  * What the server holds anyway: the cached bets, deposits and withdrawals,
  * and settings, and expenses, cards and budgets. Never a queue (each name is
- * followed by a colon, so "expenses-outbox" and the like never match).
+ * followed by a colon, so "expenses-outbox" and the like never match). And
+ * the exchange rates this device has fetched (data/fxRates.ts): one key for
+ * the device, fetched again when needed.
  */
 const EXPENDABLE =
-  /^bettracker:(?:cache|moves|settings|confirmed-bets|confirmed-moves|expenses|expense-cards|expense-budgets|confirmed-expenses|confirmed-expense-cards|confirmed-expense-budgets):/
+  /^bettracker:(?:(?:cache|moves|settings|confirmed-bets|confirmed-moves|expenses|expense-cards|expense-budgets|confirmed-expenses|confirmed-expense-cards|confirmed-expense-budgets):|fx$)/
 
 /** Store something that can be fetched again. Failing to is fine. */
 export function writeExpendable(key: string, value: unknown): void {

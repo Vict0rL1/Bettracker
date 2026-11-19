@@ -2,6 +2,8 @@ import type { Expense, ExpenseCard, ExpenseCategory, ExpenseInput, ExpenseSource
 import type { ExpenseLast } from '../data/expenseLast'
 import type { Problem } from './betForm'
 import { currencyDigits, EXPENSE_CURRENCIES } from './currency'
+import type { FxStored, FxTyped, FxView } from './expenseFx'
+import type { MerchantLast } from './spend'
 import { isValidDate, MAX_AMOUNT } from './validate'
 
 /**
@@ -9,11 +11,20 @@ import { isValidDate, MAX_AMOUNT } from './validate'
  * as text and read the way the person meant them (parseAmountText), never
  * with parseFloat: "4,50", "1.234,50" and "12.500" (pesos) are all common.
  * The sign is never typed: the sheet's Spent/Refund toggle sets it.
+ *
+ * The amount is typed in the currency it was paid in (`currency`): the main
+ * one (Settings.expenseCurrency) or another. For another, the rate and the
+ * amount in the main currency are worked out next to it (lib/expenseFx.ts),
+ * and `fx` is what the user typed in one of those two boxes, if anything.
  */
 
 export interface ExpenseDraft {
-  /** Unsigned, as typed. */
+  /** Unsigned, as typed, in `currency`. */
   amount: string
+  /** The currency the amount was paid in: the main one, or another. */
+  currency: string
+  /** Paid in another currency: what the user typed as the rate or as the amount in the main currency (null: nothing typed). */
+  fx: FxTyped | null
   /** true: a refund or credit (a negative amount). */
   refund: boolean
   date: string
@@ -23,18 +34,53 @@ export interface ExpenseDraft {
   note: string
 }
 
-/** Defaults: today, `preferCardId` if active, else last card if still active, else the only active card, else null; last category else 'other'. */
-export function initialDraft(o: { today: string; last: ExpenseLast | null; cards: readonly ExpenseCard[]; preferCardId?: string }): ExpenseDraft {
+/**
+ * Defaults: today, the main currency, `preferCardId` if active, else last card if still active, else the only active
+ * card, else null; last category else 'other'.
+ */
+export function initialDraft(o: { today: string; last: ExpenseLast | null; cards: readonly ExpenseCard[]; currency: string; preferCardId?: string }): ExpenseDraft {
   const active = o.cards.filter((c) => !c.archived)
   const isActive = (id: string | null | undefined): id is string => id !== null && id !== undefined && active.some((c) => c.id === id)
   const cardId = isActive(o.preferCardId) ? o.preferCardId : isActive(o.last?.cardId) ? (o.last?.cardId ?? null) : active.length === 1 ? active[0].id : null
-  return { amount: '', refund: false, date: o.today, cardId, category: o.last?.category ?? 'other', merchant: '', note: '' }
+  return { amount: '', currency: o.currency, fx: null, refund: false, date: o.today, cardId, category: o.last?.category ?? 'other', merchant: '', note: '' }
 }
 
 /** A draft handed back after "Add card": what was typed, with the card added then chosen while it is active (else the draft's own card). */
 export function resumedDraft(draft: ExpenseDraft, cards: readonly ExpenseCard[], addedCardId: string | null): ExpenseDraft {
   const added = addedCardId === null ? undefined : cards.find((c) => c.id === addedCardId && !c.archived)
   return added ? { ...draft, cardId: added.id } : draft
+}
+
+/** The two boxes a merchant can fill in: true while the user has not set that one in this sheet. */
+export interface FollowFree {
+  category: boolean
+  card: boolean
+}
+
+/**
+ * The merchant box changed to `merchant`. A category or card the user has not set in this sheet (`free`) follows the
+ * merchant: one typed before brings what it was last filed under (`last`, lib/spend.ts merchantLast); any other text
+ * brings back what the sheet opened with (`base`), so the boxes depend on the text as it stands, never on what was
+ * typed on the way to it ("Uber" on the way to "Uber Eats"). A box the user set is never changed. The card comes along
+ * only when it can be chosen now: "No card", or an active card of `cards`; an archived or unknown one leaves the
+ * sheet's own. `adopted` says which boxes now hold the merchant's.
+ */
+export function followMerchant(
+  d: ExpenseDraft,
+  merchant: string,
+  o: { last: MerchantLast | null; free: FollowFree; base: Pick<ExpenseDraft, 'category' | 'cardId'>; cards: readonly ExpenseCard[] }
+): { draft: ExpenseDraft; adopted: FollowFree } {
+  const cardOk = o.last !== null && (o.last.cardId === null || o.cards.some((c) => c.id === o.last?.cardId && !c.archived))
+  const adopted: FollowFree = { category: o.free.category && o.last !== null, card: o.free.card && cardOk }
+  return {
+    draft: {
+      ...d,
+      merchant,
+      category: adopted.category && o.last ? o.last.category : o.free.category ? o.base.category : d.category,
+      cardId: adopted.card && o.last ? o.last.cardId : o.free.card ? o.base.cardId : d.cardId
+    },
+    adopted
+  }
 }
 
 /** Boxes that take typed text. */
@@ -63,10 +109,25 @@ export function pasteIsTyping(target: PasteTarget | null, types: readonly string
   return tag === 'TEXTAREA' || (tag === 'INPUT' && TYPED_INPUTS.has((target.type || 'text').toLowerCase()))
 }
 
-/** A saved expense in the sheet's boxes: refund = amount < 0, the amount unsigned (formatAmountText). */
-export function draftOf(e: Expense, currency: string): ExpenseDraft {
+/**
+ * Whether a saved expense is shown as paid in another currency: it has an
+ * original, and that original is not in today's main currency (the main
+ * currency was changed since, which converts nothing: the expense then
+ * reads as one of the main currency, by its amount).
+ */
+export const paidInAnother = (e: Pick<Expense, 'originalAmount' | 'originalCurrency' | 'fxRate'>, main: string): e is { originalAmount: number; originalCurrency: string; fxRate: number } =>
+  e.originalAmount !== null && e.originalCurrency !== null && e.fxRate !== null && e.originalCurrency !== main
+
+/**
+ * A saved expense in the sheet's boxes: refund = amount < 0, the amount unsigned (formatAmountText). One paid in
+ * another currency shows what was paid, in its currency (its rate and converted amount are storedFx).
+ */
+export function draftOf(e: Expense, main: string): ExpenseDraft {
+  const foreign = paidInAnother(e, main)
   return {
-    amount: formatAmountText(Math.abs(e.amount), currency),
+    amount: foreign ? formatAmountText(Math.abs(e.originalAmount), e.originalCurrency) : formatAmountText(Math.abs(e.amount), main),
+    currency: foreign ? e.originalCurrency : main,
+    fx: null,
     refund: e.amount < 0,
     date: e.date,
     cardId: e.cardId,
@@ -76,12 +137,30 @@ export function draftOf(e: Expense, currency: string): ExpenseDraft {
   }
 }
 
-/** amount = ±parseAmountText(text, currencyDigits(currency)); call only when expenseAmountProblem is null. */
-export function draftToInput(d: ExpenseDraft, source: ExpenseSource, currency: string): ExpenseInput {
-  const n = parseAmountText(d.amount, currencyDigits(currency))
+/**
+ * The rate and converted amount saved with the expense being edited, while the draft still is about that payment: the
+ * same currency and the same date. Null otherwise (another date or currency asks for its own rate), and for an expense
+ * in the main currency.
+ */
+export function storedFx(e: Expense | null, d: Pick<ExpenseDraft, 'currency' | 'date'>, main: string): FxStored | null {
+  if (e === null || !paidInAnother(e, main) || e.originalCurrency !== d.currency || e.date !== d.date) return null
+  return { rate: e.fxRate, converted: Math.abs(e.amount), original: Math.abs(e.originalAmount) }
+}
+
+/**
+ * What the sheet saves. In the main currency: amount = ±parseAmountText(text, the currency's digits), no original.
+ * In another: the amount typed is the original, and `fx` (lib/expenseFx.ts) gives the rate and the amount in the main
+ * currency. Call only when the boxes have no problem; anything missing becomes NaN, which normalizeExpense refuses.
+ */
+export function draftToInput(d: ExpenseDraft, source: ExpenseSource, main: string, fx: Pick<FxView, 'rate' | 'converted'> | null = null): ExpenseInput {
+  const n = parseAmountText(d.amount, currencyDigits(d.currency))
+  const sign = d.refund ? -1 : 1
   // Anything but a number is refused by normalizeExpense (amountNumber), as it should never get here.
-  const amount = typeof n === 'number' ? (d.refund ? -n : n) : Number.NaN
-  return { date: d.date, amount, cardId: d.cardId, category: d.category, merchant: d.merchant, note: d.note, source }
+  const typed = typeof n === 'number' ? sign * n : Number.NaN
+  const rest = { date: d.date, cardId: d.cardId, category: d.category, merchant: d.merchant, note: d.note, source }
+  if (d.currency === main) return { ...rest, amount: typed, originalAmount: null, originalCurrency: null, fxRate: null }
+  const converted = fx?.converted ?? null
+  return { ...rest, amount: converted === null ? Number.NaN : sign * converted, originalAmount: typed, originalCurrency: d.currency, fxRate: fx?.rate ?? Number.NaN }
 }
 
 /** Rounded half up at that many decimals, as written: 4.505 → 4.51 (4.505 × 100 is 450.4999… in binary). */

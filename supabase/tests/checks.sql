@@ -722,4 +722,122 @@ do $$ begin
   assert (select unit_size from public.user_settings where user_id = '00000000-0000-0000-0000-000000000005') = 10, 'and its own change lands';
 end $$;
 
+-- 12. Migration 009: an expense paid in another currency. amount stays the
+-- amount in the user's expense currency; original_amount, original_currency
+-- and fx_rate say what was paid and at what rate, all three or none.
+do $$ begin
+  assert (select count(*) from public.expenses where original_amount is not null or original_currency is not null or fx_rate is not null) = 0,
+    'every expense from before 009 is in the user''s own currency';
+  assert (select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'public.expenses'::regclass and attname = 'original_amount') = 'numeric(12,2)', 'original_amount is numeric(12,2)';
+  assert (select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'public.expenses'::regclass and attname = 'original_currency') = 'text', 'original_currency is text';
+  assert (select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'public.expenses'::regclass and attname = 'fx_rate') = 'numeric(18,8)', 'fx_rate is numeric(18,8)';
+  assert (select bool_and(not attnotnull) from pg_attribute where attrelid = 'public.expenses'::regclass and attname in ('original_amount', 'original_currency', 'fx_rate')), 'the three are optional';
+end $$;
+
+-- 12a. An app from before 009 names none of the three: its adds get nulls,
+-- and its edits leave what a newer app wrote alone.
+insert into public.expenses (id, user_id, date, amount, merchant, updated_at) values
+  ('70000000-0000-4000-8000-000000000030', '00000000-0000-0000-0000-000000000005', '2026-11-18', 9.99, 'Old app', '2026-11-18 08:00:00+00');
+insert into public.expenses (id, user_id, date, amount, card_id, merchant, category, note, source, original_amount, original_currency, fx_rate, updated_at) values
+  ('70000000-0000-4000-8000-000000000031', '00000000-0000-0000-0000-000000000005', '2026-11-13', 16.84, null, 'Apple.com', 'subscriptions', '', 'manual', 12.00, 'USD', 1.4034, '2026-11-18 08:00:00+00'),
+  -- What the bank charged (its own fee on top), not original × rate: accepted.
+  ('70000000-0000-4000-8000-000000000032', '00000000-0000-0000-0000-000000000005', '2026-11-13', 17.25, null, 'Hotel', 'travel', '', 'ai', 12.00, 'USD', 1.4034, '2026-11-18 08:00:00+00'),
+  -- A refund is negative in both currencies.
+  ('70000000-0000-4000-8000-000000000033', '00000000-0000-0000-0000-000000000005', '2026-11-14', -7.02, null, 'Refund', 'shopping', '', 'manual', -5.00, 'USD', 1.4034, '2026-11-18 08:00:00+00'),
+  -- A small rate keeps its 8 decimals (1 COP in CAD), and half a cent of the original is a cent.
+  ('70000000-0000-4000-8000-000000000034', '00000000-0000-0000-0000-000000000005', '2026-11-14', 4.27, null, 'Bogotá', 'food', '', 'manual', 12500.005, 'COP', 0.000341234567, '2026-11-18 08:00:00+00');
+do $$ begin
+  assert (select original_amount is null and original_currency is null and fx_rate is null from public.expenses where id = '70000000-0000-4000-8000-000000000030'), 'an older app''s expense is in the user''s own currency';
+  assert (select amount = 16.84 and original_amount = 12.00 and original_currency = 'USD' and fx_rate = 1.4034 from public.expenses where id = '70000000-0000-4000-8000-000000000031'), 'an expense in another currency keeps what was paid and the rate';
+  assert (select amount from public.expenses where id = '70000000-0000-4000-8000-000000000032') = 17.25, 'the amount may be what the bank charged';
+  assert (select amount = -7.02 and original_amount = -5.00 from public.expenses where id = '70000000-0000-4000-8000-000000000033'), 'a refund in another currency';
+  assert (select fx_rate from public.expenses where id = '70000000-0000-4000-8000-000000000034') = 0.00034123, 'a rate keeps 8 decimals';
+  assert (select original_amount from public.expenses where id = '70000000-0000-4000-8000-000000000034') = 12500.01, 'the original is rounded to cents';
+  assert (select sum(amount) from public.expenses where id in ('70000000-0000-4000-8000-000000000031', '70000000-0000-4000-8000-000000000033')) = 9.82, 'totals read amount, in the user''s currency';
+end $$;
+update public.expenses set amount = 16.90, note = 'edited by an older app', updated_at = '2026-11-18 09:00:00+00'
+ where id = '70000000-0000-4000-8000-000000000031' and updated_at <= '2026-11-18 09:00:00+00';
+do $$ begin
+  assert (select amount = 16.90 and original_amount = 12.00 and original_currency = 'USD' and fx_rate = 1.4034 from public.expenses where id = '70000000-0000-4000-8000-000000000031'),
+    'an older app''s edit leaves the original and the rate alone';
+end $$;
+
+-- 12b. The current app sends the three with every add and edit, with the
+-- conflict rule: a later edit lands (to another currency, or back to the
+-- user's own), an earlier one doesn't.
+do $$
+declare n int;
+begin
+  update public.expenses set amount = 11.05, original_amount = 8.00, original_currency = 'EUR', fx_rate = 1.38125, updated_at = '2026-11-18 10:00:00+00'
+   where id = '70000000-0000-4000-8000-000000000031' and updated_at <= '2026-11-18 10:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'a later edit changes the currency paid in';
+  update public.expenses set amount = 99, original_amount = 99, original_currency = 'GBP', fx_rate = 1, updated_at = '2026-11-18 09:30:00+00'
+   where id = '70000000-0000-4000-8000-000000000031' and updated_at <= '2026-11-18 09:30:00+00';
+  get diagnostics n = row_count;
+  assert n = 0, 'an earlier edit is refused';
+  assert (select original_currency = 'EUR' and fx_rate = 1.38125 from public.expenses where id = '70000000-0000-4000-8000-000000000031'), 'the later edit stands';
+  update public.expenses set amount = 11.05, original_amount = null, original_currency = null, fx_rate = null, updated_at = '2026-11-18 11:00:00+00'
+   where id = '70000000-0000-4000-8000-000000000031' and updated_at <= '2026-11-18 11:00:00+00';
+  get diagnostics n = row_count;
+  assert n = 1, 'an expense can go back to the user''s own currency';
+  assert (select original_amount is null and original_currency is null and fx_rate is null from public.expenses where id = '70000000-0000-4000-8000-000000000031'), 'with the three cleared';
+end $$;
+
+-- 12c. The constraints refuse what the app never sends: one or two of the
+-- three, an original of 0 or out of range, the other sign, a code that is no
+-- ISO code, a rate that is not positive or has no room.
+do $$ begin
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_currency) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 'USD')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'USD')$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 'USD', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 0, 'USD', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 0.004, 'USD', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 100000000.01, 'USD', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, -3, 'USD', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', -4, 3, 'USD', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'usd', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'US', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'US$', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'DOLLARS', 1.4)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'USD', 0)$q$, '23514');
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'USD', -1.4)$q$, '23514');
+  -- 0.000000004 is 0 once stored with 8 decimals.
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'USD', 0.000000004)$q$, '23514');
+  -- numeric(18, 8): ten digits before the point.
+  perform pg_temp.refuses($q$insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values ('00000000-0000-0000-0000-000000000005', '2026-11-17', 4, 3, 'USD', 10000000000)$q$, '22003');
+  -- An edit can't leave the pair with different signs, or half of the three.
+  perform pg_temp.refuses($q$update public.expenses set amount = 7.02 where id = '70000000-0000-4000-8000-000000000033'$q$, '23514');
+  perform pg_temp.refuses($q$update public.expenses set fx_rate = null where id = '70000000-0000-4000-8000-000000000033'$q$, '23514');
+  perform pg_temp.refuses($q$update public.expenses set original_currency = null where id = '70000000-0000-4000-8000-000000000033'$q$, '23514');
+end $$;
+
+-- 12d. The policies cover the new columns like the rest of the row: a
+-- signed-in user (…06) writes and reads their own, and never another's.
+-- Rolled back.
+begin;
+set local role authenticated;
+set local request.jwt.claim.sub = '00000000-0000-0000-0000-000000000006';
+do $$
+declare n int;
+begin
+  insert into public.expenses (user_id, date, amount, original_amount, original_currency, fx_rate) values (auth.uid(), '2026-11-17', 14.00, 10.00, 'USD', 1.4);
+  assert (select original_currency from public.expenses) = 'USD', 'a user reads the original of their own expense';
+  update public.expenses set fx_rate = 9 where id = '70000000-0000-4000-8000-000000000032';
+  get diagnostics n = row_count;
+  assert n = 0, 'another user''s rate cannot be edited';
+  update public.expenses set amount = 14.50, fx_rate = 1.45;
+  get diagnostics n = row_count;
+  assert n = 1, 'an unfiltered edit touches only the user''s own expense';
+end $$;
+rollback;
+do $$ begin
+  assert (select fx_rate from public.expenses where id = '70000000-0000-4000-8000-000000000032') = 1.4034, 'the other user left the rate alone';
+  -- Section 11's totals count user …05's rows: put them back as they were.
+  delete from public.expenses where id in ('70000000-0000-4000-8000-000000000030', '70000000-0000-4000-8000-000000000031', '70000000-0000-4000-8000-000000000032', '70000000-0000-4000-8000-000000000033', '70000000-0000-4000-8000-000000000034');
+end $$;
+
 select 'checks passed' as result;

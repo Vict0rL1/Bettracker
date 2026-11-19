@@ -1,6 +1,7 @@
 import {
   BUDGET_SCOPES,
   isBetStatus,
+  isCurrencyCode,
   statusForAmount,
   type BetInput,
   type BetStatus,
@@ -16,6 +17,7 @@ import {
   type SettingsPatch
 } from '../../../shared/types'
 import { isExpenseCategory, toCategory } from './categories'
+import { MAX_RATE, roundRate } from './fx'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -57,6 +59,8 @@ export type InputCode =
   | 'closingRange'
   | 'moveZero'
   | 'expenseCard'
+  | 'expenseOriginal'
+  | 'expenseRate'
   | 'cardName'
   | 'cardLast4'
   | 'cardKind'
@@ -277,9 +281,19 @@ function cleanText(value: unknown, max: number): string {
   return cut.trimEnd()
 }
 
+/** The most a rate can be: numeric(18, 8) has ten digits before the point, and no real rate comes near. */
+export const MAX_FX_RATE = MAX_RATE
+
+/** A rate as stored: 8 decimals (lib/fx.ts, which the live rates check compiles on its own). */
+export { roundRate }
+
 export interface CleanExpense {
   date: string
   amount: number
+  /** Paid in another currency: all three set; else all three null. */
+  originalAmount: number | null
+  originalCurrency: string | null
+  fxRate: number | null
   cardId: string | null
   merchant: string
   category: ExpenseCategory
@@ -305,6 +319,13 @@ export interface CleanBudget {
  * migration 008). Throws on bad input. The amount is signed (− a refund or a
  * credit) and judged once rounded to cents, as stored: 0.004 is 0, which the
  * database refuses. A category the app doesn't know is filed as 'other'.
+ *
+ * Paid in another currency (migration 009): originalAmount, originalCurrency
+ * and fxRate come together or not at all (each missing one is null). The
+ * original is rounded to cents, never 0, within the same bound and with the
+ * same sign as the amount; the code is an ISO code as stored (capitals); the
+ * rate is rounded to 8 decimals and more than 0 once rounded. The amount is
+ * NOT required to be original × rate: the user may type what the bank charged.
  */
 export function normalizeExpense(input: ExpenseInput): CleanExpense {
   if (typeof input.date !== 'string' || !isValidDate(input.date)) throw new InputError('date', `"${String(input.date)}" is not a valid calendar date`)
@@ -312,6 +333,23 @@ export function normalizeExpense(input: ExpenseInput): CleanExpense {
   const amount = roundCents(input.amount)
   if (amount === 0) throw new InputError('moveZero', 'Amount cannot be zero')
   if (Math.abs(amount) > MAX_AMOUNT) throw new InputError('amountRange', 'Amount is out of range')
+  const given = [input.originalAmount, input.originalCurrency, input.fxRate].filter((v) => v !== undefined && v !== null).length
+  let originalAmount: number | null = null
+  let originalCurrency: string | null = null
+  let fxRate: number | null = null
+  if (given !== 0) {
+    if (given !== 3) throw new InputError('expenseOriginal', 'The original amount, its currency and the rate come together')
+    if (typeof input.originalAmount !== 'number' || !Number.isFinite(input.originalAmount)) throw new InputError('expenseOriginal', 'The original amount must be a finite number')
+    originalAmount = roundCents(input.originalAmount)
+    if (originalAmount === 0) throw new InputError('expenseOriginal', 'The original amount cannot be zero')
+    if (Math.abs(originalAmount) > MAX_AMOUNT) throw new InputError('amountRange', 'The original amount is out of range')
+    if (Math.sign(originalAmount) !== Math.sign(amount)) throw new InputError('expenseOriginal', 'The original amount and the amount have the same sign')
+    if (!isCurrencyCode(input.originalCurrency)) throw new InputError('expenseOriginal', 'Not a currency code')
+    originalCurrency = input.originalCurrency
+    if (typeof input.fxRate !== 'number' || !Number.isFinite(input.fxRate)) throw new InputError('expenseRate', 'The rate must be a finite number')
+    fxRate = roundRate(input.fxRate)
+    if (fxRate <= 0 || fxRate > MAX_FX_RATE) throw new InputError('expenseRate', 'The rate must be more than 0')
+  }
   let cardId: string | null = null
   if (input.cardId !== undefined && input.cardId !== null && input.cardId !== '') {
     if (typeof input.cardId !== 'string' || !UUID_RE.test(input.cardId)) throw new InputError('expenseCard', 'Not a card id')
@@ -320,6 +358,9 @@ export function normalizeExpense(input: ExpenseInput): CleanExpense {
   return {
     date: input.date,
     amount,
+    originalAmount,
+    originalCurrency,
+    fxRate,
     cardId,
     merchant: cleanText(input.merchant, MAX_MERCHANT_LENGTH),
     category: toCategory(input.category),
