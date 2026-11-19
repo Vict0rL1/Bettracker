@@ -6268,7 +6268,7 @@ tr.is-pending td:first-child {
   max-width: 320px;
 }
 
-/* The currency of the picture and, when rows lack a rate, one rate for them. */
+/* The currency of all rows and, when rows of a currency lack a rate, one rate for them. */
 .exp-review-money-bar {
   display: flex;
   flex-wrap: wrap;
@@ -6278,7 +6278,13 @@ tr.is-pending td:first-child {
 
 .exp-review-currency-field {
   flex: none;
-  width: 160px;
+  width: 200px;
+}
+
+/* A row's own currency: on its own line, before its conversion (a select a code wide, not a box across the row). */
+.exp-review-field-currency {
+  grid-column: 1 / -1;
+  max-width: 200px;
 }
 
 .exp-review-rateall-field {
@@ -6678,6 +6684,10 @@ tr.is-pending td:first-child {
 
   .exp-review-fields > .field:not(.exp-review-field-date):not(.exp-review-field-amount) {
     grid-column: 1 / -1;
+  }
+
+  .exp-review-field-currency {
+    max-width: none;
   }
 
   .exp-review-cardall {

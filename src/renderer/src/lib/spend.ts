@@ -403,7 +403,7 @@ export function cardFilterChoices(cards: readonly ExpenseCard[], monthList: read
 }
 
 /** The latest first: by date, then by when it was added. */
-const mostRecentFirst = (a: Expense, b: Expense): number => (a.date > b.date ? -1 : a.date < b.date ? 1 : newestFirst(a, b))
+export const mostRecentFirst = (a: Expense, b: Expense): number => (a.date > b.date ? -1 : a.date < b.date ? 1 : newestFirst(a, b))
 
 /** A merchant as it is compared: the spaces around it and its case aside ("starbucks " is "Starbucks"). */
 const merchantKey = (m: string): string => m.trim().toLowerCase()

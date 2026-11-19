@@ -600,11 +600,11 @@ currency.
   or a currency the service doesn't publish, such as COP), the two boxes stay
   empty and say so; the expense is saved once you type the rate or the amount
   in your currency. An amount in dollars is never saved as if it were yours.
-- **Scan receipt** works the same way for a whole picture: the review has a
-  **Currency of the picture** box (an Apple Wallet screen shows a bare `$` for
-  US and Canadian dollars alike, so you can say which), each row shows what
-  was read and what it comes to, and one field gives a rate to every row that
-  has none. A row without a rate is left out of **Add N** until it has one.
+- **Scan receipt** works the same way for each row of a picture: every row
+  has its own currency (see [AI reading of receipts](#ai-reading-of-receipts-optional)),
+  a row in another one shows what was read and what it comes to, and one
+  field per currency gives a rate to every row of it that has none. A row
+  without a rate is left out of **Add N** until it has one.
 - The currency you last paid in is offered first, after your own.
 
 **Where the rates come from.** [Frankfurter](https://frankfurter.dev), a free
@@ -650,6 +650,27 @@ last 4 digits (or the name) the image shows, and one that looks like an
 expense you already have (same date, amount and card, a similar merchant) is
 unticked and shown next to it. Everything works without it: until it is set
 up, scanning says so and you type the expense instead.
+
+**The currency of each expense.** A Wallet list can mix purchases in your
+currency and in another one, and a bare `$` can be any dollar, so the
+reading gives each expense its own currency and says how it knows it: a code,
+a currency word or a symbol of one currency shown for that amount (`USD`,
+`US$`, `CA$`, `€`), or, for a bare `$`, where the image shows the purchase
+was made (a US state or a Canadian province in the address, a ZIP or postal
+code, Sales tax against GST/HST/PST/QST, a phone number, a website's
+country). It never assumes your currency. When nothing in the image settles
+it, the row takes the currency you last paid in at the same merchant, else
+your own, and where that matters (you have expenses in other currencies, or
+the picture mixes them) the row says **Currency assumed** so you give it a
+look. When the image also shows what the card was charged in your currency
+(Wallet: "USD 12.00" with "CA$16.95" under it), that is the amount saved,
+**as charged**, and no rate is fetched for it. Each row's currency can be
+changed in its fields, and **Currency of all rows** sets them all at once.
+**After updating the app, deploy the function again** (the same `functions
+deploy` as below; the secrets stay): until then the old function still
+works, with one currency for the whole picture. An app installed before
+this change works with the new function too: it reads the picture's one
+currency, which is set when every row shares it.
 
 It runs in a Supabase **Edge Function**, `extract-expenses`
 (`supabase/functions/extract-expenses/`), with **your own Anthropic API key**,
@@ -742,10 +763,11 @@ npx supabase@3.2.0 functions deploy extract-expenses --remote=<ref> --no-verify-
 Claude Opus 5.5 costs $4 per million input tokens and $20 per million output
 tokens. The app sends the image at most 1600 px on its long side: a 1600×1200
 photo is about 2,600 input tokens (width × height / 750; a 739×1600 Wallet
-screenshot about 1,600), plus about 1,500 for the instructions, so about
-**$0.017** of input. The answer and the model's thinking (effort medium) take
-about 1,000 to 4,000 output tokens, **$0.02 to $0.08**. All in, about **3 to
-10 US cents per scan**. If Claude declines an image and the request falls
+screenshot about 1,600), plus about 2,000 for the instructions and the
+schema, so about **$0.018** of input. The answer and the model's thinking
+(effort medium) take about 1,000 to 5,000 output tokens (each row carries its
+currency too), **$0.02 to $0.10**. All in, about **3 to 12 US cents per
+scan**. If Claude declines an image and the request falls
 back to another model (the function asks for that fallback), that attempt is
 billed at that model's rates; the function logs it (`fallback: true`).
 

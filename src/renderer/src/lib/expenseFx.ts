@@ -49,7 +49,33 @@ export interface FxStored {
  * (in this box, or in the review's box for every row without one), or the
  * expense as it was saved.
  */
-export type RateOrigin = { how: 'service' | 'cache' | 'last'; asOf: string } | { how: 'typed' } | { how: 'typedAll' } | { how: 'stored' }
+export type RateOrigin = { how: 'service' | 'cache' | 'last'; asOf: string } | { how: 'typed' } | { how: 'typedAll' } | { how: 'stored' } | { how: 'charged' }
+
+/** A rate's place among those fetched for several currencies: `USD@2026-11-13`. */
+export const rateKey = (currency: string, date: string): string => `${currency}@${date}`
+
+/** What a scanned picture says the card was charged for a purchase: unsigned, in `currency`, for `paid` (unsigned) as read. */
+export interface Charged {
+  amount: number
+  currency: string
+  paid: number
+}
+
+/**
+ * What the card was charged, as the rate and amount of an expense paid in
+ * another currency: when it was charged in the main currency, that IS the
+ * converted amount, and the rate is the one behind it (rateFrom). It stands
+ * as a saved rate does: while the amount paid is the one read, the converted
+ * amount is exactly what was charged; once it is changed, it follows at that
+ * rate. Null when it was charged in another currency, or no rate the app can
+ * store comes out of it.
+ */
+export function chargedFx(charged: Charged | null, main: string): FxStored | null {
+  if (charged === null || charged.currency !== main) return null
+  const rate = rateFrom(charged.paid, charged.amount)
+  if (rate === null || !isRate(rate) || Math.round(charged.amount * 100) <= 0) return null
+  return { rate, converted: charged.amount, original: charged.paid }
+}
 
 export interface FxView {
   /** What each box shows. */
@@ -117,10 +143,19 @@ function convertedIssue(converted: number): Problem | null {
  * The two boxes and what they come to, for an amount paid in another
  * currency. `amount` is that amount as read from its box (unsigned), or null
  * when the box holds no usable number yet. In order: what the user typed;
- * else the rate saved with the expense; else the fetched one; else (the
- * review only) the rate typed for every row without one; else nothing.
+ * else the rate saved with the expense; else (the review only) what the
+ * picture says the card was charged (chargedFx); else the fetched one; else
+ * (the review only) the rate typed for every row without one; else nothing.
  */
-export function fxView(o: { typed: FxTyped | null; stored?: FxStored | null; auto?: FxAuto | null; all?: number | null; amount: number | null; main: string }): FxView {
+export function fxView(o: {
+  typed: FxTyped | null
+  stored?: FxStored | null
+  charged?: FxStored | null
+  auto?: FxAuto | null
+  all?: number | null
+  amount: number | null
+  main: string
+}): FxView {
   const digits = mainDigits(o.main)
   const amount = o.amount !== null && Number.isFinite(o.amount) && Math.round(o.amount * 100) > 0 ? o.amount : null
   const required: Problem = { key: 'field.rateRequired', vars: { currency: o.main } }
@@ -162,11 +197,10 @@ export function fxView(o: { typed: FxTyped | null; stored?: FxStored | null; aut
     return { ...base, rateText: rate === null ? '' : rateBoxText(rate), rate, converted: n }
   }
 
-  if (o.stored) {
-    // Untouched, the amount saved stands (it may be what the bank charged, not original × rate).
-    const untouched = amount !== null && Math.round(amount * 100) === Math.round(o.stored.original * 100)
-    return fromRate(o.stored.rate, rateBoxText(o.stored.rate), { how: 'stored' }, untouched ? o.stored.converted : undefined)
-  }
+  // Untouched, the amount saved (or charged) stands: it may be what the bank charged, not original × rate.
+  const kept = (s: FxStored): number | undefined => (amount !== null && Math.round(amount * 100) === Math.round(s.original * 100) ? s.converted : undefined)
+  if (o.stored) return fromRate(o.stored.rate, rateBoxText(o.stored.rate), { how: 'stored' }, kept(o.stored))
+  if (o.charged) return fromRate(o.charged.rate, rateBoxText(o.charged.rate), { how: 'charged' }, kept(o.charged))
   if (o.auto) return fromRate(o.auto.rate, rateBoxText(o.auto.rate), { how: o.auto.source, asOf: o.auto.asOf })
   if (o.all !== null && o.all !== undefined) return fromRate(o.all, rateBoxText(o.all), { how: 'typedAll' })
   return { ...NONE, rateProblem: required }

@@ -1,23 +1,32 @@
 import { describe, expect, it } from 'vitest'
 import type { ExtractedExpense, ExtractResult } from '../../../shared/expenseExtraction'
 import type { Expense, ExpenseCard } from '../../../shared/types'
-import type { FxAuto } from './expenseFx'
+import { rateKey, type FxAuto } from './expenseFx'
 import {
   applyCardToUnmatched,
   buildReview,
+  chargedOf,
+  commonCurrency,
   findDuplicate,
+  merchantMemory,
   normalizeMerchant,
   pictureCurrency,
   refreshDuplicates,
+  rememberedCurrency,
   reviewAdds,
   reviewInputs,
   reviewRowProblem,
+  rowAsCharged,
+  rowCurrency,
   rowLacksRate,
   rowMoney,
   rowReady,
   sameMoney,
+  setAllCurrencies,
   setAllIncluded,
+  setRowCurrency,
   similarMerchant,
+  wantedRates,
   type ReviewMoney,
   type ReviewRow
 } from './expenseReview'
@@ -43,9 +52,14 @@ const saved = (over: Partial<Expense> & { id: string }): Expense => ({
   updatedAt: '2026-11-17T10:00:00Z',
   ...over
 })
+/** A row read; its currency not shown unless said (so it takes the picture's, as `result` names one). */
 const read = (over: Partial<ExtractedExpense> = {}): ExtractedExpense => ({
   date: TODAY,
   amount: 4.5,
+  currency: null,
+  currencyBasis: 'none',
+  chargedAmount: null,
+  chargedCurrency: null,
   merchant: 'Café Central',
   category: 'coffee',
   cardLast4: null,
@@ -127,6 +141,10 @@ describe('buildReview', () => {
       dateGuessed: false,
       amount: '4.50',
       refund: false,
+      currency: 'USD',
+      currencyHow: 'picture',
+      currencyAssumed: false,
+      charged: null,
       fx: null,
       merchant: 'Café Central',
       category: 'coffee',
@@ -211,16 +229,18 @@ describe('the review’s edits', () => {
 
   it('reviewRowProblem: the amount in the currency’s digits, then the date', () => {
     expect(reviewRowProblem(rows[0], 'USD')).toBeNull()
-    expect(reviewRowProblem({ ...rows[0], amount: '4,5' }, 'CLP')).toEqual({ key: 'field.noMinorUnits', vars: { currency: 'CLP' } })
+    expect(reviewRowProblem({ ...rows[0], currency: 'CLP', amount: '4,5' }, 'CLP')).toEqual({ key: 'field.noMinorUnits', vars: { currency: 'CLP' } })
+    // The row's own currency, whatever the main one: pesos in a review in dollars too.
+    expect(reviewRowProblem({ ...rows[0], currency: 'CLP', amount: '4,5' }, 'USD')).toEqual({ key: 'field.noMinorUnits', vars: { currency: 'CLP' } })
     expect(reviewRowProblem({ ...rows[0], amount: '' }, 'USD')).toEqual({ key: 'field.resultRequired' })
     expect(reviewRowProblem({ ...rows[0], date: '2026-13-01' }, 'USD')).toEqual({ key: 'field.dateInvalid' })
   })
 
   it('reviewInputs: the ticked rows, signed by their toggle, from the AI', () => {
     const edited = [{ ...rows[0], amount: '4,50' }, { ...rows[1], include: false }, rows[2]]
-    // In the main currency nothing of an original goes with them.
+    // In the main currency (the rows' own) nothing of an original goes with them.
     const none = { originalAmount: null, originalCurrency: null, fxRate: null }
-    expect(reviewInputs(edited, 'EUR')).toEqual([
+    expect(reviewInputs(edited, 'USD')).toEqual([
       { date: TODAY, amount: 4.5, ...none, cardId: A, merchant: 'Café Central', category: 'coffee', note: '', source: 'ai' },
       { date: TODAY, amount: -12, ...none, cardId: null, merchant: 'Zara', category: 'coffee', note: '', source: 'ai' }
     ])
@@ -231,7 +251,15 @@ describe('a picture in another currency', () => {
   const D13 = '2026-11-13'
   const D14 = '2026-11-14'
   const ecb = (rate: number, asOf: string): FxAuto => ({ rate, asOf, source: 'service' })
-  const money = (over: Partial<ReviewMoney> = {}): ReviewMoney => ({ currency: 'USD', main: 'CAD', rates: {}, all: null, ...over })
+  /** A review in CAD with rates of one currency (USD unless said) by date, and the rate typed for that currency's rows. */
+  const money = (over: { currency?: string; rates?: Record<string, FxAuto>; all?: number | null } = {}): ReviewMoney => {
+    const cur = over.currency ?? 'USD'
+    return {
+      main: 'CAD',
+      rates: Object.fromEntries(Object.entries(over.rates ?? {}).map(([date, rate]) => [rateKey(cur, date), rate])),
+      all: over.all === undefined || over.all === null ? {} : { [cur]: over.all }
+    }
+  }
   const build = (expenses: ExtractedExpense[], existing: Expense[] = [], currency: string | null = 'USD') => buildReview(result(expenses, currency), { today: TODAY, cards: CARDS, existing, currency: 'CAD' })
 
   it('pictureCurrency: what the reading names, else the main currency', () => {
@@ -251,9 +279,10 @@ describe('a picture in another currency', () => {
     const [row] = build([read({ amount: 12, date: D13 })])
 
     it('in the main currency it is what was read, signed', () => {
-      expect(rowMoney(row, sameMoney('CAD'))).toEqual({ foreign: false, paid: 12, view: null, amount: 12 })
-      expect(rowMoney({ ...row, refund: true }, sameMoney('CAD')).amount).toBe(-12)
-      expect(rowMoney({ ...row, amount: 'x' }, sameMoney('CAD'))).toMatchObject({ paid: null, amount: null })
+      const cad = { ...row, currency: 'CAD' }
+      expect(rowMoney(cad, sameMoney('CAD'))).toEqual({ foreign: false, paid: 12, view: null, amount: 12 })
+      expect(rowMoney({ ...cad, refund: true }, sameMoney('CAD')).amount).toBe(-12)
+      expect(rowMoney({ ...cad, amount: 'x' }, sameMoney('CAD'))).toMatchObject({ paid: null, amount: null })
     })
 
     it('with its day’s rate: the original stays, the amount is converted', () => {
@@ -293,7 +322,7 @@ describe('a picture in another currency', () => {
       expect(rows.map((r) => rowReady(r, m))).toEqual([true, false, false])
       expect(rows.map((r) => rowLacksRate(r, m))).toEqual([false, true, true])
       expect(rows.map((r) => reviewRowProblem(r, m))).toEqual([null, null, null])
-      expect(rows.every((r) => !rowLacksRate(r, sameMoney('CAD')))).toBe(true)
+      expect(setAllCurrencies(rows, 'CAD', 'CAD').every((r) => !rowLacksRate(r, sameMoney('CAD')))).toBe(true)
     })
 
     it('"Add N" takes only the ticked rows that have a rate, and says which', () => {
@@ -305,7 +334,7 @@ describe('a picture in another currency', () => {
     })
 
     it('one rate for all fills the rest; a refund is negative in both amounts', () => {
-      const { inputs, keys } = reviewAdds(rows, { ...m, all: 1.4 })
+      const { inputs, keys } = reviewAdds(rows, { ...m, all: { USD: 1.4 } })
       expect(keys).toEqual(['r0', 'r1', 'r2'])
       expect(inputs.map((i) => [i.amount, i.originalAmount, i.originalCurrency, i.fxRate])).toEqual([
         [16.84, 12, 'USD', 1.4034],
@@ -315,7 +344,7 @@ describe('a picture in another currency', () => {
     })
 
     it('an unticked row is never added, with or without a rate', () => {
-      expect(reviewAdds(setAllIncluded(rows, false), { ...m, all: 1.4 })).toEqual({ inputs: [], keys: [] })
+      expect(reviewAdds(setAllIncluded(rows, false), { ...m, all: { USD: 1.4 } })).toEqual({ inputs: [], keys: [] })
     })
 
     it('a rate typed on a row that can’t be read is a problem of that row, and it is not added', () => {
@@ -329,15 +358,15 @@ describe('a picture in another currency', () => {
       expect(reviewRowProblem({ ...rows[0], fx: { lead: 'rate', text: '' } }, m)).toBeNull()
     })
 
-    it('the amount box is read with the digits of the picture’s currency', () => {
+    it('the amount box is read with the digits of the row’s currency', () => {
       const cop = money({ currency: 'COP', all: 0.00034 })
-      expect(rowMoney({ ...rows[0], amount: '12.500' }, cop)).toMatchObject({ paid: 12500, amount: 4.25 })
-      expect(reviewRowProblem({ ...rows[0], amount: '12.50' }, cop)).toEqual({ key: 'field.noMinorUnits', vars: { currency: 'COP' } })
+      expect(rowMoney({ ...rows[0], currency: 'COP', amount: '12.500' }, cop)).toMatchObject({ paid: 12500, amount: 4.25 })
+      expect(reviewRowProblem({ ...rows[0], currency: 'COP', amount: '12.50' }, cop)).toEqual({ key: 'field.noMinorUnits', vars: { currency: 'COP' } })
     })
 
     it('every input passes the app’s checks', async () => {
       const { normalizeExpense } = await import('./validate')
-      for (const input of reviewAdds(rows, { ...m, all: 1.4 }).inputs) expect(() => normalizeExpense(input)).not.toThrow()
+      for (const input of reviewAdds(rows, { ...m, all: { USD: 1.4 } }).inputs) expect(() => normalizeExpense(input)).not.toThrow()
     })
   })
 
@@ -406,18 +435,229 @@ describe('a picture in another currency', () => {
         expect(refreshDuplicates(matched, [typedByHand], m)).toBe(matched)
       })
 
-      it('the currency of the picture changes: the same number in the main currency is another amount', () => {
+      it('every row’s currency changes: the same number in the main currency is another amount', () => {
         const twelve = saved({ id: 'twelve', date: D13, amount: 12, merchant: 'Apple.com', cardId: null })
         // Read as dollars: no match with 12.00 in the main currency.
         expect(refreshDuplicates(rows, [twelve], money())[0].duplicateOf).toBeNull()
         // The person says the picture is in the main currency after all: now it is the same money.
-        expect(refreshDuplicates(rows, [twelve], sameMoney('CAD'))[0]).toMatchObject({ include: false, duplicateOf: twelve })
+        expect(refreshDuplicates(setAllCurrencies(rows, 'CAD', 'CAD'), [twelve], sameMoney('CAD'))[0]).toMatchObject({ include: false, duplicateOf: twelve })
       })
 
       it('a row whose amount can’t be read matches nothing', () => {
         const broken = rows.map((r) => ({ ...r, amount: 'x' }))
         expect(refreshDuplicates(broken, [typedByHand], money({ all: 1.4 })).map((r) => r.duplicateOf)).toEqual([null, null])
       })
+    })
+  })
+})
+
+describe('each row in its own currency', () => {
+  const D13 = '2026-11-13'
+  const ecb = (rate: number, asOf: string): FxAuto => ({ rate, asOf, source: 'service' })
+  const shown = (currency: string, basis: 'code' | 'place' = 'code'): Partial<ExtractedExpense> => ({ currency, currencyBasis: basis })
+  const build = (expenses: ExtractedExpense[], existing: Expense[] = [], currency: string | null = null) => buildReview(result(expenses, currency), { today: TODAY, cards: CARDS, existing, currency: 'CAD' })
+  const inUsd = (over: Partial<Expense> & { id: string }) => saved({ originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4, amount: 16.8, ...over })
+
+  describe('merchantMemory and rememberedCurrency — what a merchant was last paid in', () => {
+    it('the latest expense of the merchant, by date and then by when it was added, whatever its name looked like', () => {
+      const memory = merchantMemory(
+        [
+          inUsd({ id: 'a', date: '2026-11-01', merchant: 'Blue Bottle Coffee' }),
+          saved({ id: 'b', date: '2026-10-01', merchant: 'SQ *BLUE BOTTLE COFFEE #12' }),
+          saved({ id: 'c', date: '2026-11-05', merchant: 'Tim Hortons', createdAt: '2026-11-05T09:00:00Z' }),
+          inUsd({ id: 'd', date: '2026-11-05', merchant: 'tim hortons', createdAt: '2026-11-05T10:00:00Z' })
+        ],
+        'CAD'
+      )
+      expect(rememberedCurrency(memory, 'BLUE BOTTLE COFFEE #7')).toBe('USD')
+      expect(rememberedCurrency(memory, 'Tim Hortons')).toBe('USD')
+    })
+
+    it('an expense in the main currency remembers the main currency', () => {
+      const memory = merchantMemory([inUsd({ id: 'a', date: '2026-11-01', merchant: 'Amazon' }), saved({ id: 'b', date: '2026-11-02', merchant: 'AMAZON' })], 'CAD')
+      expect(rememberedCurrency(memory, 'Amazon')).toBe('CAD')
+    })
+
+    it('nothing for a merchant never saved, a merchant name that is only noise, or no merchant', () => {
+      const memory = merchantMemory([inUsd({ id: 'a', merchant: 'Blue Bottle Coffee' }), inUsd({ id: 'b', merchant: '' }), inUsd({ id: 'c', merchant: '#12' })], 'CAD')
+      expect(rememberedCurrency(memory, 'Blue Bottle')).toBeNull()
+      expect(rememberedCurrency(memory, '')).toBeNull()
+      expect(rememberedCurrency(memory, '#12')).toBeNull()
+      expect(memory.size).toBe(1)
+    })
+  })
+
+  describe('rowCurrency — the currency a row starts in', () => {
+    const o = { remembered: 'USD', picture: 'EUR', main: 'CAD' }
+
+    it('what the image shows for it first, by its mark or by the place', () => {
+      expect(rowCurrency({ currency: 'GBP', currencyBasis: 'code' }, o)).toEqual({ currency: 'GBP', how: 'read' })
+      expect(rowCurrency({ currency: 'GBP', currencyBasis: 'place' }, o)).toEqual({ currency: 'GBP', how: 'read' })
+    })
+
+    it('then the merchant’s, then the picture’s one currency, then the main one', () => {
+      const none = { currency: null, currencyBasis: 'none' as const }
+      expect(rowCurrency(none, o)).toEqual({ currency: 'USD', how: 'memory' })
+      expect(rowCurrency(none, { ...o, remembered: null })).toEqual({ currency: 'EUR', how: 'picture' })
+      expect(rowCurrency(none, { ...o, remembered: null, picture: null })).toEqual({ currency: 'CAD', how: 'main' })
+    })
+
+    it('a code without a basis, or something that is no code, is not read', () => {
+      expect(rowCurrency({ currency: 'GBP', currencyBasis: 'none' }, o)).toEqual({ currency: 'USD', how: 'memory' })
+      expect(rowCurrency({ currency: 'dollars', currencyBasis: 'code' }, { ...o, remembered: 'x', picture: null })).toEqual({ currency: 'CAD', how: 'main' })
+    })
+  })
+
+  describe('buildReview', () => {
+    it('a Wallet list in CAD and USD: each row in its own, converted only where it isn’t the main one', () => {
+      const rows = build([read({ amount: 12, ...shown('USD') }), read({ amount: 5.25, merchant: 'Tim Hortons', ...shown('CAD') }), read({ amount: 30, merchant: 'Target', ...shown('USD', 'place') })])
+      expect(rows.map((r) => [r.currency, r.currencyHow, r.amount])).toEqual([
+        ['USD', 'read', '12.00'],
+        ['CAD', 'read', '5.25'],
+        ['USD', 'read', '30.00']
+      ])
+      expect(rows.some((r) => r.currencyAssumed)).toBe(false)
+      expect(commonCurrency(rows)).toBeNull()
+      const m: ReviewMoney = { main: 'CAD', rates: { [rateKey('USD', TODAY)]: ecb(1.4, TODAY) }, all: {} }
+      expect(rows.map((r) => rowMoney(r, m).amount)).toEqual([16.8, 5.25, 42])
+      expect(reviewAdds(rows, m).inputs.map((i) => [i.amount, i.originalAmount, i.originalCurrency])).toEqual([
+        [16.8, 12, 'USD'],
+        [5.25, null, null],
+        [42, 30, 'USD']
+      ])
+    })
+
+    it('a bare "$" takes the currency the merchant was last paid in', () => {
+      const [row, other] = build([read({ amount: 6.5, merchant: 'BLUE BOTTLE COFFEE #3' }), read({ merchant: 'Corner Store' })], [inUsd({ id: 'bb', date: '2026-11-01', merchant: 'Blue Bottle Coffee' })])
+      expect(row).toMatchObject({ currency: 'USD', currencyHow: 'memory', currencyAssumed: false })
+      // No memory: the main one, said to be assumed (this person pays in USD too).
+      expect(other).toMatchObject({ currency: 'CAD', currencyHow: 'main', currencyAssumed: true })
+    })
+
+    it('"Currency assumed" only where it matters', () => {
+      const bare = [read(), read({ merchant: 'Uber' })]
+      // All in the main currency, for someone who never pays in another: nothing to say.
+      expect(build(bare).map((r) => [r.currency, r.currencyAssumed])).toEqual([
+        ['CAD', false],
+        ['CAD', false]
+      ])
+      // The same rows, from someone with expenses paid in another currency.
+      expect(build(bare, [inUsd({ id: 'x', merchant: 'Somewhere else' })]).map((r) => r.currencyAssumed)).toEqual([true, true])
+      // A picture whose rows are in two currencies: the unread one gets a look, the read one doesn't.
+      expect(build([read({ ...shown('USD') }), read({ merchant: 'Uber' })]).map((r) => r.currencyAssumed)).toEqual([false, true])
+      // Remembered is not assumed.
+      expect(build([read({ merchant: 'Uber' })], [saved({ id: 'u', merchant: 'Uber' }), inUsd({ id: 'x', merchant: 'Somewhere else' })])[0]).toMatchObject({ currencyHow: 'memory', currencyAssumed: false })
+      // A row charged in another currency was not paid in that one: even alone in a picture in the main currency.
+      expect(build([read({ chargedAmount: 16.95, chargedCurrency: 'CAD' })])[0]).toMatchObject({ currency: 'CAD', currencyAssumed: true })
+    })
+
+    it('the picture’s one currency is used for a row nothing else settles', () => {
+      expect(build([read()], [], 'EUR')[0]).toMatchObject({ currency: 'EUR', currencyHow: 'picture' })
+    })
+  })
+
+  describe('a row the picture says was charged in the main currency', () => {
+    const [row] = build([read({ amount: 12, date: D13, merchant: 'Amazon.com', ...shown('USD'), chargedAmount: 16.95, chargedCurrency: 'CAD' })])
+    const m = (over: Partial<ReviewMoney> = {}): ReviewMoney => ({ main: 'CAD', rates: {}, all: {}, ...over })
+
+    it('keeps the charge as read, unsigned', () => {
+      expect(row.charged).toEqual({ amount: 16.95, currency: 'CAD', paid: 12 })
+      expect(chargedOf({ amount: -12, chargedAmount: -16.95, chargedCurrency: 'CAD' })).toEqual({ amount: 16.95, currency: 'CAD', paid: 12 })
+      expect(chargedOf({ amount: 12, chargedAmount: null, chargedCurrency: null })).toBeNull()
+    })
+
+    it('comes to what was charged, at the rate behind it, with no rate asked for', () => {
+      expect(rowAsCharged(row, 'CAD')).toBe(true)
+      const got = rowMoney(row, m())
+      expect(got).toMatchObject({ foreign: true, paid: 12, amount: 16.95 })
+      expect(got.view).toMatchObject({ rate: 1.4125, origin: { how: 'charged' } })
+      // Even with the day's rate at hand.
+      expect(rowMoney(row, m({ rates: { [rateKey('USD', D13)]: ecb(1.4, D13) }, all: { USD: 1.5 } })).amount).toBe(16.95)
+      expect(wantedRates([row], 'CAD')).toEqual([])
+      expect(rowLacksRate(row, m())).toBe(false)
+      expect(reviewAdds([row], m()).inputs).toEqual([
+        { date: D13, amount: 16.95, originalAmount: 12, originalCurrency: 'USD', fxRate: 1.4125, cardId: null, merchant: 'Amazon.com', category: 'coffee', note: '', source: 'ai' }
+      ])
+    })
+
+    it('a refund comes to a refund', () => {
+      expect(rowMoney({ ...row, refund: true }, m()).amount).toBe(-16.95)
+    })
+
+    it('another amount paid follows at that rate; a rate or amount typed on the row wins', () => {
+      expect(rowMoney({ ...row, amount: '20' }, m()).amount).toBe(28.25)
+      expect(rowMoney({ ...row, fx: { lead: 'rate', text: '1.5' } }, m()).amount).toBe(18)
+    })
+
+    it('does nothing for a row in the main currency, or a charge in a currency that isn’t the main one', () => {
+      expect(rowMoney({ ...row, currency: 'CAD' }, m())).toMatchObject({ foreign: false, amount: 12 })
+      const eur = { ...row, charged: { amount: 11, currency: 'EUR', paid: 12 } }
+      expect(rowAsCharged(eur, 'CAD')).toBe(false)
+      expect(rowMoney(eur, m()).amount).toBeNull()
+      expect(wantedRates([eur], 'CAD')).toEqual([{ from: 'USD', date: D13 }])
+    })
+
+    it('is matched with a saved expense of the same amount in the main currency from the start', () => {
+      const typedByHand = saved({ id: 'cad', date: D13, amount: 16.95, merchant: 'Amazon', cardId: null })
+      const [dup] = build([read({ amount: 12, date: D13, merchant: 'AMAZON.COM', ...shown('USD'), chargedAmount: 16.95, chargedCurrency: 'CAD' })], [typedByHand])
+      expect(dup).toMatchObject({ include: false, duplicateOf: typedByHand })
+    })
+  })
+
+  describe('rates per currency and date', () => {
+    const rows = build([read({ amount: 10, date: D13, ...shown('USD') }), read({ amount: 10, date: D13, merchant: 'Fnac', ...shown('EUR') }), read({ amount: 4, date: D13, merchant: 'Uber', ...shown('USD') }), read({ amount: 3, merchant: 'Tim', ...shown('CAD') })])
+
+    it('wantedRates: one per currency and date of the rows in another currency without a rate typed on them', () => {
+      expect(wantedRates(rows, 'CAD')).toEqual([
+        { from: 'USD', date: D13 },
+        { from: 'EUR', date: D13 }
+      ])
+      const typed = rows.map((r, i) => (i === 0 ? { ...r, fx: { lead: 'rate' as const, text: '1.5' } } : r))
+      expect(wantedRates(typed, 'CAD')).toEqual([
+        { from: 'EUR', date: D13 },
+        { from: 'USD', date: D13 }
+      ])
+      // Emptied while still in the box: wanted again.
+      expect(wantedRates(rows.map((r, i) => (i === 0 ? { ...r, fx: { lead: 'rate' as const, text: ' ' } } : r)), 'CAD')).toHaveLength(2)
+    })
+
+    it('each row converts at its own currency’s rate, and a rate typed for one currency fills only its rows', () => {
+      const m: ReviewMoney = { main: 'CAD', rates: { [rateKey('USD', D13)]: ecb(1.4, D13) }, all: { EUR: 1.6 } }
+      expect(rows.map((r) => rowMoney(r, m).amount)).toEqual([14, 16, 5.6, 3])
+      const noUsd: ReviewMoney = { main: 'CAD', rates: {}, all: { EUR: 1.6 } }
+      expect(rows.map((r) => rowLacksRate(r, noUsd))).toEqual([true, false, true, false])
+    })
+  })
+
+  describe('changing the currency of a row, or of all of them', () => {
+    const [row] = build([read({ amount: 12, merchant: 'Uber' })], [inUsd({ id: 'x', merchant: 'Somewhere else' })])
+
+    it('setRowCurrency: chosen by the person, no longer assumed', () => {
+      expect(row).toMatchObject({ currency: 'CAD', currencyHow: 'main', currencyAssumed: true })
+      expect(setRowCurrency(row, 'USD', 'CAD')).toMatchObject({ currency: 'USD', currencyHow: 'user', currencyAssumed: false, amount: '12.00' })
+      // The one it has: only confirmed.
+      expect(setRowCurrency(row, 'CAD', 'CAD')).toMatchObject({ currency: 'CAD', currencyHow: 'user', currencyAssumed: false })
+      const chosen = setRowCurrency(row, 'USD', 'CAD')
+      expect(setRowCurrency(chosen, 'USD', 'CAD')).toBe(chosen)
+    })
+
+    it('a rate typed for the other currency goes; an amount typed in the main one stays unless the row is now in it', () => {
+      const usd = setRowCurrency(row, 'USD', 'CAD')
+      expect(setRowCurrency({ ...usd, fx: { lead: 'rate', text: '1.5' } }, 'EUR', 'CAD').fx).toBeNull()
+      expect(setRowCurrency({ ...usd, fx: { lead: 'converted', text: '17' } }, 'EUR', 'CAD').fx).toEqual({ lead: 'converted', text: '17' })
+      expect(setRowCurrency({ ...usd, fx: { lead: 'converted', text: '17' } }, 'CAD', 'CAD').fx).toBeNull()
+    })
+
+    it('setAllCurrencies and commonCurrency: every row in one', () => {
+      const rows = build([read({ ...shown('USD') }), read({ merchant: 'Uber', ...shown('CAD') })])
+      expect(commonCurrency(rows)).toBeNull()
+      const all = setAllCurrencies(rows, 'EUR', 'CAD')
+      expect(all.map((r) => [r.currency, r.currencyHow])).toEqual([
+        ['EUR', 'user'],
+        ['EUR', 'user']
+      ])
+      expect(commonCurrency(all)).toBe('EUR')
+      expect(commonCurrency([])).toBeNull()
     })
   })
 })

@@ -104,6 +104,12 @@ Luego, por este orden (ver "Orden de despliegue seguro" justo debajo):
    dice que la lectura con IA no está configurada y escribir el gasto a mano
    funciona. La CLI 3.2.0 acepta `supabase/config.toml` (comprobado en la
    etapa 2) y los parámetros de arriba (etapa 4); no se ha desplegado nada.
+   **Si la función ya estaba desplegada, hay que volver a desplegarla** (el
+   mismo `functions deploy`, sin tocar los secretos) para que lea la moneda
+   de cada gasto y lo cobrado en la moneda principal: la función de antes
+   sigue funcionando con la app nueva, pero da una sola moneda por imagen.
+   Una app de antes con la función nueva también funciona (ver
+   `docs/expenses-2026-11.md`, «La moneda de cada gasto»).
 3. **Despliegue**, después de las migraciones. Si la PWA está en Vercel, en
    el proyecto que ya existe: Settings → Git, conectar este repositorio y
    poner el directorio raíz en `/`. Así se conservan el dominio y las
@@ -233,7 +239,7 @@ npm ci
 npm test            # 1577 tests unitarios en 59 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 270 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 275 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
@@ -429,7 +435,9 @@ registrara los gastos y los convierta a cad». Detalle completo en
 - **Listas**: la moneda principal se escribe con su símbolo estrecho (`$`
   para CAD; el código va junto al título del mes) y lo pagado en otra moneda,
   pequeño y con su código («USD 12.00»).
-- **Revisión del escaneo**: selector «Moneda de la imagen» arriba (Wallet
+- **Revisión del escaneo** (así quedó con la 009; desde noviembre cada fila
+  tiene su moneda, ver `docs/expenses-2026-11.md`, «La moneda de cada
+  gasto»): selector «Moneda de la imagen» arriba (Wallet
   enseña `$` a secas para CAD y USD); en otra moneda cada fila se convierte
   con la tasa de su día, una fila sin tasa no entra en «Añadir N» y un campo
   da una tasa a todas las que no tienen. Los duplicados se reconocen por lo
@@ -1245,7 +1253,7 @@ src/renderer/src/components/expenses/
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
   BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
   CategoryIcon (los once iconos de categoría)
-e2e/*.spec.ts                       270 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       275 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;

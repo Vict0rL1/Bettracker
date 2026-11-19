@@ -36,7 +36,21 @@ const BODY: ExtractRequest = {
   currency: 'EUR',
   cards: []
 }
-const ROW = { date: '2026-11-16', amount: 4.5, merchant: 'Café', category: 'coffee', cardLast4: null, cardHint: null, note: '', pending: false, confidence: 'high' }
+const ROW = {
+  date: '2026-11-16',
+  amount: 4.5,
+  currency: 'EUR',
+  currencyBasis: 'code',
+  chargedAmount: null,
+  chargedCurrency: null,
+  merchant: 'Café',
+  category: 'coffee',
+  cardLast4: null,
+  cardHint: null,
+  note: '',
+  pending: false,
+  confidence: 'high'
+}
 const ANSWER = { ok: true, kind: 'receipt', currency: 'EUR', expenses: [ROW], warnings: [] }
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
