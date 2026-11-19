@@ -562,10 +562,17 @@ says which one is missing and what you add waits on the device.
   one), whole months for a past one. An arrow and plain words, no colour;
   hover it for the figure it is compared with. It is left out when the month
   before has no expenses. Then one chart of every
-  card's spending (running total against the budget, or per day), the
+  card's spending (running total against the budget, or per day; hover or
+  tap a day for its figures, days still to come say nothing), the
   categories, and the list (a table on a computer, cards on a phone; search,
   and filter by card and category). The arrows and `←`/`→` change the month,
   shared with the bets' calendar.
+- **Tap a card or a category to see its expenses** — a card under *By
+  card*, a card's or a category's budget, or a category under *By category*:
+  the list shows just that card's (or that category's) expenses for the
+  month, scrolls up into view and says so in a quiet line above it ("Visa ×
+  · 12 expenses · $561.63", with **Show all**). The budgets' monthly total
+  shows the whole month again; the list's boxes always show the same filter.
 - **Scan receipt**, first in the expense sheet — the AI reads a receipt
   photo or an Apple Wallet screenshot and fills in the expenses for you to
   check before anything is saved (see [AI reading of receipts](#ai-reading-of-receipts-optional)).

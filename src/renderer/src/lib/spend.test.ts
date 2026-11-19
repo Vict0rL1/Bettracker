@@ -8,10 +8,13 @@ import {
   cardFilterChoices,
   cardKeyOf,
   categoryShares,
+  chartDayHasTip,
   comparisonChange,
+  drillFilter,
   expensesInMonth,
   filterExpenses,
   groupExpensesByDay,
+  listSummary,
   merchantLast,
   merchantSuggestions,
   monthSpend,
@@ -20,7 +23,9 @@ import {
   SERIES_INKS,
   spendChartData,
   totalBudget,
-  vsLastMonth
+  type SpendPoint,
+  vsLastMonth,
+  wholeMonthPoints
 } from './spend'
 
 const A = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -222,6 +227,11 @@ describe('budgetLines and totalBudget', () => {
     expect(lines[0].state).toMatchObject({ spent: 89.5, limit: 100, left: 10.5 })
   })
 
+  it('each line, tapped, shows what it counts: the whole month, its card (by the card’s own id) or its category', () => {
+    const upper = [budget('card', A.toUpperCase(), 500), budget('total', '', 100), budget('category', 'coffee', 4)]
+    expect(budgetLines(upper, monthSpend(list, NOV, CARDS), CARDS).map((l) => l.drill)).toEqual(['all', { card: A }, { category: 'coffee' }])
+  })
+
   it('totalBudget: the one for the whole month, or none', () => {
     expect(totalBudget(budgets)?.monthlyLimit).toBe(100)
     expect(totalBudget([budget('card', A, 5)])).toBeNull()
@@ -318,6 +328,57 @@ describe('spendChartData', () => {
   })
 })
 
+describe('wholeMonthPoints', () => {
+  const list = [exp({ date: '2026-11-02', amount: 10, cardId: A }), exp({ date: '2026-11-20', amount: 7, cardId: A })]
+
+  it('the running total up to today, then each day still to come as a bare day: no series, no running total', () => {
+    const { cumulative } = spendChartData(list, CARDS, NOV, TODAY)
+    const points = wholeMonthPoints(cumulative, NOV)
+    expect(points).toHaveLength(30)
+    expect(points.slice(0, 17)).toEqual(cumulative)
+    expect(points[17]).toEqual({ date: '2026-11-18', day: 18, total: 0, cumulative: null })
+    expect(points[29]).toEqual({ date: '2026-11-30', day: 30, total: 0, cumulative: null })
+    expect(points.slice(17).some((p) => `s_${A}` in p)).toBe(false)
+  })
+
+  it('a past month is already whole; a future one is all bare days', () => {
+    const oct = spendChartData(list, CARDS, { year: 2026, month: 9 }, TODAY).cumulative
+    expect(wholeMonthPoints(oct, { year: 2026, month: 9 })).toEqual(oct)
+    const dec = wholeMonthPoints([], { year: 2026, month: 11 })
+    expect(dec.map((p) => p.day)).toEqual(Array.from({ length: 31 }, (_, i) => i + 1))
+    expect(dec[0]).toEqual({ date: '2026-12-01', day: 1, total: 0, cumulative: null })
+  })
+})
+
+describe('chartDayHasTip', () => {
+  const list = [exp({ date: '2026-11-02', amount: 10, cardId: A }), exp({ date: '2026-11-20', amount: 7, cardId: A }), exp({ date: '2026-11-25', amount: 5 }), exp({ date: '2026-11-25', amount: -5 })]
+  const data = spendChartData(list, CARDS, NOV, TODAY)
+  const tip = (points: SpendPoint[], day: number): boolean => chartDayHasTip(points[day - 1], data.series, TODAY)
+
+  it('per day: every day up to today, even with nothing spent; after it, only a day with something dated on it', () => {
+    expect([1, 2, 16, 17].map((d) => tip(data.daily, d))).toEqual([true, true, true, true])
+    expect(tip(data.daily, 18)).toBe(false)
+    expect(tip(data.daily, 30)).toBe(false)
+    // An expense logged ahead has its own day.
+    expect(tip(data.daily, 20)).toBe(true)
+    // Nothing net on the day (a purchase and its refund): nothing to say either.
+    expect(tip(data.daily, 25)).toBe(false)
+  })
+
+  it('running total: up to today; never a day the month has not got to, whatever is dated on it', () => {
+    const points = wholeMonthPoints(data.cumulative, NOV)
+    expect(tip(points, 1)).toBe(true)
+    expect(tip(points, 17)).toBe(true)
+    expect([18, 20, 25, 30].map((d) => tip(points, d))).toEqual([false, false, false, false])
+  })
+
+  it('a past month: every day', () => {
+    const oct = spendChartData([exp({ date: '2026-10-03', amount: 3, cardId: C })], CARDS, { year: 2026, month: 9 }, TODAY)
+    expect(oct.daily.every((p) => chartDayHasTip(p, oct.series, TODAY))).toBe(true)
+    expect(oct.cumulative.every((p) => chartDayHasTip(p, oct.series, TODAY))).toBe(true)
+  })
+})
+
 describe('filterExpenses', () => {
   const list = [
     exp({ date: '2026-11-03', amount: 4.5, cardId: A, category: 'coffee', merchant: 'Café Central' }),
@@ -341,6 +402,43 @@ describe('filterExpenses', () => {
     expect(filterExpenses(list, { ...all, query: 'cafe' }, known)).toEqual([list[0]])
     expect(filterExpenses(list, { ...all, query: '  ANA ' }, known)).toEqual([list[1]])
     expect(filterExpenses(list, { ...all, query: 'taco', category: 'coffee' }, known)).toEqual([])
+  })
+})
+
+describe('drillFilter', () => {
+  it('a card: just that card for the month, no category and no search', () => {
+    expect(drillFilter({ card: A })).toEqual({ card: A, category: 'all', query: '' })
+    expect(drillFilter({ card: NO_CARD })).toEqual({ card: NO_CARD, category: 'all', query: '' })
+  })
+
+  it('a category: just that category, any card, no search; the whole month: no filter at all', () => {
+    expect(drillFilter({ category: 'groceries' })).toEqual({ card: 'all', category: 'groceries', query: '' })
+    expect(drillFilter('all')).toEqual({ card: 'all', category: 'all', query: '' })
+  })
+})
+
+describe('listSummary', () => {
+  it('the count and the net total, in whole cents', () => {
+    const list = [exp({ date: '2026-11-03', amount: 0.1 }), exp({ date: '2026-11-03', amount: 0.2 }), exp({ date: '2026-11-04', amount: 561.33 })]
+    expect(listSummary(list)).toEqual({ count: 3, total: 561.63 })
+  })
+
+  it('a refund lowers it, and can take it below 0; an empty list is 0 of nothing', () => {
+    expect(listSummary([exp({ date: '2026-11-03', amount: 12 }), exp({ date: '2026-11-03', amount: -20.5 })])).toEqual({ count: 2, total: -8.5 })
+    expect(listSummary([])).toEqual({ count: 0, total: 0 })
+  })
+
+  it('agrees with what the month says of a card once the list is narrowed to it', () => {
+    const list = [
+      exp({ date: '2026-11-03', amount: 85, cardId: A }),
+      exp({ date: '2026-11-04', amount: -5.25, cardId: A }),
+      exp({ date: '2026-11-04', amount: 9, cardId: B }),
+      exp({ date: '2026-11-05', amount: 3, cardId: GONE })
+    ]
+    const known = new Set(CARDS.map((c) => c.id))
+    const month = monthSpend(list, NOV, CARDS)
+    expect(listSummary(filterExpenses(list, drillFilter({ card: A }), known)).total).toBe(month.byCard.get(A))
+    expect(listSummary(filterExpenses(list, drillFilter({ card: NO_CARD }), known)).total).toBe(month.byCard.get(NO_CARD))
   })
 })
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { EXPENSE_CATEGORIES, type Expense, type ExpenseCard } from '../../../../shared/types'
 import { categoryKey, toCategory } from '../../lib/categories'
 import { codeAmount } from '../../lib/currency'
@@ -7,12 +7,14 @@ import { merchantLabel, paidInAnother } from '../../lib/expenseForm'
 import { rateText } from '../../lib/fx'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
-import { cardFilterChoices, filterExpenses, groupExpensesByDay, NO_CARD, type ExpenseFilter } from '../../lib/spend'
+import { cardFilterChoices, filterExpenses, groupExpensesByDay, listSummary, NO_CARD, type ExpenseFilter } from '../../lib/spend'
 import { NARROW, useMedia } from '../../lib/useMedia'
-import { DownloadIcon, PencilIcon, TrashIcon } from '../icons'
+import { CloseIcon, DownloadIcon, PencilIcon, TrashIcon } from '../icons'
 import CategoryIcon from './CategoryIcon'
 
 interface Props {
+  /** The card itself: ExpensesView scrolls it into view and focuses its heading when a line above shows its expenses. */
+  listRef: RefObject<HTMLElement | null>
   ym: MonthKey
   /** The month's expenses. */
   expenses: readonly Expense[]
@@ -40,12 +42,24 @@ const PAGE = 60
  * refund is green, and says so in words. An expense paid in another currency
  * also shows what was paid, small and neutral, written with its code
  * ("USD 12.00"); the rate is in its tooltip and in its sheet.
+ *
+ * While it is filtered, a quiet line above the rows says by what (a chip
+ * per card or category, each with its ×), how many and how much, and has
+ * Show all; the heading says it too, for whoever lands on it.
  */
-export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency, filter, onFilter, loaded, offline, onEdit, onDelete, onExport, canExport }: Props) {
-  const { t } = useLang()
+export default function ExpenseList({ listRef, ym, expenses, cards, cardsLoaded, currency, filter, onFilter, loaded, offline, onEdit, onDelete, onExport, canExport }: Props) {
+  const { t, tn } = useLang()
   const money = useMoney()
   const narrow = useMedia(NARROW)
   const [shown, setShown] = useState(PAGE)
+  // A new filter, from the boxes or from a line above, starts again from the first page.
+  const [shownFor, setShownFor] = useState(filter)
+  if (shownFor !== filter) {
+    setShownFor(filter)
+    setShown(PAGE)
+  }
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const showAllRef = useRef<HTMLButtonElement>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
@@ -68,9 +82,21 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency
   // The page's rows, each day's total from all of the day's rows.
   const days = useMemo(() => groupExpensesByDay(filtered, shown), [filtered, shown])
   const hasFilters = choice.value !== 'all' || filter.category !== 'all' || filter.query.trim() !== ''
-  const setFilter = (patch: Partial<ExpenseFilter>): void => {
-    setShown(PAGE)
-    onFilter({ ...filter, ...patch })
+  const setFilter = (patch: Partial<ExpenseFilter>): void => onFilter({ ...filter, ...patch })
+  const summary = useMemo(() => listSummary(filtered), [filtered])
+  // What the list is narrowed to, by name: the card's (or "No card"), the category's.
+  const cardLabel = choice.value === 'all' ? null : choice.value === NO_CARD ? t('spend.noCard') : (cards.find((c) => c.id === choice.value)?.name ?? null)
+  const categoryLabel = filter.category === 'all' ? null : t(categoryKey(filter.category))
+  const query = filter.query.trim()
+  /** A chip's ×: that filter goes; the focus moves on to Show all, or to the heading once nothing is left to show all of. */
+  const unfilter = (patch: Pick<ExpenseFilter, 'card'> | Pick<ExpenseFilter, 'category'>): void => {
+    setFilter(patch)
+    const left = ('card' in patch ? categoryLabel !== null : cardLabel !== null) || query !== ''
+    ;(left ? showAllRef.current : headingRef.current)?.focus()
+  }
+  const showAll = (): void => {
+    setFilter({ card: 'all', category: 'all', query: '' })
+    headingRef.current?.focus()
   }
 
   const deleteClick = (e: Expense): void => {
@@ -135,12 +161,33 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency
               </option>
             ))}
           </select>
-          {hasFilters && (
-            <button type="button" className="chip exp-clear" onClick={() => setFilter({ card: 'all', category: 'all', query: '' })}>
-              {t('explist.clear')}
-            </button>
-          )}
         </div>
+
+        {hasFilters && (
+          <div className="exp-active">
+            {cardLabel !== null && (
+              <button type="button" className="chip exp-active-chip exp-active-card" aria-label={t('explist.unfilter', { name: cardLabel })} onClick={() => unfilter({ card: 'all' })}>
+                <span className="exp-active-name">{cardLabel}</span>
+                <CloseIcon size={12} />
+              </button>
+            )}
+            {categoryLabel !== null && (
+              <button type="button" className="chip exp-active-chip exp-active-cat" aria-label={t('explist.unfilter', { name: categoryLabel })} onClick={() => unfilter({ category: 'all' })}>
+                <span className="exp-active-name">{categoryLabel}</span>
+                <CloseIcon size={12} />
+              </button>
+            )}
+            {summary.count > 0 && (
+              <span className="exp-active-sum">
+                <span>{tn('expense', summary.count)}</span>
+                <span>{money.plain(summary.total)}</span>
+              </span>
+            )}
+            <button type="button" ref={showAllRef} className="exp-show-all" onClick={showAll}>
+              {t('explist.showAll')}
+            </button>
+          </div>
+        )}
 
         {filtered.length === 0 ? (
           <p className="empty-state exp-empty">{t('explist.noMatch')}</p>
@@ -256,11 +303,16 @@ export default function ExpenseList({ ym, expenses, cards, cardsLoaded, currency
       </>
     )
 
+  // The heading says what the list is narrowed to: it is where the focus lands when a line above shows its expenses.
+  const names = [cardLabel, categoryLabel, query === '' ? null : `“${query}”`].filter((n): n is string => n !== null).join(', ')
+  const filteredText = loaded && expenses.length > 0 && hasFilters ? t('explist.filtered', { names, count: tn('expense', summary.count), total: money.plain(summary.total) }) : null
+
   return (
-    <article className="card expense-list-card">
+    <article className="card expense-list-card" ref={listRef}>
       <header className="card-head">
-        <h2>
+        <h2 className="exp-list-title" ref={headingRef} tabIndex={-1}>
           {t('explist.title')} <span className="scope-tag">{monthInline(ym)}</span>
+          {filteredText !== null && <span className="visually-hidden">, {filteredText}</span>}
         </h2>
         <button type="button" className="btn btn-ghost exp-export-btn" disabled={!canExport} onClick={onExport}>
           <DownloadIcon /> {t('explist.export')}

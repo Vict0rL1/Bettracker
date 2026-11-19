@@ -35,9 +35,11 @@ y servidor falso; (3) la interfaz; (4) la copia, el CSV y la documentación;
   por tarjeta (las tres primeras y «+n más»), media diaria y a qué ritmo va el
   mes; un gráfico que apila el gasto de cada tarjeta con tintas neutras
   («Sin tarjeta», punteada) en dos vistas, acumulado contra la línea del
-  presupuesto o por día; barras de presupuestos; desglose por categoría (cada
-  fila filtra la lista); y la lista agrupada por día, tabla en escritorio y
-  tarjetas en el móvil, con búsqueda y filtros por tarjeta y categoría.
+  presupuesto o por día; barras de presupuestos; desglose por categoría; y la
+  lista agrupada por día, tabla en escritorio y tarjetas en el móvil, con
+  búsqueda y filtros por tarjeta y categoría. Cada línea que nombra una
+  tarjeta o una categoría enseña sus gastos al tocarla (ver «Tocar una
+  tarjeta o una categoría»).
 - **Un gasto**: fecha, importe, tarjeta (opcional), comercio, categoría (11
   fijas: café, comida y restaurantes, supermercado, transporte, compras, ocio,
   salud, casa y servicios, suscripciones, viajes, otros), nota y origen (a
@@ -468,6 +470,70 @@ decidir nada: migrar, cambiar la moneda, usar los presupuestos.
   build real (también los que se cargan a demanda) y comprueba que no llevan
   ni un comercio del ejemplo ni la semilla de sus ids.
 
+## Tocar una tarjeta o una categoría (noviembre)
+
+Petición del dueño, tal cual: «Quiero que en esta parte de expense, al
+presionar una tarjeta que me salga los gastos que usé con esta tarjeta y así
+con lo demás. […] Quiero que se mire todo limpio y minimalista». Sin
+migración y sin tocar la sincronización.
+
+- **Qué se toca**: cada tarjeta de «Por tarjeta» (también «Sin tarjeta»),
+  cada línea de presupuesto de una tarjeta o de una categoría y cada fila de
+  «Por categoría». La lista del mes pasa a enseñar **exactamente** eso:
+  `drillFilter` (`lib/spend.ts`) pone la tarjeta o la categoría y **quita**
+  la búsqueda y el filtro del otro tipo. Tocar otra vez la misma línea no
+  quita el filtro (antes, en el desglose, sí): sigue enseñando esos gastos.
+  La línea **«Total del mes»** de los presupuestos enseña el mes entero
+  (quita los filtros): cada línea enseña lo que cuenta. El «+n más» de «Por
+  tarjeta», la leyenda del gráfico y las demás cifras no cambian.
+- **La lista viene a la vista**: la tarjeta de la lista sube hasta arriba de
+  la ventana con un desplazamiento suave (al instante con «reducir
+  movimiento») y su título (`tabIndex=-1`) se lleva el foco, así que el
+  teclado y el lector de pantalla siguen ahí. Nada fijo tapa arriba; en el
+  iPhone la página corre bajo la barra de estado, así que el margen es
+  `12px + env(safe-area-inset-top)` (`scroll-margin-top`). Si la página es
+  demasiado corta para subirla del todo, llega hasta el final.
+- **El filtro se ve y se quita fácil**: sobre las filas, una línea discreta
+  con una ficha por tarjeta y por categoría («Promerica ×»: tocarla quita ese
+  filtro), cuántos gastos y cuánto suman en el mes («12 gastos · $561.63»,
+  `listSummary`, en céntimos) y **«Ver todo»**. Sale con cualquier filtro,
+  también con solo la búsqueda, y sustituye a «Quitar filtros», que estaba
+  junto a las casillas. Las casillas siguen diciendo lo mismo que la ficha.
+  El título lleva el resumen para el lector de pantalla («…, filtrados por
+  Promerica: 12 gastos, $561.63»). Al quitar una ficha el foco pasa a «Ver
+  todo», o al título si ya no queda filtro.
+- **Aspecto**: las líneas son las de antes. El nombre es un `<button>` sin
+  aspecto de botón, y su `::after` cubre la línea entera (`.drill-row` en
+  `index.css`): se toca en cualquier punto, mientras las cifras siguen siendo
+  texto y la barra de un presupuesto sigue siendo una barra de progreso para
+  el lector de pantalla. Un tono al pasar el ratón (solo con ratón), otro
+  algo más firme al pulsar (`--dur-press`, sin escala) y en la línea que la
+  lista enseña (`aria-current`), y el anillo neutro del foco alrededor de la
+  línea. Nombre accesible: «Ver los gastos de Promerica», «Ver los gastos
+  sin tarjeta», «Ver los gastos de Supermercado», «Total del mes: ver todos
+  los gastos». En el móvil cada tarjeta de «Por tarjeta» mide 44 px y las
+  fichas y «Ver todo» se tocan en 44 px. Sin color: el color es dinero.
+- **El gráfico**: un día que aún no ha llegado y no tiene nada no tiene
+  tooltip ni cursor, en las dos vistas (`chartDayHasTip`; un día pasado sin
+  gasto sigue diciendo $0.00, y un gasto fechado por adelantado tiene el
+  suyo en «Por día»). En «Acumulado» los días que faltan se añaden como días
+  vacíos (`wholeMonthPoints`), para que el puntero caiga en su día y no se
+  pegue al último real; el área sigue parando hoy. **La línea blanca** de la
+  captura del dueño era el cursor del tooltip: un `ComposedChart` de
+  Recharts siempre dibuja una línea como cursor, con su trazo por defecto
+  `#ccc`, y el `fill` que pedía la vista «Por día» no hacía nada. Ahora el
+  cursor lo dibuja la app: una franja tenue en el día (`--tint-2`) o una
+  línea fina (`--grid-strong`). **La columna que se desvanece** sobre la
+  barra más alta no era un artefacto: era el tramo de arriba de esa barra
+  apilada (la segunda tarjeta), que en la captura queda bajo la barra de
+  estado del iPhone, y el sistema la difumina igual que la etiqueta «$400».
+  De paso salió otro artefacto al tocar: Recharts mete cada capa del
+  gráfico en un `<g tabindex="-1">` y hace enfocable el dibujo (para sus
+  flechas), así que un toque o un clic enfocaba uno y el navegador le ponía
+  su anillo (un rectángulo alrededor de las barras o del gráfico). Ahora solo
+  el teclado deja anillo, el neutro de la app; vale también para el gráfico
+  de apuestas.
+
 ## Sincronización
 
 Una capa genérica para tablas sencillas de un usuario, en vez de copiar
@@ -700,7 +766,9 @@ reabrieron; las que más pesan:
   nueva), `expenseFx` (`chargedFx`, lo cobrado en `fxView`) y
   `expenseReview` (`merchantMemory`, `rowCurrency`, filas con lo cobrado,
   tasas por moneda y fecha, «Moneda supuesta» solo donde importa, cambiar la
-  moneda de una fila o de todas).
+  moneda de una fila o de todas). Con «Tocar una tarjeta o una categoría»:
+  `spend` (`drillFilter`, `listSummary`, `wholeMonthPoints`,
+  `chartDayHasTip` y la línea que enseña cada presupuesto).
 - **SQL**: `checks.sql` secciones 11 (008) y 12 (009) en las variantes A, B y
   C de `run.sh`, que además prueba `check_migrations.sql` tras cada
   migración.
@@ -738,7 +806,14 @@ reabrieron; las que más pesan:
   pedir ninguna tasa; cambiar la moneda de una fila; «Moneda de todas las
   filas» a EUR y de vuelta a CAD). Las pruebas de escaneo de antes no
   cambian: la lectura de mentira contesta como una función anterior (sin
-  moneda por fila), así que también prueban esa compatibilidad.
+  moneda por fila), así que también prueban esa compatibilidad. Con «Tocar
+  una tarjeta o una categoría», `expenses-drill.spec.ts` (5: cada tipo de
+  línea enseña solo sus gastos, con la ficha, las casillas y el resumen de
+  acuerdo, la lista arriba y el foco en su título, y «Ver todo» y la × lo
+  deshacen; Intro y Espacio, y al instante con «reducir movimiento»; en
+  español a 390 px con 44 px para el dedo; y el gráfico, con la fecha fija,
+  sin tooltip ni cursor en un día que no ha llegado, con el ratón y con el
+  dedo, sin anillo tras un toque y con el del teclado).
 - **La función**: `deno check` (Deno 2.9.6) pasó en la etapa 2 contra los
   tipos reales del SDK y de supabase-js, y otra vez con la moneda de cada
   gasto. Nunca se ha llamado a Anthropic ni a un proyecto de Supabase real:

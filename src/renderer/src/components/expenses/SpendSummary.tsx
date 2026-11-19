@@ -3,7 +3,7 @@ import { humanDate, monthInline, type MonthKey } from '../../lib/dates'
 import { fmtPct } from '../../lib/format'
 import { useLang } from '../../lib/i18n'
 import { useMoney } from '../../lib/money'
-import { budgetState, comparisonChange, NO_CARD, pace, totalBudget, type MonthComparison, type MonthSpend } from '../../lib/spend'
+import { budgetState, comparisonChange, NO_CARD, pace, totalBudget, type Drill, type MonthComparison, type MonthSpend } from '../../lib/spend'
 import { ArrowDownIcon, ArrowUpIcon } from '../icons'
 import { inkOf } from './inks'
 
@@ -17,6 +17,10 @@ interface Props {
   cardsLoaded: boolean
   today: string
   onManageBudgets: () => void
+  /** The list's card filter ('all', a card's id or NO_CARD): its line reads as the one the list shows. */
+  activeCard: string
+  /** A card's line shows that card's expenses in the list below (ExpensesView). */
+  onShow: (d: Drill) => void
 }
 
 /** Per-card lines shown before "+n more". */
@@ -25,12 +29,13 @@ const TOP_CARDS = 3
 /**
  * The month in four figures, one strip like the bets' key numbers: what was
  * spent (net of refunds) and how that compares with the month before, the
- * budget left (the tile opens the budgets), what each card spent, and the
- * daily average with where the month is heading. Neutral ink throughout;
- * only a budget near or over its limit takes colour: spending more than last
- * month is said with an arrow and in words, never in red.
+ * budget left (the tile opens the budgets), what each card spent (each line
+ * shows its card's expenses), and the daily average with where the month is
+ * heading. Neutral ink throughout; only a budget near or over its limit takes
+ * colour: spending more than last month is said with an arrow and in words,
+ * never in red.
  */
-export default function SpendSummary({ ym, month, versus, budgets, cards, cardsLoaded, today, onManageBudgets }: Props) {
+export default function SpendSummary({ ym, month, versus, budgets, cards, cardsLoaded, today, onManageBudgets, activeCard, onShow }: Props) {
   const { t, tn } = useLang()
   const money = useMoney()
 
@@ -134,12 +139,20 @@ export default function SpendSummary({ ym, month, versus, budgets, cards, cardsL
               const card = key === NO_CARD ? undefined : byName.get(key)
               const name = card ? card.name : t('spend.noCard')
               const ink = inkOf(key, cards)
+              // The whole line is the target (.drill-row): its name is the button, its swatch and amount stay plain.
               return (
-                <li key={key} className="spend-card-item">
+                <li key={key} className="spend-card-item drill-row" data-card={key}>
                   <span className={`legend-swatch${ink.dashed ? ' is-dashed' : ''}`} style={{ ['--swatch' as string]: ink.ink }} aria-hidden="true" />
-                  <span className="spend-card-name" title={name}>
+                  <button
+                    type="button"
+                    className="spend-card-name drill"
+                    title={name}
+                    aria-label={card ? t('spend.showCard', { name }) : t('spend.showNoCard')}
+                    aria-current={activeCard === key || undefined}
+                    onClick={() => onShow({ card: key })}
+                  >
                     {name}
-                  </span>
+                  </button>
                   <span className="spend-card-amount">{money.plain(amount)}</span>
                 </li>
               )

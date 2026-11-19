@@ -176,26 +176,34 @@ export function budgetState(spent: number, limit: number | null): BudgetState {
   return { level, spent, limit, left: fromCents(cents(limit) - cents(spent)), ratio }
 }
 
+/**
+ * What a line of the view shows when it is tapped: one card's expenses (a card's id, or NO_CARD), one category's, or
+ * the whole month's ('all': the budgets' monthly total).
+ */
+export type Drill = { card: string } | { category: ExpenseCategory } | 'all'
+
 export interface BudgetLine {
   budget: ExpenseBudget
   scope: BudgetScope
   /** A key to translate (the total, a category), or a card's own name. */
   label: { key: StringKey; vars?: Record<string, string> } | { text: string }
   state: BudgetState
+  /** The expenses the line counts: the month's, its card's (by the card's own id) or its category's. */
+  drill: Drill
 }
 
 /** total first, then card budgets in card order (skipping cards this device doesn't know), then categories in EXPENSE_CATEGORIES order. */
 export function budgetLines(budgets: readonly ExpenseBudget[], month: MonthSpend, cards: readonly ExpenseCard[]): BudgetLine[] {
   const lines: BudgetLine[] = []
   const total = totalBudget(budgets)
-  if (total) lines.push({ budget: total, scope: 'total', label: { key: 'budget.total' }, state: budgetState(month.total, total.monthlyLimit) })
+  if (total) lines.push({ budget: total, scope: 'total', label: { key: 'budget.total' }, state: budgetState(month.total, total.monthlyLimit), drill: 'all' })
   for (const card of cards) {
     const b = budgets.find((x) => x.scope === 'card' && x.target.toLowerCase() === card.id.toLowerCase())
-    if (b) lines.push({ budget: b, scope: 'card', label: { text: card.name }, state: budgetState(month.byCard.get(card.id) ?? 0, b.monthlyLimit) })
+    if (b) lines.push({ budget: b, scope: 'card', label: { text: card.name }, state: budgetState(month.byCard.get(card.id) ?? 0, b.monthlyLimit), drill: { card: card.id } })
   }
   for (const c of EXPENSE_CATEGORIES) {
     const b = budgets.find((x) => x.scope === 'category' && x.target === c)
-    if (b) lines.push({ budget: b, scope: 'category', label: { key: categoryKey(c) }, state: budgetState(month.byCategory.get(c) ?? 0, b.monthlyLimit) })
+    if (b) lines.push({ budget: b, scope: 'category', label: { key: categoryKey(c) }, state: budgetState(month.byCategory.get(c) ?? 0, b.monthlyLimit), drill: { category: c } })
   }
   return lines
 }
@@ -335,6 +343,29 @@ export function spendChartData(
   return { series, daily, cumulative, min: fromCents(min), max: fromCents(max), maxDaily: fromCents(maxDaily) }
 }
 
+/**
+ * The running-total points over the whole month, for the chart's hover: each day the month has not got to (after
+ * today, or every day of a future month) is added as a bare day, with no series and no running total. The areas still
+ * stop at today (a stacked area breaks where its value is missing), and the hover lands on the day under the pointer
+ * instead of sticking to the last real one.
+ */
+export function wholeMonthPoints(points: readonly SpendPoint[], ym: MonthKey): SpendPoint[] {
+  const days = daysInMonth(ym)
+  const out = points.slice(0, days)
+  for (let day = out.length + 1; day <= days; day++) out.push({ date: toDateStr(ym.year, ym.month, day), day, total: 0, cumulative: null })
+  return out
+}
+
+/**
+ * Whether the chart says anything about a day (its tooltip and cursor): any day up to today, or a later one only when
+ * something is dated on it (an expense logged ahead, in the per-day view). A day still to come with nothing on it has
+ * no data, and "Total $0.00" for it would be noise. A past day with nothing spent still says $0.00.
+ */
+export function chartDayHasTip(point: SpendPoint, series: readonly SpendSeries[], today: string): boolean {
+  if (point.date <= today) return true
+  return series.some((s) => typeof point[s.key] === 'number' && point[s.key] !== 0)
+}
+
 export interface ExpenseFilter {
   /** A card's id, NO_CARD, or 'all'. */
   card: string | 'all'
@@ -354,6 +385,20 @@ export function filterExpenses(list: readonly Expense[], f: ExpenseFilter, known
       (f.category === 'all' || toCategory(e.category) === f.category) &&
       (q === '' || fold(e.merchant).includes(q) || fold(e.note).includes(q))
   )
+}
+
+/**
+ * The list's filter once a line is tapped: exactly that card or that category for the month. It replaces the filter
+ * of its own kind, clears the other kind and the search, so the list shows the line's expenses and nothing else.
+ */
+export function drillFilter(d: Drill): ExpenseFilter {
+  if (d === 'all') return { card: 'all', category: 'all', query: '' }
+  return 'card' in d ? { card: d.card, category: 'all', query: '' } : { card: 'all', category: d.category, query: '' }
+}
+
+/** How many expenses a (filtered) list holds and their net total, added in whole cents: the list's summary line. */
+export function listSummary(list: readonly Expense[]): { count: number; total: number } {
+  return { count: list.length, total: fromCents(list.reduce((sum, e) => sum + cents(e.amount), 0)) }
 }
 
 export interface ExpenseDay {

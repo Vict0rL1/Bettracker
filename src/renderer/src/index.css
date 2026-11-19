@@ -1664,6 +1664,16 @@ input[type='number']::-webkit-outer-spin-button {
   animation: fade-in 240ms var(--ease-out);
 }
 
+/* Recharts puts each layer of a chart in a <g tabindex="-1"> and makes the
+   drawing itself focusable (for its arrow keys). A click or a tap focuses
+   one of them and the browser rings it: a box round the bars, or round the
+   whole plot. Only the keyboard's ring stays (on the drawing, the app's own
+   neutral one). */
+.chart-wrap .recharts-wrapper :focus:not(:focus-visible),
+.chart-wrap .recharts-wrapper [tabindex='-1']:focus {
+  outline: none;
+}
+
 /* One sentence, centred in the space it fills; no extra Add bet button. */
 .chart-empty,
 .empty-state {
@@ -5191,11 +5201,83 @@ tr.is-pending td:first-child {
   display: block;
 }
 
+/* A line that shows its expenses when tapped: By card, the budgets, By
+   category (ExpensesView narrows the list to it). Its name is a real button
+   with no chrome, and the button's ::after covers the whole line, so a tap
+   anywhere on it counts while the figures and a budget's bar stay plain
+   text and a real progress bar for a screen reader. The tint is the line's
+   ::before, behind its text: one on hover (hover devices only), a firmer one
+   pressed (never a scale) and on the line the list shows; a neutral ring
+   round the line on keyboard focus. Nothing moves. --drill-inset lets the
+   tint and the target reach past a line whose text sits flush with its
+   card's title. */
+.drill-row {
+  position: relative;
+  isolation: isolate;
+}
+
+.drill-row::before {
+  content: '';
+  position: absolute;
+  inset: var(--drill-inset, 0);
+  z-index: -1;
+  border-radius: var(--r-sm);
+  pointer-events: none;
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .drill-row:has(.drill:hover)::before {
+    background: var(--row-hover);
+  }
+}
+
+.drill-row:has(.drill[aria-current='true'])::before,
+.drill-row:has(.drill:active)::before {
+  background: var(--row-selected);
+}
+
+.drill-row:has(.drill:active)::before {
+  transition-duration: var(--dur-press);
+}
+
+.drill {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drill::after {
+  content: '';
+  position: absolute;
+  inset: var(--drill-inset, 0);
+  border-radius: var(--r-sm);
+}
+
+.drill:focus-visible {
+  outline: none;
+}
+
+.drill:focus-visible::after {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Each card's line is 24px tall, the tint 6px past its ends: the same rhythm
+   as the 18px lines 6px apart it replaced, with no gap between targets. */
 .spend-card-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 10px 0 0;
+  margin: 7px 0 -3px;
   padding: 0;
   list-style: none;
   font-size: var(--fs-md);
@@ -5203,10 +5285,12 @@ tr.is-pending td:first-child {
 }
 
 .spend-card-item {
+  --drill-inset: 0 -6px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+  min-height: 24px;
 }
 
 .spend-card-name {
@@ -5217,6 +5301,10 @@ tr.is-pending td:first-child {
   color: var(--text-2);
 }
 
+.spend-card-name[aria-current='true'] {
+  color: var(--text);
+}
+
 .spend-card-amount {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -5224,6 +5312,7 @@ tr.is-pending td:first-child {
 }
 
 .spend-card-more {
+  padding-top: 3px;
   color: var(--text-3);
   font-size: var(--fs-sm);
 }
@@ -5330,6 +5419,7 @@ tr.is-pending td:first-child {
 }
 
 .budget-row {
+  --drill-inset: 0 -8px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
@@ -5344,6 +5434,7 @@ tr.is-pending td:first-child {
 }
 
 .budget-row:first-child {
+  --drill-inset: -6px -8px 0;
   padding-top: 0;
 }
 
@@ -5400,7 +5491,7 @@ tr.is-pending td:first-child {
   color: var(--red-text);
 }
 
-/* Where the money went: each row is a toggle that filters the list. */
+/* Where the money went: each line shows its category's expenses (.drill-row). */
 .spend-cat-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -5411,41 +5502,12 @@ tr.is-pending td:first-child {
 }
 
 .spend-cat-row {
-  min-width: 0;
-  border-bottom: 1px solid var(--divider);
-}
-
-.spend-cat-btn {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 100%;
+  min-width: 0;
   padding: 10px 8px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--dur-hover) var(--ease-out);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .spend-cat-btn:hover {
-    background: var(--row-hover);
-  }
-}
-
-/* Pressed, and the category the list is narrowed to: a background, never a scale. */
-.spend-cat-btn:active,
-.spend-cat-btn[aria-pressed='true'] {
-  background: var(--row-selected);
-}
-
-.spend-cat-btn:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
+  border-bottom: 1px solid var(--divider);
 }
 
 .spend-cat-main {
@@ -5474,7 +5536,7 @@ tr.is-pending td:first-child {
   color: var(--green);
 }
 
-.spend-cat-btn .bd-bar {
+.spend-cat-row .bd-bar {
   display: block;
 }
 
@@ -5485,6 +5547,17 @@ tr.is-pending td:first-child {
 }
 
 /* ---------- expenses: list ---------- */
+/* A line above that shows its expenses scrolls the card to the window's top,
+   clear of the phone's status bar (black-translucent: the page runs under
+   it); nothing else is fixed up there. Its heading takes the focus. */
+.expense-list-card {
+  scroll-margin-top: calc(12px + env(safe-area-inset-top));
+}
+
+.exp-list-title {
+  border-radius: var(--r-xs);
+}
+
 .expense-list-card .card-head h2 .scope-tag {
   margin-left: 6px;
   font-weight: 400;
@@ -5493,6 +5566,94 @@ tr.is-pending td:first-child {
 .exp-filters select {
   max-width: 220px;
   text-overflow: ellipsis;
+}
+
+/* While the list is filtered: by what (a chip for the card, one for the
+   category; the chip takes its filter off), how many and how much, and Show
+   all. Quiet: neutral inks, no box round the line; it fades in once. */
+.exp-active {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: -4px 0 12px;
+  animation: fade-in var(--dur-sm) var(--ease-out);
+}
+
+.exp-active-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 8px 0 10px;
+  color: var(--text);
+}
+
+.exp-active-chip > svg {
+  flex: none;
+  color: var(--text-3);
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .exp-active-chip:hover > svg {
+    color: var(--text);
+  }
+}
+
+.exp-active-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exp-active-sum {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.exp-active-sum > span + span::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 6px;
+  color: var(--text-3);
+}
+
+.exp-show-all {
+  position: relative;
+  height: 28px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .exp-show-all:hover {
+    color: var(--text);
+    background: var(--tint-2);
+  }
+}
+
+.exp-show-all:active {
+  background: var(--tint-3);
+  transition-duration: var(--dur-press);
 }
 
 .exp-table tbody tr.exp-row {
@@ -6621,6 +6782,28 @@ tr.is-pending td:first-child {
 
   .exp-filters select {
     max-width: none;
+  }
+
+  /* A finger's worth: each card's line 44px tall, the filter chips and Show
+     all 44px to the touch (their look stays small). */
+  .spend-card-list {
+    margin: 2px 0 -8px;
+  }
+
+  .spend-card-item {
+    --drill-inset: 0 -8px;
+    min-height: 44px;
+  }
+
+  :is(.exp-active-chip, .exp-show-all)::before {
+    content: '';
+    position: absolute;
+    inset: -8px -4px;
+  }
+
+  /* From inside the chip's 1px border. */
+  .exp-active-chip::before {
+    inset: -9px -5px;
   }
 
   .exp-paycard-seg {

@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Expense, ExpenseBudget, ExpenseCard } from '../../../../shared/types'
 import { currencyName } from '../../lib/currency'
 import { currentMonth, monthLabel, sameMonth, todayStr, type MonthKey } from '../../lib/dates'
 import { useLang } from '../../lib/i18n'
-import { budgetLines, categoryShares, expensesInMonth, monthSpend, totalBudget, vsLastMonth, type ExpenseFilter } from '../../lib/spend'
+import { budgetLines, categoryShares, drillFilter, expensesInMonth, monthSpend, totalBudget, vsLastMonth, type Drill, type ExpenseFilter } from '../../lib/spend'
 import { ChevronLeftIcon, ChevronRightIcon } from '../icons'
 import BudgetsPanel from './BudgetsPanel'
 import CategoryBreakdown from './CategoryBreakdown'
@@ -42,6 +42,9 @@ export interface ExpensesViewProps {
 
 const NO_FILTER: ExpenseFilter = { card: 'all', category: 'all', query: '' }
 
+/** Whether the system asks for less motion: the list then comes into view at once instead of scrolling there. */
+const lessMotion = (): boolean => (typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false)
+
 /**
  * The Expenses view: the month (shared with the bets' calendar, and its
  * arrow keys), what it cost, how it went against the budgets, where the
@@ -49,11 +52,32 @@ const NO_FILTER: ExpenseFilter = { card: 'all', category: 'all', query: '' }
  * the MoneyContext App gives this subtree. Only one view is mounted. Its bar
  * holds the month alone: adding (and scanning, from the expense sheet) is the
  * + button, and Expense settings is in the menu.
+ *
+ * Each line that names a card or a category (By card, the budgets, By
+ * category) shows its expenses when tapped: the list below is narrowed to
+ * exactly that card or that category (lib/spend.ts drillFilter), scrolled to
+ * the top of the window and given the focus. The budgets' monthly total
+ * shows the whole month.
  */
 export default function ExpensesView(p: ExpensesViewProps) {
   const { t, lang } = useLang()
   const today = todayStr()
   const [filter, setFilter] = useState<ExpenseFilter>(NO_FILTER)
+  const listRef = useRef<HTMLElement>(null)
+  // Bumped by each tap on a line: the list comes into view once it shows that line's expenses.
+  const [reveal, setReveal] = useState(0)
+  const show = useCallback((d: Drill): void => {
+    setFilter(drillFilter(d))
+    setReveal((n) => n + 1)
+  }, [])
+  useEffect(() => {
+    const list = listRef.current
+    if (reveal === 0 || !list) return
+    // Its heading takes the focus (keyboard and screen reader land on the list, which says what it shows), without a
+    // jump of its own: the scroll brings the card's top to the window's top, under nothing (scroll-margin-top).
+    list.querySelector<HTMLElement>('.exp-list-title')?.focus({ preventScroll: true })
+    list.scrollIntoView?.({ behavior: lessMotion() ? 'auto' : 'smooth', block: 'start' })
+  }, [reveal])
 
   const month = useMemo(() => monthSpend(p.expenses, p.ym, p.cards), [p.expenses, p.ym, p.cards])
   const monthList = useMemo(() => expensesInMonth(p.expenses, p.ym), [p.expenses, p.ym])
@@ -118,13 +142,25 @@ export default function ExpensesView(p: ExpensesViewProps) {
         </article>
       ) : (
         <>
-          <SpendSummary ym={p.ym} month={month} versus={versus} budgets={p.budgets} cards={p.cards} cardsLoaded={p.cardsLoaded} today={today} onManageBudgets={() => p.onManage('budgets')} />
+          <SpendSummary
+            ym={p.ym}
+            month={month}
+            versus={versus}
+            budgets={p.budgets}
+            cards={p.cards}
+            cardsLoaded={p.cardsLoaded}
+            today={today}
+            onManageBudgets={() => p.onManage('budgets')}
+            activeCard={filter.card}
+            onShow={show}
+          />
           <div className="spend-grid">
             <SpendChart expenses={p.expenses} cards={p.cards} cardsLoaded={p.cardsLoaded} ym={p.ym} today={today} budget={total?.monthlyLimit ?? null} />
-            <BudgetsPanel lines={lines} loaded={p.budgetsLoaded} onEdit={() => p.onManage('budgets')} />
+            <BudgetsPanel lines={lines} loaded={p.budgetsLoaded} onEdit={() => p.onManage('budgets')} filter={filter} onShow={show} />
           </div>
-          <CategoryBreakdown shares={shares} active={filter.category} onPick={(category) => setFilter((f) => ({ ...f, category }))} />
+          <CategoryBreakdown shares={shares} active={filter.category} onShow={show} />
           <ExpenseList
+            listRef={listRef}
             ym={p.ym}
             expenses={monthList}
             cards={p.cards}
