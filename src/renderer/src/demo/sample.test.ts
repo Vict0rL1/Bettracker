@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EXPENSE_CATEGORIES, type Expense, type ExpenseBudget, type ExpenseCard } from '../../../shared/types'
 import { BUDGETS_SPEC, CARDS_SPEC, EXPENSES_SPEC } from '../data/expenseSpecs'
+import { CASINO_GAMES, CASINO_SPORT, isCasino } from '../lib/casino'
 import { addDays, addMonths, monthPrefix, type MonthKey } from '../lib/dates'
 import { paidInAnother } from '../lib/expenseForm'
 import { convert } from '../lib/fx'
@@ -39,14 +40,15 @@ describe('sampleData', () => {
   })
 
   it('about sixty bets over two months: won, lost, pushed and still open, with their sport, book, type and odds', () => {
-    expect(s.bets).toHaveLength(60)
-    const count = (status: string): number => s.bets.filter((b) => b.status === status).length
+    const sports = s.bets.filter((b) => !isCasino(String(b.sport)))
+    expect(sports).toHaveLength(60)
+    const count = (status: string): number => sports.filter((b) => b.status === status).length
     expect(count('pending')).toBe(4)
     expect(count('won')).toBeGreaterThan(15)
     expect(count('lost')).toBeGreaterThan(15)
     expect(count('push')).toBeGreaterThan(0)
     expect(count('won') + count('lost') + count('push') + count('pending')).toBe(60)
-    for (const b of s.bets) {
+    for (const b of sports) {
       expect(String(b.date) <= TODAY && String(b.date) >= addDays(TODAY, -60), `${String(b.date)} within the last two months`).toBe(true)
       expect(['NBA', 'NFL', 'NHL', 'Soccer']).toContain(b.sport)
       expect(String(b.book)).not.toBe('')
@@ -59,6 +61,22 @@ describe('sampleData', () => {
     // A believable record: neither a fortune nor a ruin.
     const net = s.bets.reduce((sum, b) => sum + ((b.amount as number | null) ?? 0), 0)
     expect(Math.abs(net)).toBeLessThan(300)
+  })
+
+  it('a few casino plays at Stake: a game, won or lost by its sign, no odds, the wager when typed, netting to nothing', () => {
+    const plays = s.bets.filter((b) => isCasino(String(b.sport)))
+    expect(plays).toHaveLength(6)
+    for (const b of plays) {
+      expect(b).toMatchObject({ sport: CASINO_SPORT, book: 'Stake', odds: null, closing_odds: null })
+      expect(CASINO_GAMES as readonly unknown[]).toContain(b.bet_type)
+      expect(b.status).toBe((b.amount as number) > 0 ? 'won' : 'lost')
+      if (b.stake !== null && b.status === 'lost') expect(-(b.amount as number)).toBeLessThanOrEqual(b.stake as number)
+      // Never from today or yesterday: the bet logged last is a sports one.
+      expect(String(b.date) <= addDays(TODAY, -2)).toBe(true)
+    }
+    expect(plays.some((b) => b.stake === null)).toBe(true)
+    expect(plays.some((b) => b.stake !== null)).toBe(true)
+    expect(Math.round(plays.reduce((sum, b) => sum + (b.amount as number), 0) * 100)).toBe(0)
   })
 
   it('every bet is one the app would have stored as it is', () => {
@@ -76,7 +94,8 @@ describe('sampleData', () => {
         betType: b.bet_type as string
       })
       expect(clean).toEqual({ date: b.date, amount: b.amount, stake: b.stake, odds: b.odds, closingOdds: b.closing_odds, status: b.status, note: b.note, sport: b.sport, book: b.book, betType: b.bet_type })
-      // A win pays what its price says, a loss costs the stake.
+      // A win pays what its price says, a loss costs the stake (a casino play's result is typed as it came).
+      if (isCasino(String(b.sport))) continue
       if (b.status === 'won') expect(b.amount).toBeCloseTo((b.stake as number) * ((b.odds as number) - 1), 2)
       if (b.status === 'lost') expect(b.amount).toBe(-(b.stake as number))
     }
@@ -164,7 +183,7 @@ describe('sampleData', () => {
     expect(es.expenses.map((e) => e.note)).toContain('entradas del concierto')
     expect(s.expenses.map((e) => e.note)).toContain('concert tickets')
     expect(es.expenses.map((e) => [e.id, e.amount, e.merchant])).toEqual(s.expenses.map((e) => [e.id, e.amount, e.merchant]))
-    expect(new Set(es.bets.map((b) => b.sport))).toEqual(new Set(['NBA', 'NFL', 'NHL', 'Fútbol']))
+    expect(new Set(es.bets.map((b) => b.sport))).toEqual(new Set(['NBA', 'NFL', 'NHL', 'Fútbol', 'Casino']))
     expect(es.bets.map((b) => [b.id, b.amount, b.odds, b.date])).toEqual(s.bets.map((b) => [b.id, b.amount, b.odds, b.date]))
   })
 

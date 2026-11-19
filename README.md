@@ -15,6 +15,10 @@ to see which of them earn their keep. All four fields are optional: bets logged
 without a stake still count toward P/L and win rate, and the app tells you how
 many are missing one instead of quietly guessing.
 
+Play **casino games** too (Stake's Dice, Limbo, Mines …)? Log each session
+as a **casino play**: the game, what it won or lost, and **Won** or **Lost**
+(see [Casino plays](#casino-plays)).
+
 Track your **bankroll** too: a starting figure plus every **deposit and
 withdrawal**, so the current bankroll adds up to the cent, a chart view of it
 over time, and a quiet warning when a stake is more than **5%** of it. And if
@@ -452,7 +456,9 @@ once the three are done, or when hidden.
 
 The **+** button at the bottom right (or `T`) logs a bet in a couple of taps,
 for today unless another date is picked; **More details** carries what was
-typed to the full form. The calendar's days open their own day too.
+typed to the full form. Its **Sports | Casino** switch at the top logs a
+casino play instead (see [Casino plays](#casino-plays)). The calendar's days
+open their own day too.
 
 ## Date ranges
 
@@ -492,8 +498,8 @@ Tick rows in the history (the header box ticks the page) and a bar appears,
 saying how many are selected and how many of those the filters hide, to
 **retag** them (empty boxes keep a bet's current tag), **settle** the
 pending ones as won / lost / push / void (a win whose profit can't be worked
-out, with no odds or a free bet, is skipped) or **delete** them (click
-twice: the button says how many). Every delete
+out, with no odds or a free bet, and a loss without a stake are skipped) or
+**delete** them (click twice: the button says how many). Every delete
 — single or bulk — and every bulk edit shows an **Undo** in its toast. Undo
 writes the previous values back through the same outbox, so it works offline
 and syncs like any other change; a restored bet keeps its id but gets a new
@@ -506,7 +512,33 @@ many bets are still waiting for a result; **Pending bets** in the menu (or a
 click on the card) opens a panel listing them, oldest first. Each settles in one tap
 (WON / LOST / PUSH / VOID — the result is worked out from the stake and odds),
 and a bet whose date has passed is flagged so it is not forgotten. Settling
-works offline like any other edit.
+works offline like any other edit. A result that can't be worked out (a win
+without odds, a loss without a stake) opens the bet's form to type it.
+
+## Casino plays
+
+Besides sports bets, the quick add logs **casino plays** (Stake's Dice,
+Limbo, Mines, Plinko …): **Sports | Casino** at the top of the sheet (a
+radio group: the arrows, Home and End switch it) opens on the kind of the
+bet logged last. The casino side asks for the date, the **game** (ten chips
+for Stake's common games, or **Other game**, which suggests the ones used
+before; the last game comes chosen), the **amount** won or lost, net, and
+**Won** or **Lost**, which gives it its sign. Under them, small and
+optional: the **site** (the last play's, else Stake) and what was
+**wagered**. A loss can't be more than what was wagered. The sports side is
+the sheet as it was, its tags and stake taken from the last *sports* bet, so
+a casino play in between never turns the next bet's sport into "Casino".
+
+There is no new table or column: a casino play is an ordinary bet with sport
+**Casino** (a bet already tagged "casino" counts too), the game as its bet
+type, the site as its book, no odds, the net result as its amount and what
+was wagered, when typed, as its stake. So it counts in P/L, the bankroll,
+the calendar and the monthly loss limit; the breakdown shows **Casino** as
+a sport and each game as a bet type; ROI counts only the plays with a wager;
+CLV and the odds bands leave them out. The history, the day and the pending
+list read one as "Casino · Limbo · Stake". The full form edits it like any
+bet, with no odds asked for and the stake optional. It goes through CSV and
+backups unchanged. More in `docs/casino-2026-11.md` (Spanish).
 
 ## Expenses
 

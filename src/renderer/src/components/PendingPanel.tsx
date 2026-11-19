@@ -1,5 +1,6 @@
 import { useEffect, useId } from 'react'
 import type { Bet, BetStatus, OddsFormat } from '../../../shared/types'
+import { betTags } from '../lib/casino'
 import { humanDate } from '../lib/dates'
 import { useLang } from '../lib/i18n'
 import { useMoney } from '../lib/money'
@@ -68,7 +69,7 @@ export default function PendingPanel({ open, oddsFormat, onSettle, onEdit, onClo
         ) : (
           <ul className="bet-list pend-list">
             {open.map(({ bet: b, past }) => {
-              const tags = [b.sport, b.book, b.betType].filter(Boolean)
+              const tags = betTags(b)
               return (
                 <li key={b.id} className={`bet-item pend-item ${past ? 'is-past' : ''}`}>
                   <span className="pend-date">

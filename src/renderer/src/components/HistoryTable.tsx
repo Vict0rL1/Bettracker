@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Bet, BetStatus, OddsFormat } from '../../../shared/types'
 import type { TagPatch } from '../lib/bulk'
+import { betTags, isCasinoBet } from '../lib/casino'
 import { humanDate } from '../lib/dates'
 import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
@@ -364,7 +365,7 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                       const decided = b.status === 'won' || b.status === 'lost'
                       const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
                       const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
-                      const tags = [b.sport, b.book, b.betType].filter(Boolean)
+                      const tags = betTags(b)
                       const desc = b.note || tags.join(' · ')
                       const detailsId = `${listId}-card-${b.id}`
                       const cardClass = ['hcard', b.status === 'pending' ? 'is-pending' : '', selected.has(b.id) ? 'is-selected' : '', expanded ? 'is-open' : '']
@@ -383,7 +384,8 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                               <span className="hcard-sub">
                                 <span className="hcard-desc">{desc || <span className="td-none">{t('hist.noDetails')}</span>}</span>
                                 <span className="hcard-stake">
-                                  {b.stake === null ? t('hist.noStake') : b.stake === 0 ? t('modal.freeBet') : t('hist.staked', { amount: money.stake(b.stake) })}
+                                  {/* A casino play's wager is optional: none is nothing to point out. */}
+                                  {b.stake === null ? (isCasinoBet(b) ? '' : t('hist.noStake')) : b.stake === 0 ? t('modal.freeBet') : t('hist.staked', { amount: money.stake(b.stake) })}
                                 </span>
                               </span>
                               <ChevronDownIcon />
@@ -407,14 +409,19 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                           {expanded && (
                             <div className="hcard-details" id={detailsId}>
                               <dl>
-                                <div>
-                                  <dt>{t('hist.odds')}</dt>
-                                  <dd>{b.odds === null ? '—' : formatOdds(b.odds, oddsFormat)}</dd>
-                                </div>
-                                <div>
-                                  <dt>{t('modal.closingOdds')}</dt>
-                                  <dd>{b.closingOdds === null ? '—' : formatOdds(b.closingOdds, oddsFormat)}</dd>
-                                </div>
+                                {/* A casino play has no price: two empty rows would only be noise. */}
+                                {!(isCasinoBet(b) && b.odds === null && b.closingOdds === null) && (
+                                  <>
+                                    <div>
+                                      <dt>{t('hist.odds')}</dt>
+                                      <dd>{b.odds === null ? '—' : formatOdds(b.odds, oddsFormat)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>{t('modal.closingOdds')}</dt>
+                                      <dd>{b.closingOdds === null ? '—' : formatOdds(b.closingOdds, oddsFormat)}</dd>
+                                    </div>
+                                  </>
+                                )}
                                 {clv !== null && (
                                   <div>
                                     <dt>{t('hist.clv')}</dt>
@@ -492,7 +499,7 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                       const decided = b.status === 'won' || b.status === 'lost'
                       const ret = decided && b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
                       const clv = b.odds !== null && b.closingOdds !== null ? clvOf(b.odds, b.closingOdds) : null
-                      const tags = [b.sport, b.book, b.betType].filter(Boolean)
+                      const tags = betTags(b)
                       const when = humanDate(b.date)
                       const rowClass = [b.status === 'pending' ? 'is-pending' : '', selected.has(b.id) ? 'is-selected' : ''].filter(Boolean).join(' ')
                       return (

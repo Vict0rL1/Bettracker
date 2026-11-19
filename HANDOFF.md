@@ -236,10 +236,10 @@ vuelven a entrar. En el móvil, por la URL `Network`, también funciona.
 
 ```bash
 npm ci
-npm test            # 1577 tests unitarios en 59 archivos (vitest)
+npm test            # 1665 tests unitarios en 61 archivos (vitest)
 npm run typecheck   # web + escritorio + e2e
 npm run build       # PWA en dist/
-npm run test:e2e    # 275 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
+npm run test:e2e    # 292 comprobaciones Playwright, sin backend (puertos 4183, 4182 y 4181)
 bash supabase/tests/run.sh   # migraciones y schema.sql contra un Postgres real
 npm run check:rates # el servicio de tasas de cambio DE VERDAD (necesita internet; no está en el CI principal)
 # La Edge Function de la lectura con IA (opcional; npx descarga Deno):
@@ -322,6 +322,64 @@ recibo» de la hoja) y `openExpenseSettings` (menú ☰ → Ajustes de gastos). 
 Playwright llegara a `localhost`; en CI no.
 
 ## Qué cambió, por fases
+
+### Gastos: tocar una tarjeta o una categoría (noviembre 2026)
+
+Petición del dueño: «al presionar una tarjeta que me salga los gastos que
+usé con esta tarjeta y así con lo demás». Detalle en
+`docs/expenses-2026-11.md` («Tocar una tarjeta o una categoría»).
+
+- «Por tarjeta» (con «Sin tarjeta»), cada línea de presupuesto y «Por
+  categoría» son botones sin adornos (`.drill-row` / `.drill`): filtran la
+  lista del mes a esa tarjeta o categoría (`drillFilter` en `lib/spend.ts`
+  limpia la otra y la búsqueda), la suben a la vista y llevan el foco a su
+  título. «Total del mes» muestra todo el mes.
+- Encima de la lista, `.exp-active`: «Promerica ×», número de gastos, total
+  y «Ver todo».
+- Gráfico de gastos: cursor propio (sin la línea `#ccc` de Recharts), nada
+  en los días futuros, y un toque ya no deja el anillo de foco de Recharts
+  (también en el gráfico de apuestas).
+- Pruebas: 11 unitarias en `spend.test.ts` y `e2e/expenses-drill.spec.ts`
+  (5).
+
+### Jugadas de casino en Apuestas (noviembre 2026)
+
+Petición del dueño: «no solo estoy haciendo apuestas deportivas sino también
+jugando juegos de Stake como Dice, Limbo y Mines etc., quiero también que
+agregues la opción de ganar o perder […] que se mire todo limpio y
+minimalista». Detalle en `docs/casino-2026-11.md`. **Sin migración** y sin
+tocar la sincronización.
+
+- **Una jugada es una apuesta**: deporte `Casino` (`lib/casino.ts`; una
+  etiqueta «casino» escrita a mano cuenta igual), el juego como tipo, el
+  sitio como casa, sin cuota, el resultado neto como importe y lo apostado,
+  si se escribe, como stake (si no, nulo: fuera del ROI).
+- **Registro rápido**: arriba, **Deportes | Casino** (grupo de radio con
+  flechas, Inicio y Fin). Se abre en el tipo de la última apuesta, o en el
+  lado del borrador. Deportes es la hoja de antes, con las etiquetas y el
+  stake de la última apuesta **deportiva**. Casino: fecha, juego (diez
+  fichas de Stake y «Otro juego»; viene el último), importe y **Gané** /
+  **Perdí**; debajo, sitio (el último, o Stake) y lo apostado, opcional. Una
+  pérdida no puede superar lo apostado. El borrador guarda los dos lados.
+- **Dónde se ve**: «Casino · Limbo · Stake» en el historial, la lista del
+  día y las pendientes (`betTags`); en el móvil, sin «stake sin registrar»
+  ni filas de cuota vacías. En el desglose, Casino es una fila por deporte y
+  cada juego una por tipo. El formulario completo edita una jugada sin pedir
+  cuota, con el stake opcional, y conserva el deporte.
+- **Resolver una pendiente como perdida sin stake** (puede pasar con una
+  jugada) abre su formulario para escribir lo que costó, en vez de fallar;
+  la resolución en bloque la omite y lo dice (texto del aviso ampliado).
+- **Demo**: «Cargar datos de ejemplo» añade seis jugadas en Stake que suman
+  0 (la banca de la demo no cambia).
+
+**Cómo se probó.** Unitarios: `casino.test.ts` (nuevo) y casos en `quick`,
+`drafts`, `bulk`, `stats`, `csv` y `sample` (1654 tests en 61 archivos).
+e2e: `casino.spec.ts` (12; la suite pasa a 287). Capturas a 320, 390 y 1280
+px, en oscuro y claro. **Expectativas que cambian a propósito**:
+`demo.spec.ts` cuenta 66 apuestas tras cargar el ejemplo (antes 60; 67 tras
+añadir una) y `sample.test.ts` separa las 60 deportivas de las 6 jugadas
+(el español añade «Casino» a los deportes). El texto de
+`toast.settleSkipped` cambia (ninguna prueba lo leía).
 
 ### Cabecera y barras más simples (noviembre 2026)
 
@@ -1194,7 +1252,8 @@ src/renderer/src/lib/
   format.ts     formato de dinero en dólares o unidades (+ money.ts, el contexto)
   chartView.ts  vista del gráfico (P/L o Bankroll) y marcas redondas
   useBox.ts     casilla de dinero que sigue al valor guardado hasta que se escribe
-  quick.ts      valores por defecto del registro rápido
+  quick.ts      valores por defecto del registro rápido (cada lado: deportes y casino)
+  casino.ts     jugadas de casino: cuándo una apuesta lo es, el juego, sus etiquetas, la apuesta que se guarda
   uuid.ts       ids nuevos, también por http en la red local (sin crypto.randomUUID)
   csv.ts        export/import con guardas de fórmula
   strings.ts, i18n.ts
@@ -1253,7 +1312,7 @@ src/renderer/src/components/expenses/
   ExpenseList, ExpenseSheet, ScanPanel, ScanReview, ExpenseSettings, CardsEditor,
   BudgetEditor, CurrencyPicker, useDialog, useRates (las tasas que pide una hoja o una revisión), fxText,
   CategoryIcon (los once iconos de categoría)
-e2e/*.spec.ts                       275 comprobaciones (mobile.spec.ts: el móvil;
+e2e/*.spec.ts                       292 comprobaciones (mobile.spec.ts: el móvil;
                                     setup.spec.ts y login.spec.ts: el .env y el inicio de sesión;
                                     resilience.spec.ts: pestañas, almacenamiento, fallos del servidor,
                                     importación cortada, lecturas tardías, paginación, ajustes en vuelo;
@@ -1267,5 +1326,6 @@ scripts/check-rates.mjs             `npm run check:rates`: el servicio de tasas 
 supabase/functions/extract-expenses/ la Edge Function de la lectura con IA (index.ts, deno.json)
 supabase/config.toml                ajustes de la CLI: sin la comprobación JWT de la pasarela para esa función
 docs/expenses-2026-11.md            los gastos: decisiones, datos, sincronización, IA, pruebas, pendientes
+docs/casino-2026-11.md              las jugadas de casino en Apuestas: datos, qué se comprobó, decisiones
 supabase/tests/                     el esquema contra un Postgres real
 ```

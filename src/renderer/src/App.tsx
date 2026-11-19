@@ -541,8 +541,10 @@ export default function App() {
   // the user can type it.
   const handleSettle = useCallback(
     async (bet: Bet, next: BetStatus, amount: number | null) => {
-      if (next === 'won' && (amount === null || amount === 0)) {
-        setDay({ date: bet.date, edit: { id: bet.id, as: 'won' } })
+      // A result that can't be worked out is typed in the bet's form: a win
+      // without odds, a loss without a stake (a casino play may have none).
+      if ((next === 'won' && (amount === null || amount === 0)) || (next === 'lost' && amount === null)) {
+        setDay({ date: bet.date, edit: { id: bet.id, as: next } })
         return
       }
       try {
@@ -1612,8 +1614,8 @@ export default function App() {
             open={openList}
             oddsFormat={settings.oddsFormat}
             onSettle={(bet, next, amount) => {
-              // A win whose profit can't be worked out opens the bet to type it; get out of its way.
-              if (next === 'won' && (amount === null || amount === 0)) setPendingOpen(false)
+              // A result that can't be worked out (a win's profit, a loss without a stake) opens the bet to type it; get out of its way.
+              if ((next === 'won' && (amount === null || amount === 0)) || (next === 'lost' && amount === null)) setPendingOpen(false)
               handleSettle(bet, next, amount)
             }}
             onEdit={(bet) => {

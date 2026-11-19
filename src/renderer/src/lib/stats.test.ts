@@ -299,6 +299,39 @@ describe('forMonth', () => {
   })
 })
 
+describe('casino plays in the stats', () => {
+  const bets = [
+    bet({ amount: 100, stake: 50, odds: 3, closingOdds: 2.5, sport: 'NBA', book: 'DK', betType: 'Spread' }),
+    bet({ amount: 40, stake: 20, sport: 'Casino', book: 'Stake', betType: 'Limbo' }),
+    bet({ amount: -15, sport: 'casino', book: 'Stake', betType: 'Dice' }),
+    bet({ amount: -10, stake: 10, sport: ' Casino ', book: 'Stake', betType: 'Limbo' })
+  ]
+
+  it('are one Casino row by sport, however they were tagged, and their games are rows by type', () => {
+    const bySport = breakdown(bets, 'sport')
+    expect(bySport.map((r) => [r.label, r.bets, r.profit])).toEqual([
+      ['NBA', 1, 100],
+      ['Casino', 3, 15]
+    ])
+    const casino = bySport[1]
+    expect(casino.wl).toEqual({ wins: 1, losses: 2, pushes: 0 })
+    // ROI over the two that recorded a wager; no odds, so no CLV.
+    expect([casino.roi, casino.roiBets, casino.staked, casino.clv]).toEqual([100, 2, 30, null])
+    expect(breakdown(bets, 'betType').map((r) => r.label)).toEqual(['Spread', 'Limbo', 'Dice'])
+    expect(breakdown(bets, 'odds').map((r) => r.bets)).toEqual([1])
+  })
+
+  it('count in P/L and the record; ROI only with a wager; odds metrics skip them', () => {
+    const s = summarize(bets)
+    expect(s.total).toBe(115)
+    expect(s.betWl).toEqual({ wins: 2, losses: 2, pushes: 0 })
+    expect(s.roi).toMatchObject({ counted: 3, missing: 1, staked: 80, profit: 130 })
+    expect(s.implied?.n).toBe(1)
+    expect(s.clv?.n).toBe(1)
+    expect(s.bonus.count).toBe(0)
+  })
+})
+
 describe('breakdown', () => {
   const bets = [
     bet({ amount: 100, stake: 50, sport: 'NBA', book: 'DK' }),

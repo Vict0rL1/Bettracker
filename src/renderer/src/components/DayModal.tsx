@@ -4,6 +4,7 @@ import { dayDraftId, type DayDraft } from '../data/drafts'
 import { isFreeStake, moneyOf, oddsProblem, refusalText, resultProblem, stakeProblem, type Problem } from '../lib/betForm'
 import { toInput } from '../lib/bulk'
 import { stakeNoteApplies } from '../lib/bankroll'
+import { betTags, isCasino } from '../lib/casino'
 import { humanDate, todayStr } from '../lib/dates'
 import { fmtPctSigned } from '../lib/format'
 import { useLang } from '../lib/i18n'
@@ -271,8 +272,11 @@ export default function DayModal({ date, bets, edit, oddsFormat, suggestions, ba
 
   // A lost free bet costs nothing: there is no amount to type.
   const needsAmount = f.status === 'won' || (f.status === 'lost' && !freeBet)
+  // A casino play (lib/casino.ts): what was wagered is optional, and it needs no odds.
+  const casino = isCasino(f.sport)
+  const stakeOptional = (edited !== undefined && edited.stake === null) || casino
   const problems: Record<Box, Problem | null> = {
-    stake: stakeProblem(f.stake, edited !== undefined && edited.stake === null),
+    stake: stakeProblem(f.stake, stakeOptional),
     odds: oddsProblem(f.odds, parsedOdds, oddsFormat),
     amount: needsAmount ? resultProblem(f.amount) : null,
     closing: oddsProblem(f.closing, parsedClosing, oddsFormat)
@@ -371,23 +375,26 @@ export default function DayModal({ date, bets, edit, oddsFormat, suggestions, ba
     f.status === 'won' ? (freeWin ? t('quick.promoProfit') : t('modal.profit')) : f.status === 'lost' ? t('modal.amountLost') : t('modal.result')
   const wonHint = suggestedAmount('won', parsedStake, parsedOdds)
   const hint =
-    f.status === 'won'
-      ? freeWin
-        ? t('quick.hintFreeBet')
-        : parsedOdds === null
-          ? t('modal.hintWon')
-          : wonHint === 0
-            ? t('quick.hintRoundsZero')
-            : t('modal.hintWonOdds')
-      : f.status === 'lost'
-        ? freeBet
-          ? t('modal.hintLostFree')
-          : t('modal.hintLost')
-        : f.status === 'push'
-          ? t('modal.hintPush')
-          : f.status === 'void'
-            ? t('modal.hintVoid')
-            : t('modal.hintPending')
+    // A casino play's result is typed, net: no odds to work it out from.
+    casino && (f.status === 'won' || f.status === 'lost') && !freeBet
+      ? t('modal.hintCasino')
+      : f.status === 'won'
+        ? freeWin
+          ? t('quick.hintFreeBet')
+          : parsedOdds === null
+            ? t('modal.hintWon')
+            : wonHint === 0
+              ? t('quick.hintRoundsZero')
+              : t('modal.hintWonOdds')
+        : f.status === 'lost'
+          ? freeBet
+            ? t('modal.hintLostFree')
+            : t('modal.hintLost')
+          : f.status === 'push'
+            ? t('modal.hintPush')
+            : f.status === 'void'
+              ? t('modal.hintVoid')
+              : t('modal.hintPending')
   const dirty = !sameFields(f, target.baseline)
   dirtyRef.current = dirty
   const draftIds = new Set(bets.filter((b) => drafts.load(date, b.id) !== null).map((b) => b.id))
@@ -421,7 +428,7 @@ export default function DayModal({ date, bets, edit, oddsFormat, suggestions, ba
 
             <ul className="bet-list">
               {bets.map((b) => {
-                const tags = [b.sport, b.book, b.betType].filter(Boolean)
+                const tags = betTags(b)
                 const ret = b.amount !== null && b.stake !== null && b.stake > 0 ? (b.amount / b.stake) * 100 : null
                 return (
                   <li key={b.id} className={`bet-item ${editingId === b.id ? 'editing' : ''}`}>
@@ -515,7 +522,12 @@ export default function DayModal({ date, bets, edit, oddsFormat, suggestions, ba
           <div className="bet-grid">
             <label className="field">
               <span className="field-label">
-                {t('modal.stake')} {edited !== undefined && edited.stake === null && <span className="field-opt">{t('modal.notRecorded')}</span>}
+                {t('modal.stake')}{' '}
+                {edited !== undefined && edited.stake === null ? (
+                  <span className="field-opt">{t('modal.notRecorded')}</span>
+                ) : (
+                  casino && <span className="field-opt">{t('common.optional')}</span>
+                )}
               </span>
               <div className="amount-wrap">
                 <span className="amount-cur">$</span>

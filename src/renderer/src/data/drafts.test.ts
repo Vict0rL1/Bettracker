@@ -54,6 +54,20 @@ describe('drafts', () => {
     expect(kept.some((d) => d.date === '2026-09-01')).toBe(false)
   })
 
+  it('the quick add’s draft keeps the side it was typed on and the casino side, and one from before them still opens', () => {
+    const casino = { game: 'Limbo', amount: '25', site: 'Stake', wagered: '' }
+    saveQuickDraft(U, { stake: '5', odds: '', sport: 'NBA', book: '', betType: '', profit: '', kind: 'casino', casino })
+    expect(loadQuickDraft(U)).toMatchObject({ kind: 'casino', casino })
+    localStorage.setItem('bettracker:draft-quick:user-1', JSON.stringify({ stake: '5', odds: '', sport: 'NBA', book: '', betType: '', profit: '' }))
+    expect(loadQuickDraft(U)).toMatchObject({ stake: '5', sport: 'NBA' })
+    expect(loadQuickDraft(U)?.kind).toBeUndefined()
+    // A side or a casino part that is not one makes it no draft.
+    localStorage.setItem('bettracker:draft-quick:user-1', JSON.stringify({ stake: '5', odds: '', sport: '', book: '', betType: '', profit: '', kind: 'poker' }))
+    expect(loadQuickDraft(U)).toBeNull()
+    localStorage.setItem('bettracker:draft-quick:user-1', JSON.stringify({ stake: '5', odds: '', sport: '', book: '', betType: '', profit: '', casino: { game: 'Dice', amount: 3 } }))
+    expect(loadQuickDraft(U)).toBeNull()
+  })
+
   it('ignores what storage holds that is no draft', () => {
     localStorage.setItem('bettracker:draft-quick:user-1', '{"stake":5}')
     expect(loadQuickDraft(U)).toBeNull()
