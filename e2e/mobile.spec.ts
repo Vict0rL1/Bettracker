@@ -120,6 +120,29 @@ test('signed out, the sign-in card fits a 320px phone', async ({ page }) => {
   expect(box && box.x + box.width <= 320).toBe(true)
 })
 
+// The browser here has no notch (env() is 0), so the rules themselves are read: the status bar's height
+// once, on the body. On html as well it was counted twice, an empty band above the header on an iPhone.
+test('the status bar is made room for once: only the body is padded by the top safe area', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await open(page, 'en')
+  const padded = await page.evaluate(() => {
+    const found: string[] = []
+    const walk = (rules: CSSRuleList): void => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSStyleRule) {
+          const top = rule.style.getPropertyValue('padding-top') || rule.style.getPropertyValue('padding')
+          if (top.includes('safe-area-inset-top')) {
+            for (const sel of rule.selectorText.split(',').map((x) => x.trim())) if (sel === 'html' || sel === 'body' || sel === ':root') found.push(sel)
+          }
+        } else if ('cssRules' in rule) walk((rule as CSSGroupingRule).cssRules)
+      }
+    }
+    for (const sheet of Array.from(document.styleSheets)) walk(sheet.cssRules)
+    return found
+  })
+  expect(padded).toEqual(['body'])
+})
+
 test('on a phone, no field is under 16px, so iOS does not zoom in on it', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await open(page, 'es')
@@ -300,6 +323,22 @@ test.describe('the history on a phone', () => {
       await expect(page.locator('.hcard', { hasText: 'Parlay de tres patas' })).toHaveCount(0)
     })
   }
+
+  test('a bet with no stake recorded says nothing about it on its closed card; opened, the card says so', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 })
+    await boot(page, { entries: BUSY, settings: SETTINGS, moves: [] })
+    // SEED's 'legacy' win: no stake. On an account that never records one, the line would be on every card.
+    const card = page.locator('.hcard', { hasText: 'legacy' })
+    await expect(card.locator('.hcard-stake')).toHaveText('')
+    await card.locator('.hcard-toggle').click()
+    await expect(card.locator('.hcard-details dt').first()).toHaveText('Stake')
+    await expect(card.locator('.hcard-details dd').first()).toHaveText('Not recorded')
+    // A staked bet keeps its stake on the closed card, and no Stake row when opened.
+    const staked = page.locator('.hcard', { hasText: 'Parlay de tres patas' })
+    await expect(staked.locator('.hcard-stake')).toHaveText('$1,000 staked')
+    await staked.locator('.hcard-toggle').click()
+    await expect(staked.locator('.hcard-details dt').first()).toHaveText('Odds')
+  })
 
   test('a card opens and closes from the keyboard', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 })

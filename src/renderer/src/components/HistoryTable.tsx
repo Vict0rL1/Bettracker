@@ -388,8 +388,8 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                               <span className="hcard-sub">
                                 <span className="hcard-desc">{desc || <span className="td-none">{t('hist.noDetails')}</span>}</span>
                                 <span className="hcard-stake">
-                                  {/* A casino play's wager is optional: none is nothing to point out. */}
-                                  {b.stake === null ? (isCasinoBet(b) ? '' : t('hist.noStake')) : b.stake === 0 ? t('modal.freeBet') : t('hist.staked', { amount: money.stake(b.stake) })}
+                                  {/* No stake: nothing here (on an account that never records one it would be every line); the opened card says so. */}
+                                  {b.stake === null ? '' : b.stake === 0 ? t('modal.freeBet') : t('hist.staked', { amount: money.stake(b.stake) })}
                                 </span>
                               </span>
                               <ChevronDownIcon />
@@ -413,6 +413,13 @@ export default function HistoryTable({ bets, oddsFormat, range, onEdit, onOpenDa
                           {expanded && (
                             <div className="hcard-details" id={detailsId}>
                               <dl>
+                                {/* A casino play's wager is optional: none is nothing to point out. */}
+                                {b.stake === null && !isCasinoBet(b) && (
+                                  <div>
+                                    <dt>{t('hist.stake')}</dt>
+                                    <dd className="td-none">{t('hist.noStakeShort')}</dd>
+                                  </div>
+                                )}
                                 {/* A casino play has no price: two empty rows would only be noise. */}
                                 {!(isCasinoBet(b) && b.odds === null && b.closingOdds === null) && (
                                   <>
